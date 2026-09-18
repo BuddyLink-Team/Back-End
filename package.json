@@ -4,7 +4,6 @@
   "description": "[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)",
   "main": "index.js",
   "directories": {
-    "doc": "docs",
     "test": "test"
   },
   "scripts": {
@@ -16,6 +15,10 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
   "dependencies": {
     "compression": "^1.7.4",
     "cookie-parser": "^1.4.6",
