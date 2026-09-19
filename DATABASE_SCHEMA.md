@@ -818,14 +818,14 @@ _Indexes:_
 
 ---
 
-### 4.1 Module 1: Xác thực, Tài khoản & Hồ sơ Phụ huynh (Auth, Users & Parent Profile)
+### 4.1 Module 1: Xác thực, Tài khoản & Hồ sơ Gia đình (Auth, Users, Parents & Children)
 
-> **Collections:** `users`, `parents`, `auth_tokens`, `refresh_tokens`  
+> **Collections:** `users`, `parents`, `children`, `auth_tokens`, `refresh_tokens`  
 > **Sub-documents:** `parent_location`, `parent_preferences`, `parent_privacy_settings`, `parent_verification`, `parent_streak`
 
 ```dbml
 // ============================================================
-// MODULE 1: AUTHENTICATION, USERS & PARENT PROFILE
+// MODULE 1: AUTHENTICATION, USERS, PARENTS & CHILDREN
 // ============================================================
 
 Table users {
@@ -891,6 +891,21 @@ Table parent_streak {
   streakUpdatedAt timestamp
 }
 
+Table children {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  displayName varchar [not null]
+  dateOfBirth date [not null]
+  gender varchar [note: 'boy | girl | other']
+  avatarUrl varchar
+  interests varchar[] [note: 'Array of interests']
+  favoriteActivities varchar[] [note: 'Array of activities']
+  personality varchar[] [note: 'Array of personality traits']
+  isArchived boolean [default: false]
+  createdAt timestamp
+  updatedAt timestamp
+}
+
 Table auth_tokens {
   _id ObjectId [pk]
   userId ObjectId [note: 'Optional, ref users']
@@ -917,6 +932,7 @@ Table refresh_tokens {
 Ref: parents.userId - users._id
 Ref: auth_tokens.userId > users._id
 Ref: refresh_tokens.userId > users._id
+Ref: children.parentId > parents._id
 
 Ref: parents._id - parent_location.parentId [delete: cascade]
 Ref: parents._id - parent_preferences.parentId [delete: cascade]
@@ -927,13 +943,13 @@ Ref: parents._id - parent_streak.parentId [delete: cascade]
 
 ---
 
-### 4.2 Module 2: Hồ sơ Trẻ em, Khám phá & Kết nối (Children, Discovery & Connections)
+### 4.2 Module 2: Khám phá & Kết nối Bạn chơi (Discovery & Connections)
 
-> **Collections:** `children`, `swipes`, `connections`
+> **Collections:** `swipes`, `connections`
 
 ```dbml
 // ============================================================
-// MODULE 2: CHILDREN, DISCOVERY & CONNECTIONS
+// MODULE 2: DISCOVERY & CONNECTIONS
 // ============================================================
 
 // External References (Stub)
@@ -942,18 +958,7 @@ Table parents {
 }
 
 Table children {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  displayName varchar [not null]
-  dateOfBirth date [not null]
-  gender varchar [note: 'boy | girl | other']
-  avatarUrl varchar
-  interests varchar[] [note: 'Array of interests']
-  favoriteActivities varchar[] [note: 'Array of activities']
-  personality varchar[] [note: 'Array of personality traits']
-  isArchived boolean [default: false]
-  createdAt timestamp
-  updatedAt timestamp
+  _id ObjectId [pk, note: 'Ref: Module 1 (children)']
 }
 
 Table swipes {
@@ -979,7 +984,6 @@ Table connections {
 }
 
 // Relationships
-Ref: children.parentId > parents._id
 Ref: swipes.swiperParentId > parents._id
 Ref: swipes.targetParentId > parents._id
 Ref: swipes.targetChildId > children._id
@@ -989,14 +993,14 @@ Ref: connections.recipientId > parents._id
 
 ---
 
-### 4.3 Module 3: Sự kiện Playdate, Đổi lịch & Đánh giá (Playdates, Reschedule & Feedback)
+### 4.3 Module 3: Sự kiện Playdate, Đổi lịch, Đánh giá & Địa điểm (Playdates, Reschedule, Feedback & Places)
 
-> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`  
+> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`  
 > **Sub-documents:** `playdate_location`, `playdate_cancellation`, `playdate_participants`, `reschedule_new_location`, `reschedule_responses`
 
 ```dbml
 // ============================================================
-// MODULE 3: PLAYDATES, RESCHEDULE & FEEDBACK
+// MODULE 3: PLAYDATES, RESCHEDULE, FEEDBACK & PLACES
 // ============================================================
 
 // External References (Stub)
@@ -1005,7 +1009,7 @@ Table parents {
 }
 
 Table children {
-  _id ObjectId [pk, note: 'Ref: Module 2 (children)']
+  _id ObjectId [pk, note: 'Ref: Module 1 (children)']
 }
 
 Table playdates {
@@ -1085,6 +1089,18 @@ Table ratings_feedbacks {
   createdAt timestamp
 }
 
+Table places_cache {
+  _id ObjectId [pk]
+  googlePlaceId varchar [unique, not null]
+  name varchar
+  address varchar
+  coordinates json [note: 'GeoJSON Point']
+  placeType varchar [note: 'park | kids_cafe | playground | library | sports_center | workshop']
+  rating float
+  userRatingsTotal int
+  lastFetchedAt timestamp
+}
+
 // Relationships
 Ref: playdates.hostParentId > parents._id
 Ref: playdates.hostChildId > children._id
@@ -1106,14 +1122,14 @@ Ref: ratings_feedbacks.parentId > parents._id
 
 ---
 
-### 4.4 Module 4: Trò chuyện & Thông báo Thời gian thực (Chat & Notifications)
+### 4.4 Module 4: Trò chuyện, Thông báo & Trợ lý AI (Chat, Notifications & AI Assistant)
 
-> **Collections:** `conversations`, `messages`, `notifications`  
+> **Collections:** `conversations`, `messages`, `notifications`, `ai_chat_sessions`  
 > **Sub-documents:** `message_read_by`
 
 ```dbml
 // ============================================================
-// MODULE 4: CHAT & NOTIFICATIONS
+// MODULE 4: CHAT, NOTIFICATIONS & AI ASSISTANT
 // ============================================================
 
 // External References (Stub)
@@ -1170,31 +1186,6 @@ Table notifications {
   createdAt timestamp
 }
 
-// Relationships
-Ref: conversations.playdateId - playdates._id
-Ref: messages.conversationId > conversations._id
-Ref: messages.senderId > parents._id
-Ref: messages._id < message_read_by.messageId [delete: cascade]
-Ref: message_read_by.parentId > parents._id
-Ref: notifications.recipientId > users._id
-```
-
----
-
-### 4.5 Module 5: Trợ lý AI Family & Gamification (AI Assistant & Badges)
-
-> **Collections:** `ai_chat_sessions`, `badges`, `user_badges`
-
-```dbml
-// ============================================================
-// MODULE 5: AI FAMILY ASSISTANT & GAMIFICATION
-// ============================================================
-
-// External References (Stub)
-Table parents {
-  _id ObjectId [pk, note: 'Ref: Module 1 (parents)']
-}
-
 Table ai_chat_sessions {
   _id ObjectId [pk]
   parentId ObjectId [not null]
@@ -1204,6 +1195,32 @@ Table ai_chat_sessions {
   isActive boolean [default: true]
   createdAt timestamp
   updatedAt timestamp
+}
+
+// Relationships
+Ref: conversations.playdateId - playdates._id
+Ref: messages.conversationId > conversations._id
+Ref: messages.senderId > parents._id
+Ref: messages._id < message_read_by.messageId [delete: cascade]
+Ref: message_read_by.parentId > parents._id
+Ref: notifications.recipientId > users._id
+Ref: ai_chat_sessions.parentId > parents._id
+```
+
+---
+
+### 4.5 Module 5: Gamification & Huy hiệu (Gamification & Badges)
+
+> **Collections:** `badges`, `user_badges`
+
+```dbml
+// ============================================================
+// MODULE 5: GAMIFICATION & BADGES
+// ============================================================
+
+// External References (Stub)
+Table parents {
+  _id ObjectId [pk, note: 'Ref: Module 1 (parents)']
 }
 
 Table badges {
@@ -1223,7 +1240,6 @@ Table user_badges {
 }
 
 // Relationships
-Ref: ai_chat_sessions.parentId > parents._id
 Ref: user_badges.parentId > parents._id
 Ref: user_badges.badgeCode > badges.code
 ```
@@ -1300,13 +1316,13 @@ Ref: usage_quotas.parentId > parents._id
 
 ---
 
-### 4.7 Module 7: An toàn, Báo cáo Vi phạm & Cache Địa điểm (Safety, Reports, Blocks & Places Cache)
+### 4.7 Module 7: An toàn, Báo cáo Vi phạm & Chặn người dùng (Safety, Reports & Blocks)
 
-> **Collections:** `reports`, `blocks`, `places_cache`
+> **Collections:** `reports`, `blocks`
 
 ```dbml
 // ============================================================
-// MODULE 7: SAFETY, REPORTS, BLOCKS & PLACES CACHE
+// MODULE 7: SAFETY, REPORTS & BLOCKS
 // ============================================================
 
 // External References (Stub)
@@ -1352,18 +1368,6 @@ Table reports {
   updatedAt timestamp
 }
 
-Table places_cache {
-  _id ObjectId [pk]
-  googlePlaceId varchar [unique, not null]
-  name varchar
-  address varchar
-  coordinates json [note: 'GeoJSON Point']
-  placeType varchar [note: 'park | kids_cafe | playground | library | sports_center | workshop']
-  rating float
-  userRatingsTotal int
-  lastFetchedAt timestamp
-}
-
 // Relationships
 Ref: blocks.blockerId > parents._id
 Ref: blocks.blockedId > parents._id
@@ -1385,7 +1389,7 @@ Nếu bạn muốn xem toàn bộ 23 collections cùng lúc nhưng vẫn giữ c
 // BUDDYLINK FULL DATABASE SCHEMA WITH TABLEGROUPS
 // ============================================================
 
-// --- 1. AUTH & USERS ---
+// --- 1. AUTH, USERS, PARENTS & CHILDREN ---
 Table users {
   _id ObjectId [pk]
   email varchar [unique, not null]
@@ -1449,6 +1453,21 @@ Table parent_streak {
   streakUpdatedAt timestamp
 }
 
+Table children {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  displayName varchar [not null]
+  dateOfBirth date [not null]
+  gender varchar [note: 'boy | girl | other']
+  avatarUrl varchar
+  interests varchar[] [note: 'Array of interests']
+  favoriteActivities varchar[] [note: 'Array of activities']
+  personality varchar[] [note: 'Array of personality traits']
+  isArchived boolean [default: false]
+  createdAt timestamp
+  updatedAt timestamp
+}
+
 Table auth_tokens {
   _id ObjectId [pk]
   userId ObjectId [note: 'Optional, ref users']
@@ -1471,22 +1490,7 @@ Table refresh_tokens {
   updatedAt timestamp
 }
 
-// --- 2. CHILDREN & MATCHING ---
-Table children {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  displayName varchar [not null]
-  dateOfBirth date [not null]
-  gender varchar [note: 'boy | girl | other']
-  avatarUrl varchar
-  interests varchar[] [note: 'Array of interests']
-  favoriteActivities varchar[] [note: 'Array of activities']
-  personality varchar[] [note: 'Array of personality traits']
-  isArchived boolean [default: false]
-  createdAt timestamp
-  updatedAt timestamp
-}
-
+// --- 2. DISCOVERY & CONNECTIONS ---
 Table swipes {
   _id ObjectId [pk]
   swiperParentId ObjectId [not null]
@@ -1509,7 +1513,7 @@ Table connections {
   updatedAt timestamp
 }
 
-// --- 3. PLAYDATES & RESCHEDULE ---
+// --- 3. PLAYDATES, RESCHEDULE & PLACES ---
 Table playdates {
   _id ObjectId [pk]
   hostParentId ObjectId [not null]
@@ -1587,7 +1591,19 @@ Table ratings_feedbacks {
   createdAt timestamp
 }
 
-// --- 4. CHAT & NOTIFICATIONS ---
+Table places_cache {
+  _id ObjectId [pk]
+  googlePlaceId varchar [unique, not null]
+  name varchar
+  address varchar
+  coordinates json [note: 'GeoJSON Point']
+  placeType varchar [note: 'park | kids_cafe | playground | library | sports_center | workshop']
+  rating float
+  userRatingsTotal int
+  lastFetchedAt timestamp
+}
+
+// --- 4. CHAT, NOTIFICATIONS & AI ASSISTANT ---
 Table conversations {
   _id ObjectId [pk]
   type varchar [note: 'direct | playdate']
@@ -1629,7 +1645,6 @@ Table notifications {
   createdAt timestamp
 }
 
-// --- 5. AI & GAMIFICATION ---
 Table ai_chat_sessions {
   _id ObjectId [pk]
   parentId ObjectId [not null]
@@ -1641,6 +1656,7 @@ Table ai_chat_sessions {
   updatedAt timestamp
 }
 
+// --- 5. GAMIFICATION ---
 Table badges {
   _id ObjectId [pk]
   code varchar [unique, not null]
@@ -1704,7 +1720,7 @@ Table usage_quotas {
   updatedAt timestamp
 }
 
-// --- 7. SAFETY & CACHE ---
+// --- 7. SAFETY & MODERATION ---
 Table reports {
   _id ObjectId [pk]
   reporterId ObjectId [not null]
@@ -1731,22 +1747,10 @@ Table blocks {
   createdAt timestamp
 }
 
-Table places_cache {
-  _id ObjectId [pk]
-  googlePlaceId varchar [unique, not null]
-  name varchar
-  address varchar
-  coordinates json [note: 'GeoJSON Point']
-  placeType varchar [note: 'park | kids_cafe | playground | library | sports_center | workshop']
-  rating float
-  userRatingsTotal int
-  lastFetchedAt timestamp
-}
-
 // ============================================================
 // TABLE GROUPS (dbdiagram.io visual grouping)
 // ============================================================
-TableGroup Auth_And_Users {
+TableGroup Family_And_Users {
   users
   parents
   parent_location
@@ -1754,17 +1758,17 @@ TableGroup Auth_And_Users {
   parent_privacy_settings
   parent_verification
   parent_streak
+  children
   auth_tokens
   refresh_tokens
 }
 
-TableGroup Children_And_Matching {
-  children
+TableGroup Matching_And_Discovery {
   swipes
   connections
 }
 
-TableGroup Playdates_And_Events {
+TableGroup Playdates_And_Places {
   playdates
   playdate_location
   playdate_cancellation
@@ -1773,17 +1777,18 @@ TableGroup Playdates_And_Events {
   reschedule_new_location
   reschedule_responses
   ratings_feedbacks
+  places_cache
 }
 
-TableGroup Communication {
+TableGroup Communication_And_AI {
   conversations
   messages
   message_read_by
   notifications
+  ai_chat_sessions
 }
 
-TableGroup AI_And_Gamification {
-  ai_chat_sessions
+TableGroup Gamification {
   badges
   user_badges
 }
@@ -1795,10 +1800,9 @@ TableGroup Subscriptions_And_Billing {
   usage_quotas
 }
 
-TableGroup Safety_And_Cache {
+TableGroup Safety_And_Moderation {
   reports
   blocks
-  places_cache
 }
 
 // ============================================================
