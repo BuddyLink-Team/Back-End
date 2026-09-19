@@ -577,20 +577,19 @@ interface IUserBadge {
 
 ---
 
-## 4. Mã nguồn DBML dùng cho `dbdiagram.io`
+## 4. Mã nguồn DBML trực quan hóa theo Module (`dbdiagram.io`)
 
-Để sơ đồ trực quan, không bị rối rắm bởi quá nhiều liên kết chéo khi vẽ đồng thời cả 22 collections, hệ thống DBML được chia thành:
-1. **Các khối DBML theo từng Module độc lập**: Dán riêng từng module vào [dbdiagram.io](https://dbdiagram.io) để xem sơ đồ chuyên sâu của từng tính năng.
-2. **Khối DBML tổng thể (Full Integrated Diagram)**: Gom nhóm bằng cú pháp chuẩn `TableGroup` của DBML, giúp `dbdiagram.io` tự động nhóm các bảng thành các vùng module có viền và màu sắc trực quan.
+Để khắc phục tình trạng sơ đồ tổng thể bị rối rắm (spaghetti diagram) khi import tất cả 22 bảng cùng lúc vào [dbdiagram.io](https://dbdiagram.io), phần này chia mã nguồn **DBML** thành **7 Modules độc lập**. Bạn có thể copy từng module để xem riêng biệt, hoặc copy mã tổng hợp tại **Mục 4.8** (đã cấu hình sẵn tính năng `TableGroup` để gom nhóm các bảng có viền màu trực quan).
 
 ---
 
-### 4.1 Module 1: Auth, Parent & User Management
-> **Phạm vi:** Tài khoản định danh chung (`users`), hồ sơ nghiệp vụ phụ huynh (`parents`), và quy trình quên/đổi mật khẩu (`password_reset_tokens`).
+### 4.1 Module 1: Tài khoản, Xác thực & Hồ sơ Phụ huynh (Auth & Parent Profile)
+> **Bao gồm các bảng:** `users`, `parents`, `password_reset_tokens`  
+> **Nghiệp vụ:** Quản lý tài khoản đăng nhập (Local / Google OAuth), phân quyền Parent / Admin, hồ sơ phụ huynh, sở thích kết nối, tọa độ GeoJSON, cài đặt riêng tư, xác thực và streak hàng tuần.
 
 ```dbml
 // ============================================================
-// MODULE 1: AUTH & USER PROFILE
+// MODULE 1: AUTHENTICATION & PARENT PROFILE
 // ============================================================
 
 Table users {
@@ -643,467 +642,27 @@ Table password_reset_tokens {
   createdAt timestamp
 }
 
-// Quan hệ trong Module 1
 Ref: parents.userId - users._id
 Ref: password_reset_tokens.userId > users._id
 ```
 
 ---
 
-### 4.2 Module 2: Child Profile, Discovery & Smart Matching
-> **Phạm vi:** Hồ sơ trẻ em (`children`), lịch sử vuốt thẻ tìm bạn (`swipes`), và danh sách kết nối bạn chơi (`connections`).
+### 4.2 Module 2: Hồ sơ Trẻ em & Khám phá Bạn chơi (Child Profile & Smart Matching)
+> **Bao gồm các bảng:** `children`, `swipes`, `connections` (liên kết với `parents`)  
+> **Nghiệp vụ:** Thông tin sở thích, tính cách trẻ em, hành động vuốt thẻ Discovery (Like/Pass), và quản lý lời mời kết nối giữa các gia đình.
 
 ```dbml
 // ============================================================
-// MODULE 2: CHILD PROFILE & MATCHING SYSTEM
-// ============================================================
-
-Table parents {
-  _id ObjectId [pk]
-  userId ObjectId [unique, not null]
-  bio text
-  area varchar
-  city varchar
-  locationCoordinates json [note: 'GeoJSON Point: [lng, lat]']
-  preferences json [note: 'Tiêu chí tìm bạn & phong cách nuôi dạy']
-  isProfileHidden boolean [default: false]
-}
-
-Table children {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  displayName varchar [not null]
-  dateOfBirth date
-  age int [not null]
-  gender varchar [note: 'boy | girl | other']
-  avatarUrl varchar
-  interests varchar[] [note: 'Sở thích']
-  favoriteActivities varchar[] [note: 'Hoạt động yêu thích']
-  personality varchar[] [note: 'Tính cách']
-  locationArea varchar
-  bioOrNotes text
-  isArchived boolean [default: false]
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table swipes {
-  _id ObjectId [pk]
-  swiperParentId ObjectId [not null]
-  targetChildId ObjectId [not null]
-  targetParentId ObjectId [not null]
-  action varchar [note: 'like | pass']
-  createdAt timestamp
-}
-
-Table connections {
-  _id ObjectId [pk]
-  requesterId ObjectId [not null]
-  recipientId ObjectId [not null]
-  status varchar [note: 'pending | accepted | declined | removed']
-  connectedAt timestamp
-  declinedAt timestamp
-  removedAt timestamp
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-// Quan hệ trong Module 2
-Ref: children.parentId > parents._id
-Ref: swipes.swiperParentId > parents._id
-Ref: swipes.targetParentId > parents._id
-Ref: swipes.targetChildId > children._id
-Ref: connections.requesterId > parents._id
-Ref: connections.recipientId > parents._id
-```
-
----
-
-### 4.3 Module 3: Playdate Event, Reschedule & Ratings
-> **Phạm vi:** Tổ chức buổi gặp gỡ (`playdates`), yêu cầu đề xuất đổi lịch (`reschedule_requests`), và đánh giá phản hồi (`ratings_feedbacks`).
-
-```dbml
-// ============================================================
-// MODULE 3: PLAYDATE MANAGEMENT & FEEDBACK
+// MODULE 2: CHILD PROFILE, DISCOVERY & CONNECTIONS
 // ============================================================
 
 Table parents {
   _id ObjectId [pk]
   userId ObjectId [not null]
+  // ...xem chi tiết ở Module 1
 }
 
-Table children {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  displayName varchar [not null]
-}
-
-Table playdates {
-  _id ObjectId [pk]
-  hostParentId ObjectId [not null]
-  hostChildId ObjectId [not null]
-  participants json [note: 'Array of { parentId, childId, status, invitedAt, respondedAt }']
-  scheduledDate date [not null]
-  startTime varchar [not null, note: 'Giờ bắt đầu: e.g. 09:30']
-  activity varchar [not null, note: 'Hoạt động vui chơi']
-  locationName varchar
-  locationAddress varchar
-  locationPlaceId varchar
-  locationCoordinates json [note: 'GeoJSON Point']
-  note text
-  status varchar [note: 'upcoming | completed | cancelled', default: 'upcoming']
-  cancellation json [note: '{ cancelledBy, reason, cancelledAt }']
-  completedAt timestamp
-  chatConversationId ObjectId
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table reschedule_requests {
-  _id ObjectId [pk]
-  playdateId ObjectId [not null]
-  requestedBy ObjectId [not null]
-  newDate date [not null]
-  newStartTime varchar [not null]
-  newLocation json [note: '{ name, address, placeId, coordinates }']
-  reason varchar
-  status varchar [note: 'pending | accepted | declined | cancelled']
-  responses json [note: 'Array of { parentId, status, respondedAt }']
-  resolvedAt timestamp
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table ratings_feedbacks {
-  _id ObjectId [pk]
-  playdateId ObjectId [not null]
-  parentId ObjectId [not null]
-  rating int [note: '1 to 5 stars']
-  feedback text
-  tags varchar[]
-  createdAt timestamp
-}
-
-// Quan hệ trong Module 3
-Ref: playdates.hostParentId > parents._id
-Ref: playdates.hostChildId > children._id
-Ref: reschedule_requests.playdateId > playdates._id
-Ref: reschedule_requests.requestedBy > parents._id
-Ref: ratings_feedbacks.playdateId > playdates._id
-Ref: ratings_feedbacks.parentId > parents._id
-```
-
----
-
-### 4.4 Module 4: Communication & Notifications
-> **Phạm vi:** Tin nhắn 1-1, chat nhóm Playdate (`conversations`, `messages`), và hệ thống thông báo đa kênh (`notifications`).
-
-```dbml
-// ============================================================
-// MODULE 4: CHAT & NOTIFICATIONS
-// ============================================================
-
-Table users {
-  _id ObjectId [pk]
-  fullName varchar [not null]
-  avatarUrl varchar
-}
-
-Table playdates {
-  _id ObjectId [pk]
-  activity varchar
-  scheduledDate date
-}
-
-Table conversations {
-  _id ObjectId [pk]
-  type varchar [note: 'direct | playdate']
-  participants ObjectId[] [note: 'Array of user IDs']
-  playdateId ObjectId [note: 'Liên kết 1:1 nếu là phòng chat Playdate']
-  lastMessage json [note: '{ messageId, senderId, content, type, sentAt }']
-  isActive boolean [default: true]
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table messages {
-  _id ObjectId [pk]
-  conversationId ObjectId [not null]
-  senderId ObjectId [not null]
-  type varchar [note: 'text | image | emoji | system']
-  content text
-  mediaUrl varchar
-  readBy json [note: 'Array of { userId, readAt }']
-  isDeleted boolean [default: false]
-  createdAt timestamp
-}
-
-Table notifications {
-  _id ObjectId [pk]
-  recipientId ObjectId [not null]
-  type varchar [note: 'message_new | connection_request | playdate_invitation | badge_unlocked | streak_reminder']
-  title varchar
-  body text
-  data json [note: '{ playdateId, senderId, conversationId, badgeCode }']
-  isRead boolean [default: false]
-  readAt timestamp
-  createdAt timestamp
-}
-
-// Quan hệ trong Module 4
-Ref: conversations.playdateId - playdates._id
-Ref: messages.conversationId > conversations._id
-Ref: messages.senderId > users._id
-Ref: notifications.recipientId > users._id
-```
-
----
-
-### 4.5 Module 5: Gamification & AI Family Assistant
-> **Phạm vi:** Hệ thống huy hiệu thành tích (`badges`, `user_badges`), và trợ lý ảo thông minh lên lịch hẹn (`ai_chat_sessions`).
-
-```dbml
-// ============================================================
-// MODULE 5: GAMIFICATION & AI ASSISTANT
-// ============================================================
-
-Table parents {
-  _id ObjectId [pk]
-  currentWeeklyStreak int [default: 0]
-  longestStreak int [default: 0]
-}
-
-Table badges {
-  _id ObjectId [pk]
-  code varchar [unique, not null]
-  title varchar [not null]
-  description text
-  iconUrl varchar
-  requirementCount int
-}
-
-Table user_badges {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  badgeCode varchar [not null]
-  unlockedAt timestamp
-}
-
-Table ai_chat_sessions {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  title varchar
-  messages json [note: 'Array of { role, content, toolCalls, toolCallId, timestamp }']
-  tokenUsage json
-  isActive boolean [default: true]
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-// Quan hệ trong Module 5
-Ref: user_badges.parentId > parents._id
-Ref: user_badges.badgeCode > badges.code
-Ref: ai_chat_sessions.parentId > parents._id
-```
-
----
-
-### 4.6 Module 6: Subscription, Billing & Quota Limits
-> **Phạm vi:** Danh mục gói dịch vụ (`subscription_plans`), hợp đồng thuê bao (`subscriptions`), lịch sử thanh toán (`payments`), và giám sát hạn mức người dùng (`usage_quotas`).
-
-```dbml
-// ============================================================
-// MODULE 6: SUBSCRIPTION, BILLING & QUOTAS
-// ============================================================
-
-Table parents {
-  _id ObjectId [pk]
-  userId ObjectId [not null]
-}
-
-Table subscription_plans {
-  _id ObjectId [pk]
-  planCode varchar [unique, not null, note: 'free | premium_monthly | premium_yearly']
-  name varchar
-  price int
-  currency varchar [default: 'VND']
-  billingCycle varchar [note: 'monthly | yearly | none']
-  features json [note: 'maxChildren, discoveryLimit, connectionLimit, playdateLimit, aiLimit']
-  isActive boolean [default: true]
-}
-
-Table subscriptions {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  planCode varchar [not null]
-  status varchar [note: 'active | cancelled | expired | trial']
-  startDate timestamp
-  endDate timestamp
-  autoRenew boolean [default: true]
-  cancelledAt timestamp
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table payments {
-  _id ObjectId [pk]
-  subscriptionId ObjectId [not null]
-  parentId ObjectId [not null]
-  amount int
-  currency varchar [default: 'VND']
-  paymentMethod varchar [note: 'momo | vnpay | zalopay | stripe']
-  transactionId varchar [unique]
-  status varchar [note: 'pending | success | failed']
-  paidAt timestamp
-  createdAt timestamp
-}
-
-Table usage_quotas {
-  _id ObjectId [pk]
-  parentId ObjectId [not null]
-  monthPeriod varchar [note: 'YYYY-MM']
-  dayPeriod varchar [note: 'YYYY-MM-DD']
-  discoveryViewCountToday int [default: 0]
-  connectionRequestsThisMonth int [default: 0]
-  playdatesCreatedThisMonth int [default: 0]
-  playdatesJoinedThisMonth int [default: 0]
-  aiAssistantRequestsThisMonth int [default: 0]
-  updatedAt timestamp
-}
-
-// Quan hệ trong Module 6
-Ref: subscriptions.parentId > parents._id
-Ref: subscriptions.planCode > subscription_plans.planCode
-Ref: payments.subscriptionId > subscriptions._id
-Ref: payments.parentId > parents._id
-Ref: usage_quotas.parentId > parents._id
-```
-
----
-
-### 4.7 Module 7: Trust, Safety & Nearby Places Cache
-> **Phạm vi:** Kiểm duyệt nội dung & an toàn cộng đồng (`reports`, `blocks`), cùng kho đệm địa điểm vui chơi ngoại vi (`places_cache`).
-
-```dbml
-// ============================================================
-// MODULE 7: TRUST, SAFETY & CACHE
-// ============================================================
-
-Table users {
-  _id ObjectId [pk]
-  fullName varchar
-  status varchar
-}
-
-Table reports {
-  _id ObjectId [pk]
-  reporterId ObjectId [not null]
-  reportedUserId ObjectId [not null]
-  targetType varchar [note: 'user | message | playdate']
-  targetMessageId ObjectId
-  targetPlaydateId ObjectId
-  reason varchar
-  description text
-  evidenceUrls varchar[]
-  status varchar [note: 'pending | reviewing | resolved | dismissed', default: 'pending']
-  adminNotes text
-  resolvedBy ObjectId
-  resolvedAt timestamp
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table blocks {
-  _id ObjectId [pk]
-  blockerId ObjectId [not null]
-  blockedId ObjectId [not null]
-  reason varchar
-  createdAt timestamp
-}
-
-Table places_cache {
-  _id ObjectId [pk]
-  googlePlaceId varchar [unique, not null]
-  name varchar
-  address varchar
-  coordinates json [note: 'GeoJSON Point']
-  placeType varchar [note: 'park | kids_cafe | playground | library | sports_center | workshop']
-  rating float
-  userRatingsTotal int
-  lastFetchedAt timestamp
-}
-
-// Quan hệ trong Module 7
-Ref: reports.reporterId > users._id
-Ref: reports.reportedUserId > users._id
-Ref: reports.resolvedBy > users._id
-Ref: blocks.blockerId > users._id
-Ref: blocks.blockedId > users._id
-```
-
----
-
-### 4.8 Toàn bộ Schema với `TableGroup` (Full Integrated Diagram)
-> **Mục đích:** Sử dụng khi bạn muốn import **toàn bộ 22 collections** vào [dbdiagram.io](https://dbdiagram.io) mà vẫn giữ được sự ngăn nắp, rõ ràng. Cú pháp `TableGroup` sẽ tự động đóng khung và phân vùng màu sắc theo từng module nghiệp vụ tương ứng.
-
-```dbml
-// ============================================================
-// BUDDYLINK FULL INTEGRATED SCHEMA WITH TABLE GROUPS
-// AI-Powered Child Playmate Matching & Playdate Platform
-// ============================================================
-
-// --- 1. USER & AUTH GROUP ---
-Table users {
-  _id ObjectId [pk]
-  email varchar [unique, not null]
-  phone varchar
-  passwordHash varchar
-  googleId varchar
-  role varchar [note: 'parent | admin', default: 'parent']
-  fullName varchar [not null]
-  avatarUrl varchar
-  status varchar [note: 'active | blocked | deactivated', default: 'active']
-  blockedReason varchar
-  blockedAt timestamp
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table parents {
-  _id ObjectId [pk]
-  userId ObjectId [unique, not null, note: '1:1 relation with users']
-  bio text
-  address varchar
-  area varchar
-  city varchar
-  locationCoordinates json [note: 'GeoJSON Point: [lng, lat]']
-  preferences json [note: 'preferredPlaydateDays, timeSlots, locations, maxDistanceKm, ageRange, languages']
-  isProfileHidden boolean [default: false]
-  connectionPrivacy varchar [note: 'everyone | nobody', default: 'everyone']
-  messagePrivacy varchar [note: 'connected_only', default: 'connected_only']
-  isEmailVerified boolean [default: false]
-  isPhoneVerified boolean [default: false]
-  isVerifiedParent boolean [default: false]
-  phoneOtp varchar
-  phoneOtpExpires timestamp
-  currentWeeklyStreak int [default: 0]
-  longestStreak int [default: 0]
-  lastCompletedPlaydateWeek varchar [note: 'YYYY-WW']
-  streakUpdatedAt timestamp
-  createdAt timestamp
-  updatedAt timestamp
-}
-
-Table password_reset_tokens {
-  _id ObjectId [pk]
-  userId ObjectId [not null]
-  token varchar [unique, not null]
-  expiresAt timestamp [not null]
-  isUsed boolean [default: false]
-  createdAt timestamp
-}
-
-// --- 2. MATCHING & CHILD GROUP ---
 Table children {
   _id ObjectId [pk]
   parentId ObjectId [not null]
@@ -1143,7 +702,35 @@ Table connections {
   updatedAt timestamp
 }
 
-// --- 3. PLAYDATE MANAGEMENT GROUP ---
+Ref: children.parentId > parents._id
+Ref: swipes.swiperParentId > parents._id
+Ref: swipes.targetParentId > parents._id
+Ref: swipes.targetChildId > children._id
+Ref: connections.requesterId > parents._id
+Ref: connections.recipientId > parents._id
+```
+
+---
+
+### 4.3 Module 3: Lập kế hoạch & Quản lý Playdate (Playdate Planning & Management)
+> **Bao gồm các bảng:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache` (liên kết với `parents`, `children`)  
+> **Nghiệp vụ:** Tạo cuộc hẹn chơi (chỉ cần ngày, giờ bắt đầu, địa điểm), quy trình đề xuất đổi lịch, đánh giá sao sau buổi chơi, và cache địa điểm vui chơi từ Google Places API.
+
+```dbml
+// ============================================================
+// MODULE 3: PLAYDATE PLANNING & MANAGEMENT
+// ============================================================
+
+Table parents {
+  _id ObjectId [pk]
+  // ...xem chi tiết ở Module 1
+}
+
+Table children {
+  _id ObjectId [pk]
+  // ...xem chi tiết ở Module 2
+}
+
 Table playdates {
   _id ObjectId [pk]
   hostParentId ObjectId [not null]
@@ -1190,7 +777,48 @@ Table ratings_feedbacks {
   createdAt timestamp
 }
 
-// --- 4. COMMUNICATION GROUP ---
+Table places_cache {
+  _id ObjectId [pk]
+  googlePlaceId varchar [unique, not null]
+  name varchar
+  address varchar
+  coordinates json [note: 'GeoJSON Point']
+  placeType varchar [note: 'park | kids_cafe | playground | library | sports_center | workshop']
+  rating float
+  userRatingsTotal int
+  lastFetchedAt timestamp
+}
+
+Ref: playdates.hostParentId > parents._id
+Ref: playdates.hostChildId > children._id
+Ref: reschedule_requests.playdateId > playdates._id
+Ref: reschedule_requests.requestedBy > parents._id
+Ref: ratings_feedbacks.playdateId > playdates._id
+Ref: ratings_feedbacks.parentId > parents._id
+```
+
+---
+
+### 4.4 Module 4: Trò chuyện & Thông báo (Communication & Notifications)
+> **Bao gồm các bảng:** `conversations`, `messages`, `notifications` (liên kết với `users`, `playdates`)  
+> **Nghiệp vụ:** Trò chuyện 1-1 trực tiếp, nhóm chat theo từng Playdate, tin nhắn văn bản / hình ảnh / emoji, và thông báo đẩy trong ứng dụng.
+
+```dbml
+// ============================================================
+// MODULE 4: COMMUNICATION & NOTIFICATIONS
+// ============================================================
+
+Table users {
+  _id ObjectId [pk]
+  fullName varchar
+  avatarUrl varchar
+}
+
+Table playdates {
+  _id ObjectId [pk]
+  activity varchar
+}
+
 Table conversations {
   _id ObjectId [pk]
   type varchar [note: 'direct | playdate']
@@ -1226,7 +854,38 @@ Table notifications {
   createdAt timestamp
 }
 
-// --- 5. GAMIFICATION & AI GROUP ---
+Ref: conversations.playdateId - playdates._id
+Ref: messages.conversationId > conversations._id
+Ref: messages.senderId > users._id
+Ref: notifications.recipientId > users._id
+```
+
+---
+
+### 4.5 Module 5: Trợ lý AI & Gamification (AI Assistant & Badges)
+> **Bao gồm các bảng:** `ai_chat_sessions`, `badges`, `user_badges` (liên kết với `parents`)  
+> **Nghiệp vụ:** Phiên trò chuyện tư vấn với AI Family Assistant (gợi ý địa điểm, hoạt động, phá băng), hệ thống huy hiệu thành tích và mở khóa phần thưởng.
+
+```dbml
+// ============================================================
+// MODULE 5: AI ASSISTANT & GAMIFICATION
+// ============================================================
+
+Table parents {
+  _id ObjectId [pk]
+}
+
+Table ai_chat_sessions {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  title varchar
+  messages json [note: 'Array of { role, content, toolCalls, toolCallId, timestamp }']
+  tokenUsage json
+  isActive boolean [default: true]
+  createdAt timestamp
+  updatedAt timestamp
+}
+
 Table badges {
   _id ObjectId [pk]
   code varchar [unique, not null]
@@ -1243,18 +902,26 @@ Table user_badges {
   unlockedAt timestamp
 }
 
-Table ai_chat_sessions {
+Ref: ai_chat_sessions.parentId > parents._id
+Ref: user_badges.parentId > parents._id
+Ref: user_badges.badgeCode > badges.code
+```
+
+---
+
+### 4.6 Module 6: Gói cước, Hạn mức & Thanh toán (Subscription & Payments)
+> **Bao gồm các bảng:** `subscription_plans`, `subscriptions`, `payments`, `usage_quotas` (liên kết với `parents`)  
+> **Nghiệp vụ:** Các gói Free vs Premium, kiểm soát giới hạn hạn mức (quota: lượt xem, lượt kết nối, tạo playdate, gọi AI), đăng ký gia hạn và lịch sử giao dịch.
+
+```dbml
+// ============================================================
+// MODULE 6: SUBSCRIPTION, QUOTA & PAYMENTS
+// ============================================================
+
+Table parents {
   _id ObjectId [pk]
-  parentId ObjectId [not null]
-  title varchar
-  messages json [note: 'Array of { role, content, toolCalls, toolCallId, timestamp }']
-  tokenUsage json
-  isActive boolean [default: true]
-  createdAt timestamp
-  updatedAt timestamp
 }
 
-// --- 6. SUBSCRIPTION & BILLING GROUP ---
 Table subscription_plans {
   _id ObjectId [pk]
   planCode varchar [unique, not null, note: 'free | premium_monthly | premium_yearly']
@@ -1305,7 +972,28 @@ Table usage_quotas {
   updatedAt timestamp
 }
 
-// --- 7. SAFETY & CACHE GROUP ---
+Ref: subscriptions.parentId > parents._id
+Ref: subscriptions.planCode > subscription_plans.planCode
+Ref: payments.subscriptionId > subscriptions._id
+Ref: payments.parentId > parents._id
+Ref: usage_quotas.parentId > parents._id
+```
+
+---
+
+### 4.7 Module 7: An toàn, Báo cáo & Kiểm duyệt (Safety, Reports & Moderation)
+> **Bao gồm các bảng:** `reports`, `blocks` (liên kết với `users`)  
+> **Nghiệp vụ:** Báo cáo hành vi không phù hợp, chặn người dùng (Block User), và màn hình xử lý vi phạm của Admin.
+
+```dbml
+// ============================================================
+// MODULE 7: SAFETY, REPORTING & MODERATION
+// ============================================================
+
+Table users {
+  _id ObjectId [pk]
+}
+
 Table reports {
   _id ObjectId [pk]
   reporterId ObjectId [not null]
@@ -1332,6 +1020,168 @@ Table blocks {
   createdAt timestamp
 }
 
+Ref: reports.reporterId > users._id
+Ref: reports.reportedUserId > users._id
+Ref: reports.resolvedBy > users._id
+Ref: blocks.blockerId > users._id
+Ref: blocks.blockedId > users._id
+```
+
+---
+
+### 4.8 Mã DBML Toàn hệ thống có `TableGroup` (Master Diagram)
+
+> **Mẹo hữu ích cho [dbdiagram.io](https://dbdiagram.io):** Đoạn mã dưới đây sử dụng tính năng **`TableGroup`** của DBML. Khi dán vào dbdiagram.io, toàn bộ 22 bảng sẽ được tự động đóng khung theo 7 cụm màu riêng biệt, giúp sơ đồ tổng thể cực kỳ ngăn nắp, dễ theo dõi và không còn bị rối rắm.
+
+```dbml
+// ============================================================
+// BUDDYLINK COMPLETE DATABASE SCHEMA (MASTER WITH TABLEGROUPS)
+// ============================================================
+
+// ------------------------------------------------------------
+// GROUP 1: AUTHENTICATION & PARENT PROFILE
+// ------------------------------------------------------------
+Table users {
+  _id ObjectId [pk]
+  email varchar [unique, not null]
+  phone varchar
+  passwordHash varchar
+  googleId varchar
+  role varchar [note: 'parent | admin', default: 'parent']
+  fullName varchar [not null]
+  avatarUrl varchar
+  status varchar [note: 'active | blocked | deactivated', default: 'active']
+  blockedReason varchar
+  blockedAt timestamp
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table parents {
+  _id ObjectId [pk]
+  userId ObjectId [unique, not null, note: '1:1 relation with users']
+  bio text
+  address varchar
+  area varchar
+  city varchar
+  locationCoordinates json [note: 'GeoJSON Point: [lng, lat]']
+  preferences json [note: 'preferredPlaydateDays, timeSlots, locations, maxDistanceKm, ageRange, languages']
+  isProfileHidden boolean [default: false]
+  connectionPrivacy varchar [note: 'everyone | nobody', default: 'everyone']
+  messagePrivacy varchar [note: 'connected_only', default: 'connected_only']
+  isEmailVerified boolean [default: false]
+  isPhoneVerified boolean [default: false]
+  isVerifiedParent boolean [default: false]
+  phoneOtp varchar
+  phoneOtpExpires timestamp
+  currentWeeklyStreak int [default: 0]
+  longestStreak int [default: 0]
+  lastCompletedPlaydateWeek varchar [note: 'YYYY-WW']
+  streakUpdatedAt timestamp
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table password_reset_tokens {
+  _id ObjectId [pk]
+  userId ObjectId [not null]
+  token varchar [unique, not null]
+  expiresAt timestamp [not null]
+  isUsed boolean [default: false]
+  createdAt timestamp
+}
+
+// ------------------------------------------------------------
+// GROUP 2: CHILD PROFILE & MATCHING
+// ------------------------------------------------------------
+Table children {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  displayName varchar [not null]
+  dateOfBirth date
+  age int [not null]
+  gender varchar [note: 'boy | girl | other']
+  avatarUrl varchar
+  interests varchar[] [note: 'Array of interests']
+  favoriteActivities varchar[] [note: 'Array of activities']
+  personality varchar[] [note: 'Array of personality traits']
+  locationArea varchar
+  bioOrNotes text
+  isArchived boolean [default: false]
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table swipes {
+  _id ObjectId [pk]
+  swiperParentId ObjectId [not null]
+  targetChildId ObjectId [not null]
+  targetParentId ObjectId [not null]
+  action varchar [note: 'like | pass']
+  createdAt timestamp
+}
+
+Table connections {
+  _id ObjectId [pk]
+  requesterId ObjectId [not null]
+  recipientId ObjectId [not null]
+  status varchar [note: 'pending | accepted | declined | removed']
+  connectedAt timestamp
+  declinedAt timestamp
+  removedAt timestamp
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+// ------------------------------------------------------------
+// GROUP 3: PLAYDATE PLANNING & MANAGEMENT
+// ------------------------------------------------------------
+Table playdates {
+  _id ObjectId [pk]
+  hostParentId ObjectId [not null]
+  hostChildId ObjectId [not null]
+  participants json [note: 'Array of { parentId, childId, status, invitedAt, respondedAt }']
+  scheduledDate date [not null]
+  startTime varchar [not null, note: 'e.g. 09:30']
+  activity varchar [not null]
+  locationName varchar
+  locationAddress varchar
+  locationPlaceId varchar
+  locationCoordinates json [note: 'GeoJSON Point']
+  note text
+  status varchar [note: 'upcoming | completed | cancelled', default: 'upcoming']
+  cancellation json [note: '{ cancelledBy, reason, cancelledAt }']
+  completedAt timestamp
+  chatConversationId ObjectId
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table reschedule_requests {
+  _id ObjectId [pk]
+  playdateId ObjectId [not null]
+  requestedBy ObjectId [not null]
+  newDate date [not null]
+  newStartTime varchar [not null]
+  newLocation json [note: '{ name, address, placeId, coordinates }']
+  reason varchar
+  status varchar [note: 'pending | accepted | declined | cancelled']
+  responses json [note: 'Array of { parentId, status, respondedAt }']
+  resolvedAt timestamp
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table ratings_feedbacks {
+  _id ObjectId [pk]
+  playdateId ObjectId [not null]
+  parentId ObjectId [not null]
+  rating int [note: '1 to 5 stars']
+  feedback text
+  tags varchar[]
+  createdAt timestamp
+}
+
 Table places_cache {
   _id ObjectId [pk]
   googlePlaceId varchar [unique, not null]
@@ -1344,51 +1194,201 @@ Table places_cache {
   lastFetchedAt timestamp
 }
 
+// ------------------------------------------------------------
+// GROUP 4: COMMUNICATION & NOTIFICATIONS
+// ------------------------------------------------------------
+Table conversations {
+  _id ObjectId [pk]
+  type varchar [note: 'direct | playdate']
+  participants ObjectId[] [note: 'Array of user IDs']
+  playdateId ObjectId [note: 'Optional, 1:1 if playdate chat']
+  lastMessage json
+  isActive boolean [default: true]
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table messages {
+  _id ObjectId [pk]
+  conversationId ObjectId [not null]
+  senderId ObjectId [not null]
+  type varchar [note: 'text | image | emoji | system']
+  content text
+  mediaUrl varchar
+  readBy json [note: 'Array of { userId, readAt }']
+  isDeleted boolean [default: false]
+  createdAt timestamp
+}
+
+Table notifications {
+  _id ObjectId [pk]
+  recipientId ObjectId [not null]
+  type varchar [note: 'message_new | connection_request | playdate_invitation | badge_unlocked | streak_reminder...']
+  title varchar
+  body text
+  data json [note: '{ playdateId, senderId, conversationId, badgeCode }']
+  isRead boolean [default: false]
+  readAt timestamp
+  createdAt timestamp
+}
+
+// ------------------------------------------------------------
+// GROUP 5: AI ASSISTANT & GAMIFICATION
+// ------------------------------------------------------------
+Table ai_chat_sessions {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  title varchar
+  messages json [note: 'Array of { role, content, toolCalls, toolCallId, timestamp }']
+  tokenUsage json
+  isActive boolean [default: true]
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table badges {
+  _id ObjectId [pk]
+  code varchar [unique, not null]
+  title varchar [not null]
+  description text
+  iconUrl varchar
+  requirementCount int
+}
+
+Table user_badges {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  badgeCode varchar [not null]
+  unlockedAt timestamp
+}
+
+// ------------------------------------------------------------
+// GROUP 6: SUBSCRIPTION & BILLING
+// ------------------------------------------------------------
+Table subscription_plans {
+  _id ObjectId [pk]
+  planCode varchar [unique, not null, note: 'free | premium_monthly | premium_yearly']
+  name varchar
+  price int
+  currency varchar [default: 'VND']
+  billingCycle varchar [note: 'monthly | yearly | none']
+  features json [note: 'maxChildren, discoveryLimit, connectionLimit, playdateLimit, aiLimit']
+  isActive boolean [default: true]
+}
+
+Table subscriptions {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  planCode varchar [not null]
+  status varchar [note: 'active | cancelled | expired | trial']
+  startDate timestamp
+  endDate timestamp
+  autoRenew boolean [default: true]
+  cancelledAt timestamp
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table payments {
+  _id ObjectId [pk]
+  subscriptionId ObjectId [not null]
+  parentId ObjectId [not null]
+  amount int
+  currency varchar [default: 'VND']
+  paymentMethod varchar [note: 'momo | vnpay | zalopay | stripe']
+  transactionId varchar [unique]
+  status varchar [note: 'pending | success | failed']
+  paidAt timestamp
+  createdAt timestamp
+}
+
+Table usage_quotas {
+  _id ObjectId [pk]
+  parentId ObjectId [not null]
+  monthPeriod varchar [note: 'YYYY-MM']
+  dayPeriod varchar [note: 'YYYY-MM-DD']
+  discoveryViewCountToday int [default: 0]
+  connectionRequestsThisMonth int [default: 0]
+  playdatesCreatedThisMonth int [default: 0]
+  playdatesJoinedThisMonth int [default: 0]
+  aiAssistantRequestsThisMonth int [default: 0]
+  updatedAt timestamp
+}
+
+// ------------------------------------------------------------
+// GROUP 7: SAFETY & MODERATION
+// ------------------------------------------------------------
+Table reports {
+  _id ObjectId [pk]
+  reporterId ObjectId [not null]
+  reportedUserId ObjectId [not null]
+  targetType varchar [note: 'user | message | playdate']
+  targetMessageId ObjectId
+  targetPlaydateId ObjectId
+  reason varchar
+  description text
+  evidenceUrls varchar[]
+  status varchar [note: 'pending | reviewing | resolved | dismissed', default: 'pending']
+  adminNotes text
+  resolvedBy ObjectId
+  resolvedAt timestamp
+  createdAt timestamp
+  updatedAt timestamp
+}
+
+Table blocks {
+  _id ObjectId [pk]
+  blockerId ObjectId [not null]
+  blockedId ObjectId [not null]
+  reason varchar
+  createdAt timestamp
+}
+
 // ============================================================
-// TABLE GROUPS (Tự động nhóm trực quan trên dbdiagram.io)
+// TABLEGROUPS (GOM NHÓM THEO MÀU TRÊN DBDATAGRAM.IO)
 // ============================================================
 
-TableGroup UserAndAuth {
+TableGroup Authentication_and_Profile {
   users
   parents
   password_reset_tokens
 }
 
-TableGroup ChildAndMatching {
+TableGroup Child_and_Matching {
   children
   swipes
   connections
 }
 
-TableGroup PlaydateManagement {
+TableGroup Playdate_Management {
   playdates
   reschedule_requests
   ratings_feedbacks
+  places_cache
 }
 
-TableGroup Communication {
+TableGroup Chat_and_Notifications {
   conversations
   messages
   notifications
 }
 
-TableGroup GamificationAndAI {
+TableGroup AI_and_Gamification {
+  ai_chat_sessions
   badges
   user_badges
-  ai_chat_sessions
 }
 
-TableGroup SubscriptionAndBilling {
+TableGroup Subscription_and_Billing {
   subscription_plans
   subscriptions
   payments
   usage_quotas
 }
 
-TableGroup SafetyAndCache {
+TableGroup Safety_and_Moderation {
   reports
   blocks
-  places_cache
 }
 
 // ============================================================
@@ -1432,4 +1432,3 @@ Ref: ratings_feedbacks.parentId > parents._id
 Ref: conversations.playdateId - playdates._id
 Ref: messages.conversationId > conversations._id
 ```
-
