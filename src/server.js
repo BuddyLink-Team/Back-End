@@ -1,77 +1,28 @@
-const config = require("./configs");
-const express = require("express");
-const helmet = require("helmet");
+import http from 'http';
+import app from './app.js';
+import env from './config/env.js';
+import connectDatabase from './config/database.js';
+import { initSocket } from './config/socket.js';
+import logger from './shared/logger/index.js';
 
-const defineRoutes = require("./app");
-const { errorHandler } = require("./libraries/error-handling");
-const logger = require("./libraries/log/logger");
-const { addRequestIdMiddleware } = require("./middlewares/request-context");
-const { connectWithMongoDb } = require("./libraries/db");
+const server = http.createServer(app);
 
-let connection;
+// Initialize Socket.io
+initSocket(server);
 
-const createExpressApp = () => {
-  const expressApp = express();
-  expressApp.use(addRequestIdMiddleware);
-  expressApp.use(helmet());
-  expressApp.use(express.urlencoded({ extended: true }));
-  expressApp.use(express.json());
+const startServer = async () => {
+  try {
+    // 1. Connect MongoDB
+    await connectDatabase();
 
-  expressApp.use((req, res, next) => {
-    // Log an info message for each incoming request
-    logger.info(`${req.method} ${req.originalUrl}`);
-    next();
-  });
-
-  logger.info("Express middlewares are set up");
-  defineRoutes(expressApp);
-  defineErrorHandlingMiddleware(expressApp);
-  return expressApp;
+    // 2. Start HTTP Server
+    server.listen(env.PORT, () => {
+      logger.info(`BuddyLink server running in ${env.NODE_ENV} mode at http://localhost:${env.PORT}`);
+    });
+  } catch (error) {
+    logger.error(`Failed to start server: ${error.message}`);
+    process.exit(1);
+  }
 };
 
-async function startWebServer() {
-  logger.info("Starting web server...");
-  const expressApp = createExpressApp();
-  const APIAddress = await openConnection(expressApp);
-  logger.info(`Server is running on ${APIAddress.address}:${APIAddress.port}`);
-  await connectWithMongoDb();
-  return expressApp;
-}
-
-async function stopWebServer() {
-  return new Promise((resolve) => {
-    if (connection !== undefined) {
-      connection.close(() => {
-        resolve();
-      });
-    }
-  });
-}
-
-async function openConnection(expressApp) {
-  return new Promise((resolve) => {
-    const webServerPort = config.PORT;
-    logger.info(`Server is about to listen to port ${webServerPort}`);
-
-    connection = expressApp.listen(webServerPort, () => {
-      errorHandler.listenToErrorEvents(connection);
-      resolve(connection.address());
-    });
-  });
-}
-
-function defineErrorHandlingMiddleware(expressApp) {
-  expressApp.use(async (error, req, res, next) => {
-    // Note: next is required for Express error handlers
-    if (error && typeof error === "object") {
-      if (error.isTrusted === undefined || error.isTrusted === null) {
-        error.isTrusted = true;
-      }
-    }
-
-    errorHandler.handleError(error);
-    res.status(error?.HTTPStatus || 500).end();
-  });
-}
-
-module.exports = { createExpressApp, startWebServer, stopWebServer };
+startServer();

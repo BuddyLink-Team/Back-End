@@ -1,7 +1,6 @@
-// import { MongoMemoryServer } from 'mongodb-memory-server';
-const { MongoMemoryServer } = require('mongodb-memory-server');
+import { MongoMemoryServer } from 'mongodb-memory-server';
 
-module.exports = async function globalSetup() {
+export default async function globalSetup() {
   const instance = await MongoMemoryServer.create({
     instance: {
       dbName: 'testdb',
@@ -9,4 +8,4 @@ module.exports = async function globalSetup() {
     },
   });
   global.__MONGOINSTANCE = instance;
-};
+}

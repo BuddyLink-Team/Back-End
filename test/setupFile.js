@@ -1,19 +1,21 @@
-const { beforeAll, afterAll } = require("@jest/globals");
-const mongoose = require("mongoose");
-const { connectWithMongoDb, disconnectWithMongoDb } = require("../src/libraries/db");
+import { beforeAll, afterAll, describe, it, expect } from '@jest/globals';
+import mongoose from 'mongoose';
 
 beforeAll(async () => {
-  await connectWithMongoDb();
+  const mongoUri = 'mongodb://127.0.0.1:27018/testdb';
+  if (mongoose.connection.readyState === 0) {
+    await mongoose.connect(mongoUri);
+  }
 });
 
 afterAll(async () => {
-  await disconnectWithMongoDb();
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.disconnect();
+  }
 });
 
-// test mongoose connection is open
-
-describe("Mongoose connection", () => {
-  it("should be open", () => {
+describe('Mongoose test connection', () => {
+  it('should be connected to in-memory db', () => {
     expect(mongoose.connection.readyState).toBe(1);
   });
 });

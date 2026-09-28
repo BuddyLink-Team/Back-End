@@ -1,23 +1,69 @@
-const express = require('express');
-const logger = require('./libraries/log/logger');
-const domainRoutes = require('./domains/index');
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
+import env from "./config/env.js";
+import logger from "./shared/logger/index.js";
+import {
+  errorHandler,
+  notFoundHandler,
+} from "./middlewares/error.middleware.js";
 
-function defineRoutes(expressApp) {
-  logger.info('Defining routes...');
-  const router = express.Router();
+const app = express();
 
-  domainRoutes(router);
+// Security Headers
+app.use(helmet());
 
-  expressApp.use('/api/v1', router);
-  // health check
-  expressApp.get('/health', (req, res) => {
-    res.status(200).send('OK');
+// CORS configuration
+app.use(
+  cors({
+    origin: env.CLIENT_URL,
+    credentials: true,
+  }),
+);
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests, please try again later.",
+    data: null,
+    error: {
+      code: "TOO_MANY_REQUESTS",
+      details: [],
+    },
+  },
+});
+app.use("/api", limiter);
+
+// Request parsing
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(cookieParser());
+
+// Request logger middleware
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// Main API V1 Routes
+app.get("/api/v1", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "BuddyLink API v1 is active",
   });
-  // 404 handler
-  expressApp.use((req, res) => {
-    res.status(404).send('Not Found');
-  });
-  logger.info('Routes defined');
-}
+});
 
-module.exports = defineRoutes;
+// Catch 404 Not Found
+app.use(notFoundHandler);
+
+// Centralized Error Handling Middleware
+app.use(errorHandler);
+
+export default app;

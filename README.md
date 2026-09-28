@@ -1,52 +1,82 @@
-## **Node.js Express Boilerplate: Best Practices for Project Structure**
+# BuddyLink - Backend API
 
-**Purpose**
+Modular Monolith backend for **BuddyLink** (Parenting & Child Playdate Matchmaking Platform), built with **Node.js**, **Express**, **MongoDB (Mongoose)**, **Socket.io**, and **AI Assistants**.
 
-This boilerplate repository offers a well-structured and scalable foundation for Node.js Express projects, emphasizing industry best practices in folder architecture and file organization. While it does not provide a functional implementation, it serves as a valuable starting point for building robust and maintainable applications.
+---
 
-**Key Principles**
+## 🚀 Tech Stack
 
-- **Modularity:** Clear separation of concerns into logical folders for enhanced maintainability.
-- **Scalability:** A structure designed to accommodate project growth and evolving complexity.
-- **Best Practices:** Adherence to established Node.js and Express conventions for a familiar development experience.
-- **Documentation:** Emphasis on thorough explanations within each folder to promote understanding.
+- **Runtime**: Node.js (`>=20.0.0`, recommended `v22.x LTS`)
+- **Framework**: Express.js (ES Modules)
+- **Database**: MongoDB via Mongoose ODM
+- **Realtime**: Socket.io
+- **Logger**: Pino & Pino-pretty
+- **Security**: Helmet, CORS, Express-rate-limit, Cookie-parser
+- **Testing**: Jest (ESM mode), Supertest, MongoDB Memory Server
 
-**Project Structure Overview**
+---
 
-- **root directory**
-  - **docker/** - Docker configuration for containerizing the application. [docker.md](/docker/docker.md) - Detailed instructions and documentation for using Docker with this project.
-  - **docs/** - Project knowledge base and development documentation. [docs.md](/docs/docs.md) - Detailed instructions and documentation for using this project.
-  - **scripts/** - Custom scripts for development, deployment, and utilities. [scripts.md](/scripts/scripts.md) - Detailed instructions and documentation for using scripts.
-  - **src/** - The core source code of the application. [src.md](/src/src.md) - Detailed instructions and documentation for using the source code.
-  - **test/** - Unit, integration, and end-to-end tests. [test.md](/test/test.md) - Detailed instructions and documentation for running tests.
-  - **.editorconfig:** Specifies basic code editor settings (indentation style, line endings, etc.). This ensures code looks the same regardless of the editor used by individual developers.
-  - **.eslintignore:** Indicates files and directories that should be excluded from ESLint's code quality checks.
-  - **.eslintrc:** The core configuration file for ESLint. It defines the JavaScript linting rules and stylistic preferences enforced in the project.
-  - **.gitattributes:** Allows customization of how Git handles certain files within your repository (e.g., specifying line endings, merge strategies).
-  - **.gitignore:** Lists files and patterns to prevent accidental committing of development artifacts, sensitive data, or large generated files to version control.
-  - **.npmignore:** Similar to `.gitignore` but specifically for npm packaging. It controls what's excluded when publishing your project as an npm module.
-  - **.npmrc:** Contains configuration options for the npm package manager. This can be used for setting registry URLs, proxy settings, and other npm behaviors.
-  - **.nvmrc:** Specifies a Node.js version for the project. Using Node Version Manager (nvm) helps ensure all developers use the same version, preventing compatibility issues.
-  - **.prettierrc:** Configures the Prettier code formatter with preferred formatting rules (semicolons, spacing, quotes, etc.). This promotes code style homogeneity within the project.
-  - **.snyk:** Likely used for Snyk dependency vulnerability scanning. This file holds configuration options related to integrating Snyk into your development workflow.
-  - **CODE_OF_CONDUCT.md:** Guidelines for community interaction and collaboration.
-  - **CONTRIBUTING.md:** Instructions for contributing to the project.
-  - **LICENSE:** The license governing the use and distribution of the project.
-  - **README.md:** Overview of the project, its structure, and key files.
-  - **package.json:** Metadata and dependencies for the Node.js project.
-  - **package-lock.json:** Lock file automatically generated for any operations where npm modifies either the `node_modules` tree or `package.json`.
+## 📁 Project Structure
 
-**Getting Started**
+```text
+src/
+├── app.js               # Express app configuration & middleware pipeline
+├── server.js            # HTTP Server & Socket.io entry point
+├── config/              # Environment variables, database, socket setups
+├── middlewares/         # Auth, validation, roles, and error handlers
+├── modules/             # Business modules (User, Playdate, Chat, AI, etc.)
+├── shared/              # Shared constants, helpers, logger, custom errors
+└── sockets/             # Socket.io event handlers
+docs/                    # Comprehensive system architecture & DB schemas
+test/                    # Jest automated integration & unit tests
+```
 
-1. Clone this repository.
-2. Install dependencies (`npm install`)
-3. Review and customize configuration files as needed.
-4. Refer to the documentation within each folder for guidance on how to build out your application.
+---
 
-**Run tests**
+## 🛠️ Getting Started
 
-1. Run `npm test` to execute all tests.
+### 1. Prerequisites
+- Node.js (version 20 or 22 LTS recommended)
+- MongoDB instance (Local or MongoDB Atlas)
 
-**Community Contributions**
+### 2. Install Dependencies
+```bash
+npm install
+```
 
-This boilerplate aims to be a collaborative resource. Feel free to suggest improvements, refinements, or alternative approaches via pull requests or discussions.
+### 3. Environment Variables
+Copy `.env.example` to `.env` in the root folder and configure:
+```bash
+cp .env.example .env
+```
+
+Key environment variables:
+- `PORT`: Server port (default: `5000`)
+- `NODE_ENV`: `development` | `production` | `test`
+- `CLIENT_URL`: Frontend origin URL (e.g. `http://localhost:5173`)
+- `MONGODB_URI`: MongoDB connection string
+- `JWT_SECRET` & `JWT_REFRESH_SECRET`: Secrets for signing tokens
+
+### 4. Run Application
+- **Development mode (with auto-reload)**:
+  ```bash
+  npm run dev
+  ```
+- **Production mode**:
+  ```bash
+  npm start
+  ```
+- **Run Tests**:
+  ```bash
+  npm test
+  ```
+
+---
+
+## 📖 Documentation
+
+Detailed documentation is available in the [`docs/`](./docs) folder:
+- [Architecture Guide](./docs/BUDDYLINK_BACKEND_ARCHITECTURE.md)
+- [Database Schema](./docs/DATABASE_SCHEMA.md)
+- [AI Guide](./docs/BACKEND_AI_GUIDE.md)
+- [Setup Guide](./docs/BACKEND_SETUP.md)
