@@ -192,7 +192,7 @@ If role restriction required:
 # 11. CROSS-MODULE & INTEGRATION RULES
 
 - **Cross-module:** Always call another module's Service, NEVER access another module's Repository.
-- **External Services:** Mọi tích hợp bên ngoài (AI Gemini, PayOS, Cloudinary/Storage, Google Maps, Nodemailer) MUST reside in `src/integrations/` as adapters.
+- **External Services:** Mọi tích hợp bên ngoài (AI Gemini, PayOS, Cloudinary/Storage, OpenStreetMap / Geocoding, Nodemailer) MUST reside in `src/integrations/` as adapters.
 - **AI Tools:** AI Function Calling tools in `ai-assistant/tools/` MUST call domain services, never bypass them.
 - **Realtime (Sockets):** Socket handlers MUST call Services to execute business operations.
 

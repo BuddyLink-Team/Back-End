@@ -88,7 +88,8 @@ module/
 1. **Cross-Module Communication:**
    - Module A needs data or actions from Module B $\rightarrow$ **call Module B's Service** (never access Module B's Repository directly).
 2. **External Integrations (`integrations/`):**
-   - External providers (AI, PayOS, Google Maps, S3/Cloudinary, Email) must be wrapped inside adapters in `integrations/`. Services only talk to adapters.
+   - External providers (AI, PayOS, OpenStreetMap / Geocoding, S3/Cloudinary, Email) must be wrapped inside adapters in `integrations/`. Services only talk to adapters.
+   - Example: `src/integrations/maps/geocoding.adapter.js` uses OpenStreetMap Nominatim API (with local coordinate cache) to convert parent addresses into GeoJSON coordinates (`[longitude, latitude]`) without requiring paid Google Maps enterprise billing.
 3. **AI Assistant Tools (`ai-assistant/`):**
    - AI tools (Function Calling) **must always call Services**, never bypass them to query Repositories directly.
 4. **Sockets & Real-time:**

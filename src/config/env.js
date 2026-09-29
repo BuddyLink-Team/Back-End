@@ -33,6 +33,10 @@ const env = {
     API_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
   },
 
+  GOOGLE: {
+    CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
+  },
+
   EMAIL: {
     SMTP_HOST: process.env.SMTP_HOST || '',
     SMTP_PORT: parseInt(process.env.SMTP_PORT, 10) || 587,

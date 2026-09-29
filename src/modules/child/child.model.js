@@ -23,10 +23,6 @@ const childSchema = new mongoose.Schema(
       enum: Object.values(CHILD_GENDERS),
       required: true,
     },
-    avatarUrl: {
-      type: String,
-      default: '',
-    },
     interests: [{ type: String, trim: true }],
     favoriteActivities: [{ type: String, trim: true }],
     personality: [{ type: String, trim: true }],
