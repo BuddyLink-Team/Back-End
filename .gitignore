@@ -131,3 +131,5 @@ config.production.json
 config.test.json
 firebase-service-account.json
 src/config/firebase-service-account.json
+
+init-mongo.js 

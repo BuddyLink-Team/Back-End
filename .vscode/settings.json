@@ -1,0 +1,20 @@
+{
+  "cSpell.words": [
+    "buddylink",
+    "playdate",
+    "playdates",
+    "dsphere",
+    "vnpay",
+    "zalopay",
+    "tiniworld",
+    "mongosh"
+  ],
+  "cSpell.ignoreRegExpList": [
+    // Bỏ qua kiểm tra chính tả đối với tất cả các từ Tiếng Việt có dấu
+    "/[\\u00C0-\\u024F\\u1EA0-\\u1EF9]+/g"
+  ],
+  // Tắt spell-checker cho các file tài liệu Markdown viết bằng Tiếng Việt
+  "cSpell.enabledLanguageIds": [
+    "!markdown"
+  ]
+}
