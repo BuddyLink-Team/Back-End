@@ -10,6 +10,11 @@ import {
   notFoundHandler,
 } from "./middlewares/error.middleware.js";
 
+import authRoutes from "./modules/auth/auth.route.js";
+import parentRoutes from "./modules/parent/parent.route.js";
+
+import childRoutes from "./modules/child/child.route.js";
+
 const app = express();
 
 // Security Headers
@@ -59,6 +64,10 @@ app.get("/api/v1", (req, res) => {
     message: "BuddyLink API v1 is active",
   });
 });
+
+app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/parent", parentRoutes);
+app.use("/api/v1/children", childRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);
