@@ -40,22 +40,32 @@ class ParentService {
 
     const updatePayload = {};
     if (location) {
+      const existingLoc = parent.location?.toObject?.() || parent.location || {};
+      const area = location.area !== undefined ? location.area : existingLoc.area;
+      const city = location.city !== undefined ? location.city : existingLoc.city;
+
+      // Automatically construct address by joining area and city if not explicitly provided
+      const resolvedAddress = location.address?.trim()
+        ? location.address.trim()
+        : [area, city].filter(Boolean).join(', ');
+
       let coordinates = location.coordinates;
 
       // Automatically geocode coordinates if missing or defaulted to [0, 0]
       if (!coordinates || (coordinates[0] === 0 && coordinates[1] === 0)) {
         coordinates = await geocodingAdapter.getCoordinatesByAddress(
-          location.area || location.address,
-          location.city
+          area || resolvedAddress,
+          city
         );
       }
 
       updatePayload.location = {
-        ...(parent.location?.toObject?.() || parent.location),
+        ...existingLoc,
         ...location,
+        address: resolvedAddress,
         coordinates: {
           type: 'Point',
-          coordinates,
+          coordinates: coordinates || existingLoc.coordinates?.coordinates || [0, 0],
         },
       };
     }
@@ -89,20 +99,30 @@ class ParentService {
     }
 
     if (updateData.location) {
+      const existingLoc = parent.location?.toObject?.() || parent.location || {};
+      const area = updateData.location.area !== undefined ? updateData.location.area : existingLoc.area;
+      const city = updateData.location.city !== undefined ? updateData.location.city : existingLoc.city;
+
+      // Automatically construct address by joining area and city if not explicitly provided
+      const resolvedAddress = updateData.location.address?.trim()
+        ? updateData.location.address.trim()
+        : [area, city].filter(Boolean).join(', ');
+
       let coordinates = updateData.location.coordinates;
 
-      // Geocode when new address or city provided and coordinates are missing/zeroed
+      // Geocode when new address, area or city provided and coordinates are missing/zeroed
       const hasNewAddress = updateData.location.address || updateData.location.area || updateData.location.city;
       if (!coordinates && hasNewAddress) {
         coordinates = await geocodingAdapter.getCoordinatesByAddress(
-          updateData.location.area || updateData.location.address,
-          updateData.location.city
+          area || resolvedAddress,
+          city
         );
       }
 
       updatePayload.location = {
-        ...(parent.location?.toObject?.() || parent.location),
+        ...existingLoc,
         ...updateData.location,
+        address: resolvedAddress,
         ...(coordinates ? { coordinates: { type: 'Point', coordinates } } : {}),
       };
     }
@@ -151,42 +171,6 @@ class ParentService {
     return {
       avatarUrl: updatedParent.avatarUrl,
     };
-  }
-
-  async changePassword(userId, { currentPassword, newPassword, confirmNewPassword }) {
-    if (newPassword !== confirmNewPassword) {
-      throw new AppError('Confirmation password does not match', 400, 'PASSWORD_MISMATCH');
-    }
-
-    const user = await userService.getUserById(userId);
-    if (!user) {
-      throw new AppError('User not found', 404, 'USER_NOT_FOUND');
-    }
-
-    if (!user.passwordHash) {
-      throw new AppError(
-        'Account was registered using a social provider (Google). Password cannot be changed this way.',
-        400,
-        'SOCIAL_ACCOUNT_NO_PASSWORD'
-      );
-    }
-
-    const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!isMatch) {
-      throw new AppError('Incorrect current password', 400, 'INVALID_CURRENT_PASSWORD');
-    }
-
-    const isSame = await bcrypt.compare(newPassword, user.passwordHash);
-    if (isSame) {
-      throw new AppError('New password cannot be the same as the current password', 400, 'SAME_AS_OLD_PASSWORD');
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const newPasswordHash = await bcrypt.hash(newPassword, salt);
-
-    await userService.updatePassword(userId, newPasswordHash);
-
-    return { success: true };
   }
 }
 

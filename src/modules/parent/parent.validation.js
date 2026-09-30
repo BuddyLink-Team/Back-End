@@ -100,24 +100,3 @@ export const updateParentProfileValidation = [
   body('privacySettings.connectionPrivacy').optional().isIn(['everyone', 'nobody']).withMessage('connectionPrivacy must be either everyone or nobody'),
   body('privacySettings.messagePrivacy').optional().isIn(['connected_only']).withMessage('messagePrivacy must be connected_only'),
 ];
-
-export const changePasswordValidation = [
-  body('currentPassword')
-    .notEmpty()
-    .withMessage('Current password is required'),
-  body('newPassword')
-    .notEmpty()
-    .withMessage('New password is required')
-    .isLength({ min: 6 })
-    .withMessage('New password must be at least 6 characters long'),
-  body('confirmNewPassword')
-    .notEmpty()
-    .withMessage('Confirmation of new password is required')
-    .custom((value, { req }) => {
-      if (value !== req.body.newPassword) {
-        throw new Error('New password and confirmation password do not match');
-      }
-      return true;
-    }),
-];
-

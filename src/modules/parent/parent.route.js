@@ -7,7 +7,6 @@ import { uploadAvatar } from '../../middlewares/upload.middleware.js';
 import {
   onboardingPreferencesValidation,
   updateParentProfileValidation,
-  changePasswordValidation,
 } from './parent.validation.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 
@@ -23,9 +22,6 @@ router.put('/me', validate(updateParentProfileValidation), parentController.upda
 
 // Avatar update
 router.patch('/me/avatar', uploadAvatar.single('avatar'), parentController.updateAvatar);
-
-// Password update
-router.put('/me/password', validate(changePasswordValidation), parentController.changePassword);
 
 // Onboarding preferences
 router.put(

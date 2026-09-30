@@ -31,20 +31,6 @@ class ParentController {
     }
   }
 
-  async changePassword(req, res, next) {
-    try {
-      const { currentPassword, newPassword, confirmNewPassword } = req.body;
-      const result = await parentService.changePassword(req.userId, {
-        currentPassword,
-        newPassword,
-        confirmNewPassword,
-      });
-      return successResponse(res, result, 'Password changed successfully', 200);
-    } catch (error) {
-      return next(error);
-    }
-  }
-
   async updateOnboardingPreferences(req, res, next) {
     try {
       const { location, preferences } = req.body;

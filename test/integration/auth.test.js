@@ -5,6 +5,9 @@ import bcrypt from "bcryptjs";
 import app from "../../src/app.js";
 import User from "../../src/modules/user/user.model.js";
 import Parent from "../../src/modules/parent/parent.model.js";
+import Subscription from "../../src/modules/subscription/subscription.model.js";
+import SubscriptionPlan from "../../src/modules/subscription/subscription-plan.model.js";
+import subscriptionService from "../../src/modules/subscription/subscription.service.js";
 import AuthToken from "../../src/modules/auth/auth-token.model.js";
 import { hashToken } from "../../src/shared/helpers/token.helper.js";
 
@@ -16,6 +19,23 @@ describe("Authentication & Onboarding Integration Flow", () => {
   const testPassword = "Password123!";
   const testFullName = "Nguyen Van Parent";
   const testPhone = "+840333134898";
+
+  it("0. Subscription Plans: should verify default plans are seeded", async () => {
+    const plans = await SubscriptionPlan.find({});
+    expect(plans.length).toBeGreaterThanOrEqual(3);
+
+    const freePlan = await SubscriptionPlan.findOne({ planCode: "free" });
+    expect(freePlan).not.toBeNull();
+    expect(freePlan.features.childProfilesLimit).toBe(1);
+    expect(freePlan.features.discoveryViewLimitPerDay).toBe(5);
+    expect(freePlan.features.connectionRequestsLimitPerMonth).toBe(5);
+    expect(freePlan.features.playdatesLimitPerMonth).toBe(3);
+    expect(freePlan.features.playdateParticipationLimitPerMonth).toBe(3);
+    expect(freePlan.features.aiAssistantLimitPerMonth).toBe(5);
+
+    const premiumMonthly = await SubscriptionPlan.findOne({ planCode: "premium_monthly" });
+    expect(premiumMonthly.features.discoveryViewLimitPerDay).toBe(-1);
+  });
 
   it("1. Register: should register a new parent and return AuthResponseDTO", async () => {
     const res = await request(app).post("/api/v1/auth/register").send({
@@ -40,6 +60,28 @@ describe("Authentication & Onboarding Integration Flow", () => {
     expect(res.body.data.parent.verification.isPhoneVerified).toBe(false);
     expect(res.body.data.parent.verification.isVerifiedParent).toBe(false);
     expect(res.body.data.tokens.accessToken).toBeDefined();
+
+    // Verify free subscription was automatically created
+    const subscription = await Subscription.findOne({ parentId: res.body.data.parent.id });
+    expect(subscription).not.toBeNull();
+    expect(subscription.planCode).toBe("free");
+    expect(subscription.status).toBe("active");
+
+    // Verify quota summary can be retrieved
+    const quotaSummary = await subscriptionService.getQuotaSummary(res.body.data.parent.id);
+    expect(quotaSummary.planCode).toBe("free");
+    expect(quotaSummary.limits.discoveryViewsPerDay).toBe(5);
+    expect(quotaSummary.limits.childProfiles).toBe(1);
+    expect(quotaSummary.usage.discoveryViewsToday).toBe(0);
+
+    // Verify consuming quota
+    const quotaResult = await subscriptionService.checkAndConsumeQuota(
+      res.body.data.parent.id,
+      "discovery",
+      true
+    );
+    expect(quotaResult.allowed).toBe(true);
+    expect(quotaResult.remaining).toBe(4);
   });
 
   it("2. Login with Google (OAuth): should authenticate via idToken", async () => {
@@ -55,6 +97,12 @@ describe("Authentication & Onboarding Integration Flow", () => {
     expect(res.body.data.user.email).toBe(googleEmail);
     expect(res.body.data.parent.verification.isEmailVerified).toBe(true);
     expect(res.body.data.tokens.accessToken).toBeDefined();
+
+    // Verify free subscription was automatically created for google parent
+    const subscription = await Subscription.findOne({ parentId: res.body.data.parent.id });
+    expect(subscription).not.toBeNull();
+    expect(subscription.planCode).toBe("free");
+    expect(subscription.status).toBe("active");
   });
 
   it("3. Phone Verification: should send and verify phone OTP", async () => {

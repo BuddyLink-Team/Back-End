@@ -131,10 +131,10 @@ describe("Parent Profile Integration Flow", () => {
     });
   });
 
-  describe("PUT /api/v1/parent/me/password", () => {
+  describe("PUT /api/v1/user/me/password", () => {
     it("should reject when current password is incorrect", async () => {
       const res = await request(app)
-        .put("/api/v1/parent/me/password")
+        .put("/api/v1/user/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: "WrongPassword!",
@@ -148,7 +148,7 @@ describe("Parent Profile Integration Flow", () => {
 
     it("should reject when confirmation password does not match", async () => {
       const res = await request(app)
-        .put("/api/v1/parent/me/password")
+        .put("/api/v1/user/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: testPassword,
@@ -161,7 +161,7 @@ describe("Parent Profile Integration Flow", () => {
 
     it("should reject when new password is the same as old password", async () => {
       const res = await request(app)
-        .put("/api/v1/parent/me/password")
+        .put("/api/v1/user/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: testPassword,
@@ -176,7 +176,7 @@ describe("Parent Profile Integration Flow", () => {
     it("should successfully change password with valid credentials", async () => {
       const newPassword = "NewValidPassword123!";
       const res = await request(app)
-        .put("/api/v1/parent/me/password")
+        .put("/api/v1/user/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: testPassword,
