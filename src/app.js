@@ -67,7 +67,6 @@ app.get("/api/v1", (req, res) => {
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/parent", parentRoutes);
-app.use("/api/v1/parents", parentRoutes);
 app.use("/api/v1/children", childRoutes);
 
 // Catch 404 Not Found

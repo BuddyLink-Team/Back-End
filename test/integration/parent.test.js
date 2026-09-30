@@ -19,10 +19,10 @@ describe("Parent Profile Integration Flow", () => {
     accessToken = res.body.data.tokens.accessToken;
   });
 
-  describe("GET /api/v1/parents/me", () => {
+  describe("GET /api/v1/parent/me", () => {
     it("should retrieve full parent profile with user account details", async () => {
       const res = await request(app)
-        .get("/api/v1/parents/me")
+        .get("/api/v1/parent/me")
         .set("Authorization", `Bearer ${accessToken}`);
 
       expect(res.status).toBe(200);
@@ -35,12 +35,12 @@ describe("Parent Profile Integration Flow", () => {
     });
 
     it("should return 401 when unauthorized", async () => {
-      const res = await request(app).get("/api/v1/parents/me");
+      const res = await request(app).get("/api/v1/parent/me");
       expect(res.status).toBe(401);
     });
   });
 
-  describe("PUT /api/v1/parents/me", () => {
+  describe("PUT /api/v1/parent/me", () => {
     it("should update profile bio, full name, and preferences", async () => {
       const updateData = {
         fullName: "Le Van Parent Updated",
@@ -61,7 +61,7 @@ describe("Parent Profile Integration Flow", () => {
       };
 
       const res = await request(app)
-        .put("/api/v1/parents/me")
+        .put("/api/v1/parent/me")
         .set("Authorization", `Bearer ${accessToken}`)
         .send(updateData);
 
@@ -75,7 +75,7 @@ describe("Parent Profile Integration Flow", () => {
 
     it("should reject invalid preferences parameters", async () => {
       const res = await request(app)
-        .put("/api/v1/parents/me")
+        .put("/api/v1/parent/me")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           preferences: {
@@ -88,7 +88,7 @@ describe("Parent Profile Integration Flow", () => {
     });
   });
 
-  describe("PATCH /api/v1/parents/me/avatar", () => {
+  describe("PATCH /api/v1/parent/me/avatar", () => {
     it("should upload new avatar and update parent profile", async () => {
       // Mock Cloudinary upload to prevent real external API call in test
       const uploadSpy = jest
@@ -101,7 +101,7 @@ describe("Parent Profile Integration Flow", () => {
       const fakeImageBuffer = Buffer.from("fake-image-content");
 
       const res = await request(app)
-        .patch("/api/v1/parents/me/avatar")
+        .patch("/api/v1/parent/me/avatar")
         .set("Authorization", `Bearer ${accessToken}`)
         .attach("avatar", fakeImageBuffer, {
           filename: "avatar.png",
@@ -119,7 +119,7 @@ describe("Parent Profile Integration Flow", () => {
       const fakeTextBuffer = Buffer.from("plain text file");
 
       const res = await request(app)
-        .patch("/api/v1/parents/me/avatar")
+        .patch("/api/v1/parent/me/avatar")
         .set("Authorization", `Bearer ${accessToken}`)
         .attach("avatar", fakeTextBuffer, {
           filename: "test.txt",
@@ -131,10 +131,10 @@ describe("Parent Profile Integration Flow", () => {
     });
   });
 
-  describe("PUT /api/v1/parents/me/password", () => {
+  describe("PUT /api/v1/parent/me/password", () => {
     it("should reject when current password is incorrect", async () => {
       const res = await request(app)
-        .put("/api/v1/parents/me/password")
+        .put("/api/v1/parent/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: "WrongPassword!",
@@ -148,7 +148,7 @@ describe("Parent Profile Integration Flow", () => {
 
     it("should reject when confirmation password does not match", async () => {
       const res = await request(app)
-        .put("/api/v1/parents/me/password")
+        .put("/api/v1/parent/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: testPassword,
@@ -161,7 +161,7 @@ describe("Parent Profile Integration Flow", () => {
 
     it("should reject when new password is the same as old password", async () => {
       const res = await request(app)
-        .put("/api/v1/parents/me/password")
+        .put("/api/v1/parent/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: testPassword,
@@ -176,7 +176,7 @@ describe("Parent Profile Integration Flow", () => {
     it("should successfully change password with valid credentials", async () => {
       const newPassword = "NewValidPassword123!";
       const res = await request(app)
-        .put("/api/v1/parents/me/password")
+        .put("/api/v1/parent/me/password")
         .set("Authorization", `Bearer ${accessToken}`)
         .send({
           currentPassword: testPassword,
