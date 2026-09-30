@@ -14,6 +14,7 @@ import authRoutes from "./modules/auth/auth.route.js";
 import parentRoutes from "./modules/parent/parent.route.js";
 
 import childRoutes from "./modules/child/child.route.js";
+import chatRoutes from "./modules/chat/chat.route.js";
 
 const app = express();
 
@@ -68,6 +69,7 @@ app.get("/api/v1", (req, res) => {
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/parent", parentRoutes);
 app.use("/api/v1/children", childRoutes);
+app.use("/api/v1/chat", chatRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);
