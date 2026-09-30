@@ -4,6 +4,16 @@ import '../parent/parent.model.js';
 import '../playdate/playdate.model.js';
 import { CONVERSATION_TYPES } from './chat.constants.js';
 
+const PLAYDATE_POPULATE = {
+  path: 'playdateId',
+  populate: [
+    { path: 'hostParentId', select: 'fullName avatarUrl verification location' },
+    { path: 'hostChildId', select: 'displayName dateOfBirth gender interests' },
+    { path: 'participants.parentId', select: 'fullName avatarUrl verification location' },
+    { path: 'participants.childId', select: 'displayName dateOfBirth gender interests' },
+  ],
+};
+
 class ChatRepository {
   /**
    * Find all conversations that a parent participates in
@@ -24,7 +34,7 @@ class ChatRepository {
     return Conversation.find(query)
       .populate('participants', 'fullName avatarUrl verification location')
       .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'title scheduledDate status location')
+      .populate(PLAYDATE_POPULATE)
       .sort({ updatedAt: -1 })
       .lean();
   }
@@ -38,7 +48,20 @@ class ChatRepository {
     return Conversation.findOne({ _id: conversationId, isActive: true })
       .populate('participants', 'fullName avatarUrl verification location')
       .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'title scheduledDate status location')
+      .populate(PLAYDATE_POPULATE)
+      .lean();
+  }
+
+  /**
+   * Find playdate group conversation by playdateId
+   * @param {string|ObjectId} playdateId
+   * @returns {Promise<Object|null>}
+   */
+  async findConversationByPlaydateId(playdateId) {
+    return Conversation.findOne({ playdateId, isActive: true })
+      .populate('participants', 'fullName avatarUrl verification location')
+      .populate('lastMessage.senderId', 'fullName avatarUrl')
+      .populate(PLAYDATE_POPULATE)
       .lean();
   }
 
@@ -183,6 +206,19 @@ class ChatRepository {
       },
       { new: true }
     );
+  }
+
+  /**
+   * Ensure participants list has all accepted parent IDs
+   * @param {string|ObjectId} conversationId
+   * @param {Array<string|ObjectId>} participantIds
+   */
+  async syncParticipants(conversationId, participantIds) {
+    await Conversation.findByIdAndUpdate(
+      conversationId,
+      { $addToSet: { participants: { $each: participantIds } } }
+    );
+    return this.findConversationById(conversationId);
   }
 }
 

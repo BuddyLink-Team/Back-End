@@ -11,13 +11,38 @@ import logger from '../shared/logger/index.js';
 export const registerChatSocket = (io, socket) => {
   const getCallerId = () => socket.parentId || socket.userId;
 
-  // 1. Join Chat Room
-  socket.on(SOCKET_EVENTS.JOIN_CHAT, (payload) => {
-    const conversationId = typeof payload === 'string' ? payload : payload?.conversationId;
-    if (!conversationId) return;
+  // 1. Join Chat Room (TASK-BE-11: Enforce Playdate accepted participant permission)
+  socket.on(SOCKET_EVENTS.JOIN_CHAT, async (payload, callback) => {
+    try {
+      const conversationId = typeof payload === 'string' ? payload : payload?.conversationId;
+      const callerId = getCallerId();
+      if (!conversationId) return;
 
-    socket.join(conversationId);
-    logger.info(`Socket [${socket.id}] joined chat room: ${conversationId}`);
+      if (!callerId) {
+        throw new Error('Unauthorized socket action: user not identified');
+      }
+
+      // TASK-BE-11: Verify user permission to access conversation
+      // (If it's a Playdate chat, this strictly checks that caller has 'accepted' status or is host)
+      await chatService.getConversationById(callerId, conversationId);
+
+      socket.join(conversationId);
+      logger.info(`Socket [${socket.id}] (caller: ${callerId}) joined chat room: ${conversationId}`);
+
+      if (typeof callback === 'function') {
+        callback({ success: true, conversationId });
+      }
+    } catch (error) {
+      logger.warn(`[Socket Auth Warning] join_chat forbidden: ${error.message}`);
+      socket.emit(SOCKET_EVENTS.ERROR || 'error', {
+        event: SOCKET_EVENTS.JOIN_CHAT,
+        code: error.code || 'FORBIDDEN_PLAYDATE_CHAT_ACCESS',
+        message: error.message,
+      });
+      if (typeof callback === 'function') {
+        callback({ success: false, error: error.message });
+      }
+    }
   });
 
   // 2. Leave Chat Room

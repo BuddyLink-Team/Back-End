@@ -6,6 +6,7 @@ import { uploadSingleImage, handleUploadError } from '../../middlewares/upload.m
 import {
   createDirectConversationValidation,
   conversationIdParamValidation,
+  playdateIdParamValidation,
   sendMessageValidation,
   getMessagesValidation,
   getConversationsValidation,
@@ -27,6 +28,13 @@ router.post(
   '/conversations',
   validate(createDirectConversationValidation),
   chatController.getOrCreateDirectConversation
+);
+
+// Playdate group conversation
+router.get(
+  '/playdate/:playdateId',
+  validate(playdateIdParamValidation),
+  chatController.getOrCreatePlaydateConversation
 );
 
 router.get(

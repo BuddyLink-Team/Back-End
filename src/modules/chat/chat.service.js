@@ -1,5 +1,6 @@
 import chatRepository from './chat.repository.js';
 import parentService from '../parent/parent.service.js';
+import playdateService from '../playdate/playdate.service.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { CONVERSATION_TYPES, MESSAGE_TYPES } from './chat.constants.js';
@@ -54,6 +55,53 @@ class ChatService {
     if (!isParticipant) {
       throw new AppError('You do not have access to this conversation', 403, 'FORBIDDEN_CONVERSATION_ACCESS');
     }
+
+    // TASK-BE-11: Enforce accepted status for playdate group chat
+    if (conversation.type === CONVERSATION_TYPES.PLAYDATE && conversation.playdateId) {
+      const pId = conversation.playdateId._id || conversation.playdateId;
+      await playdateService.verifyPlaydateParticipant(pId, parent._id);
+    }
+
+    return conversation;
+  }
+
+  /**
+   * TASK-BE-11: Get or create a Playdate group conversation
+   * Enforces: ONLY parents with 'accepted' status (or host) can join
+   * @param {string} userIdOrParentId
+   * @param {string} playdateId
+   */
+  async getOrCreatePlaydateConversation(userIdOrParentId, playdateId) {
+    const parent = await this._resolveParent(userIdOrParentId);
+
+    // 1. Enforce accepted status
+    const playdate = await playdateService.verifyPlaydateParticipant(playdateId, parent._id);
+    const acceptedParentIds = playdateService.getAcceptedParentIds(playdate);
+
+    // 2. Check if conversation already exists for this playdate
+    const existing = await chatRepository.findConversationByPlaydateId(playdate._id);
+    if (existing) {
+      // Sync participants in case new participants were accepted
+      const synced = await chatRepository.syncParticipants(existing._id, acceptedParentIds);
+      return synced || existing;
+    }
+
+    // 3. Create new group conversation with all accepted parents
+    const unreadMap = {};
+    acceptedParentIds.forEach((id) => {
+      unreadMap[id] = 0;
+    });
+
+    const conversation = await chatRepository.createConversation({
+      type: CONVERSATION_TYPES.PLAYDATE,
+      playdateId: playdate._id,
+      participants: acceptedParentIds,
+      unreadCounts: unreadMap,
+      isActive: true,
+    });
+
+    // Link playdate back to conversation
+    await playdateService.updateChatConversationId(playdate._id, conversation._id || conversation.id);
 
     return conversation;
   }
@@ -117,6 +165,11 @@ class ChatService {
 
     if (!isParticipant) {
       throw new AppError('You do not have access to this conversation', 403, 'FORBIDDEN_CONVERSATION_ACCESS');
+    }
+
+    // TASK-BE-11: Enforce accepted status for playdate group chat
+    if (conversation.type === CONVERSATION_TYPES.PLAYDATE && conversation.playdateId) {
+      await playdateService.verifyPlaydateParticipant(conversation.playdateId, parent._id);
     }
 
     let finalType = type || MESSAGE_TYPES.TEXT;

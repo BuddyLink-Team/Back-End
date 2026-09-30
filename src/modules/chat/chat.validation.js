@@ -17,6 +17,14 @@ export const conversationIdParamValidation = [
     .withMessage('conversationId must be a valid MongoDB ObjectId'),
 ];
 
+export const playdateIdParamValidation = [
+  param('playdateId')
+    .notEmpty()
+    .withMessage('playdateId is required')
+    .isMongoId()
+    .withMessage('playdateId must be a valid MongoDB ObjectId'),
+];
+
 export const sendMessageValidation = [
   param('conversationId')
     .notEmpty()

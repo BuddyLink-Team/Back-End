@@ -41,6 +41,21 @@ class ChatController {
     }
   }
 
+  async getOrCreatePlaydateConversation(req, res, next) {
+    try {
+      const parent = await parentService.getParentByUserId(req.userId);
+      const conversation = await chatService.getOrCreatePlaydateConversation(
+        req.userId,
+        req.params.playdateId
+      );
+      const data = ChatDTO.toConversationResponse(conversation, parent?._id);
+
+      return successResponse(res, data, 'Playdate conversation ready', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async getMessages(req, res, next) {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
