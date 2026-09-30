@@ -8,6 +8,11 @@ export const PREFERRED_LOCATIONS = Object.freeze([
   'park',
   'kids_cafe',
   'home',
+  'library',
+  'museum',
+  'mall',
+  'sports_center',
+  'pool',
 ]);
 
 export const CONNECTION_PRIVACY = Object.freeze({
