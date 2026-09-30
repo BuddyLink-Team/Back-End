@@ -8,6 +8,10 @@ class ParentService {
     return parentRepository.findByUserId(userId);
   }
 
+  async getParentById(id) {
+    return parentRepository.findById(id);
+  }
+
   async createParentProfile(data) {
     return parentRepository.create(data);
   }

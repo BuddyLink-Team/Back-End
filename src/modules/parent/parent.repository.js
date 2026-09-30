@@ -5,6 +5,10 @@ class ParentRepository {
     return Parent.findOne({ userId });
   }
 
+  async findById(id) {
+    return Parent.findById(id);
+  }
+
   async create(parentData) {
     return Parent.create(parentData);
   }
