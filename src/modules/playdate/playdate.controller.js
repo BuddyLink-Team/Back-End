@@ -27,6 +27,18 @@ class PlaydateController {
   }
 
   /**
+   * GET /api/v1/playdates/friends
+   */
+  async getInvitableFriends(req, res, next) {
+    try {
+      const friends = await playdateService.getInvitableFriends(req.userId);
+      return successResponse(res, friends, 'Lấy danh sách bạn bè kết nối thành công', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
    * POST /api/v1/playdates
    */
   async createPlaydate(req, res, next) {

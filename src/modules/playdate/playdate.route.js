@@ -23,6 +23,9 @@ router.get('/', validate(getPlaydatesValidation), playdateController.getPlaydate
 // POST /api/v1/playdates
 router.post('/', validate(createPlaydateValidation), playdateController.createPlaydate);
 
+// GET /api/v1/playdates/friends (Invitable connected friends)
+router.get('/friends', playdateController.getInvitableFriends);
+
 // GET /api/v1/playdates/:id
 router.get('/:id', validate(playdateIdParamValidation), playdateController.getPlaydateById);
 
