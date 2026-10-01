@@ -11,9 +11,10 @@ import {
 } from "./middlewares/error.middleware.js";
 
 import authRoutes from "./modules/auth/auth.route.js";
+import userRoutes from "./modules/user/user.route.js";
 import parentRoutes from "./modules/parent/parent.route.js";
-
 import childRoutes from "./modules/child/child.route.js";
+import subscriptionRoutes from "./modules/subscription/subscription.route.js";
 
 const app = express();
 
@@ -66,8 +67,10 @@ app.get("/api/v1", (req, res) => {
 });
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/parent", parentRoutes);
 app.use("/api/v1/children", childRoutes);
+app.use("/api/v1/subscriptions", subscriptionRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);

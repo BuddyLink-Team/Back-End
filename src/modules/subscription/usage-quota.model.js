@@ -25,6 +25,7 @@ const usageQuotaSchema = new mongoose.Schema(
       // Used when periodType === 'monthly':
       connectionRequests: { type: Number, default: 0 },
       playdatesCreated: { type: Number, default: 0 },
+      playdatesParticipated: { type: Number, default: 0 },
       aiAssistantRequests: { type: Number, default: 0 },
     },
   },
