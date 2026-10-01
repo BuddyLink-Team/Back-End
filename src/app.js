@@ -14,6 +14,7 @@ import authRoutes from "./modules/auth/auth.route.js";
 import parentRoutes from "./modules/parent/parent.route.js";
 import childRoutes from "./modules/child/child.route.js";
 import playdateRoutes from "./modules/playdate/playdate.route.js";
+import placesRoutes from "./modules/discovery/places.route.js";
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/parent", parentRoutes);
 app.use("/api/v1/children", childRoutes);
 app.use("/api/v1/playdates", playdateRoutes);
+app.use("/api/v1/places", placesRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);

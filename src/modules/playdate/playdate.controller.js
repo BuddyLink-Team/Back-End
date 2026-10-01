@@ -74,6 +74,77 @@ class PlaydateController {
       return next(error);
     }
   }
+
+  /**
+   * PUT /api/v1/playdates/:id/respond
+   * Phản hồi lời mời (RSVP: accepted / declined)
+   */
+  async respondToPlaydate(req, res, next) {
+    try {
+      const playdate = await playdateService.respondToPlaydate(
+        req.userId,
+        req.params.id,
+        req.body.status
+      );
+      return successResponse(res, playdate, 'Phản hồi lời mời thành công', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/playdates/:id/reschedule
+   * Tạo đề xuất đổi lịch
+   */
+  async createRescheduleRequest(req, res, next) {
+    try {
+      const result = await playdateService.createRescheduleRequest(
+        req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(
+        res,
+        result,
+        result.isAutoApplied
+          ? 'Đã cập nhật lịch hẹn mới thành công'
+          : 'Đã gửi đề xuất đổi lịch đến các phụ huynh tham gia',
+        201
+      );
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PUT /api/v1/playdates/:id/reschedule/vote
+   * Bỏ phiếu đồng ý hoặc từ chối đề xuất đổi lịch
+   */
+  async voteRescheduleRequest(req, res, next) {
+    try {
+      const result = await playdateService.voteRescheduleRequest(
+        req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, result, 'Bỏ phiếu đổi lịch thành công', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/playdates/:id/reschedule
+   * Lấy đề xuất đổi lịch mới nhất của buổi hẹn
+   */
+  async getRescheduleRequest(req, res, next) {
+    try {
+      const result = await playdateService.getRescheduleRequest(req.userId, req.params.id);
+      return successResponse(res, result, 'Lấy thông tin đề xuất đổi lịch thành công', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
 
 export default new PlaydateController();

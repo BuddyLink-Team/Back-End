@@ -13,9 +13,10 @@ import UsageQuota from '../subscription/usage-quota.model.js';
 import Conversation from '../chat/conversation.model.js';
 import Message from '../chat/message.model.js';
 import { CONVERSATION_TYPES, MESSAGE_TYPES } from '../chat/chat.constants.js';
+import RescheduleRequest from './reschedule-request.model.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { PlaydateResponseDTO } from './playdate.dto.js';
-import { PLAYDATE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
+import { PLAYDATE_STATUS, PARTICIPANT_STATUS, RESCHEDULE_STATUS } from './playdate.constants.js';
 
 class PlaydateService {
   /**
@@ -350,6 +351,240 @@ class PlaydateService {
     });
 
     return PlaydateResponseDTO.toResponse(updated, parentId);
+  }
+
+  /**
+   * Respond to a playdate invitation (RSVP: accept / decline)
+   * PUT /api/v1/playdates/:id/respond
+   */
+  async respondToPlaydate(userId, id, status) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await playdateRepository.findById(id);
+
+    if (!playdate) {
+      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+    }
+
+    if (playdate.status === PLAYDATE_STATUS.CANCELLED) {
+      throw new AppError('Không thể phản hồi buổi hẹn đã bị hủy', 400, 'CANNOT_RESPOND_CANCELLED');
+    }
+
+    if (playdate.status === PLAYDATE_STATUS.COMPLETED) {
+      throw new AppError('Không thể phản hồi buổi hẹn đã hoàn thành', 400, 'CANNOT_RESPOND_COMPLETED');
+    }
+
+    const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
+    if (hostParentIdStr === parentId.toString()) {
+      throw new AppError('Người tổ chức không cần phản hồi lời mời của chính mình', 400, 'HOST_CANNOT_RSVP');
+    }
+
+    const participant = playdate.participants?.find(
+      (p) => (p.parentId?._id || p.parentId)?.toString() === parentId.toString()
+    );
+
+    if (!participant) {
+      throw new AppError('Bạn không có trong danh sách được mời của buổi hẹn này', 403, 'NOT_INVITED');
+    }
+
+    // Update participant RSVP status
+    participant.status = status;
+    participant.respondedAt = new Date();
+
+    await playdate.save();
+
+    const populated = await playdateRepository.findById(id);
+    return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
+  /**
+   * Create a Reschedule Request for an upcoming playdate
+   * POST /api/v1/playdates/:id/reschedule
+   */
+  async createRescheduleRequest(userId, id, { newDate, newStartTime, newLocation, reason = '' }) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await playdateRepository.findById(id);
+
+    if (!playdate) {
+      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+    }
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Chỉ có thể đề xuất đổi lịch cho buổi hẹn sắp diễn ra', 400, 'INVALID_PLAYDATE_STATUS_FOR_RESCHEDULE');
+    }
+
+    const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
+    const isHost = hostParentIdStr === parentId.toString();
+    const isAcceptedParticipant = playdate.participants?.some(
+      (p) =>
+        (p.parentId?._id || p.parentId)?.toString() === parentId.toString() &&
+        p.status === PARTICIPANT_STATUS.ACCEPTED
+    );
+
+    if (!isHost && !isAcceptedParticipant) {
+      throw new AppError('Chỉ người tổ chức hoặc phụ huynh đã đồng ý tham gia mới có quyền đề xuất đổi lịch', 403, 'FORBIDDEN_RESCHEDULE');
+    }
+
+    // Check if there is already an active pending reschedule request
+    const existingPending = await RescheduleRequest.findOne({
+      playdateId: id,
+      status: RESCHEDULE_STATUS.PENDING,
+    });
+    if (existingPending) {
+      throw new AppError('Đang có một đề xuất đổi lịch chờ phản hồi cho buổi hẹn này', 400, 'ACTIVE_RESCHEDULE_EXISTS');
+    }
+
+    // Section 6.2 rule: All currently Accepted participants must vote (plus host if host did not propose)
+    const requiredParentIds = [];
+    if (!isHost) {
+      requiredParentIds.push(hostParentIdStr);
+    }
+    for (const p of playdate.participants || []) {
+      const pidStr = (p.parentId?._id || p.parentId)?.toString();
+      if (p.status === PARTICIPANT_STATUS.ACCEPTED && pidStr !== parentId.toString()) {
+        requiredParentIds.push(pidStr);
+      }
+    }
+
+    let initialStatus = RESCHEDULE_STATUS.PENDING;
+    let resolvedAt = null;
+
+    // If no other accepted participants need to vote, immediately apply the reschedule
+    if (requiredParentIds.length === 0) {
+      initialStatus = RESCHEDULE_STATUS.ACCEPTED;
+      resolvedAt = new Date();
+
+      const updateFields = {
+        scheduledDate: new Date(newDate),
+        time: newStartTime,
+      };
+      if (newLocation && newLocation.name) {
+        updateFields.location = newLocation;
+      }
+      await playdateRepository.updateById(id, updateFields);
+    }
+
+    const responses = requiredParentIds.map((pid) => ({
+      parentId: pid,
+      status: PARTICIPANT_STATUS.PENDING,
+      respondedAt: null,
+    }));
+
+    const rescheduleReq = await RescheduleRequest.create({
+      playdateId: id,
+      requestedBy: parentId,
+      newDate: new Date(newDate),
+      newStartTime,
+      newLocation: newLocation || null,
+      reason: reason || '',
+      status: initialStatus,
+      responses,
+      resolvedAt,
+    });
+
+    const populatedReq = await RescheduleRequest.findById(rescheduleReq._id)
+      .populate('requestedBy', 'fullName avatarUrl verification')
+      .populate('responses.parentId', 'fullName avatarUrl verification');
+
+    return {
+      rescheduleRequest: populatedReq,
+      isAutoApplied: initialStatus === RESCHEDULE_STATUS.ACCEPTED,
+    };
+  }
+
+  /**
+   * Vote on a pending reschedule request (Accept or Decline)
+   * PUT /api/v1/playdates/:id/reschedule/vote
+   */
+  async voteRescheduleRequest(userId, id, { requestId, status }) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await playdateRepository.findById(id);
+
+    if (!playdate) {
+      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+    }
+
+    const query = {
+      playdateId: id,
+      status: RESCHEDULE_STATUS.PENDING,
+    };
+    if (requestId) {
+      query._id = requestId;
+    }
+
+    const rescheduleReq = await RescheduleRequest.findOne(query).sort({ createdAt: -1 });
+    if (!rescheduleReq) {
+      throw new AppError('Không tìm thấy đề xuất đổi lịch đang chờ phản hồi', 404, 'RESCHEDULE_NOT_FOUND');
+    }
+
+    const responseEntry = rescheduleReq.responses?.find(
+      (r) => r.parentId.toString() === parentId.toString()
+    );
+
+    if (!responseEntry) {
+      throw new AppError('Bạn không có quyền bỏ phiếu cho đề xuất đổi lịch này', 403, 'NOT_AUTHORIZED_TO_VOTE');
+    }
+
+    responseEntry.status = status;
+    responseEntry.respondedAt = new Date();
+
+    // Section 6.2 rule: If ANY participant declines, request is declined and old schedule kept
+    if (status === PARTICIPANT_STATUS.DECLINED) {
+      rescheduleReq.status = RESCHEDULE_STATUS.DECLINED;
+      rescheduleReq.resolvedAt = new Date();
+    } else if (status === PARTICIPANT_STATUS.ACCEPTED) {
+      // Check if ALL required voters accepted
+      const allAccepted = rescheduleReq.responses.every(
+        (r) => r.status === PARTICIPANT_STATUS.ACCEPTED
+      );
+
+      if (allAccepted) {
+        rescheduleReq.status = RESCHEDULE_STATUS.ACCEPTED;
+        rescheduleReq.resolvedAt = new Date();
+
+        // Update playdate schedule
+        const updateFields = {
+          scheduledDate: rescheduleReq.newDate,
+          time: rescheduleReq.newStartTime,
+        };
+        if (rescheduleReq.newLocation && rescheduleReq.newLocation.name) {
+          updateFields.location = rescheduleReq.newLocation;
+        }
+        await playdateRepository.updateById(id, updateFields);
+      }
+    }
+
+    await rescheduleReq.save();
+
+    const populatedReq = await RescheduleRequest.findById(rescheduleReq._id)
+      .populate('requestedBy', 'fullName avatarUrl verification')
+      .populate('responses.parentId', 'fullName avatarUrl verification');
+
+    const updatedPlaydate = await playdateRepository.findById(id);
+
+    return {
+      rescheduleRequest: populatedReq,
+      playdate: PlaydateResponseDTO.toResponse(updatedPlaydate, parentId),
+    };
+  }
+
+  /**
+   * Get active or latest reschedule request for a playdate
+   * GET /api/v1/playdates/:id/reschedule
+   */
+  async getRescheduleRequest(userId, id) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await playdateRepository.findById(id);
+
+    if (!playdate) {
+      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+    }
+
+    const rescheduleReq = await RescheduleRequest.findOne({ playdateId: id })
+      .sort({ createdAt: -1 })
+      .populate('requestedBy', 'fullName avatarUrl verification')
+      .populate('responses.parentId', 'fullName avatarUrl verification');
+
+    return rescheduleReq;
   }
 }
 

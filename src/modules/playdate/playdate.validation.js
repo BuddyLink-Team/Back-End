@@ -86,3 +86,55 @@ export const cancelPlaydateValidation = [
     .isString()
     .withMessage('Lý do hủy phải là chuỗi ký tự'),
 ];
+
+export const respondPlaydateValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+  body('status')
+    .notEmpty()
+    .withMessage('Trạng thái phản hồi là bắt buộc')
+    .isIn(['accepted', 'declined'])
+    .withMessage('Trạng thái phản hồi phải là accepted hoặc declined'),
+];
+
+export const createRescheduleValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+  body('newDate')
+    .notEmpty()
+    .withMessage('Ngày mới là bắt buộc')
+    .isISO8601()
+    .toDate()
+    .withMessage('Ngày mới không hợp lệ'),
+  body('newStartTime')
+    .trim()
+    .notEmpty()
+    .withMessage('Giờ mới là bắt buộc'),
+  body('newLocation.name')
+    .optional()
+    .trim(),
+  body('newLocation.address')
+    .optional()
+    .trim(),
+  body('reason')
+    .optional()
+    .trim(),
+];
+
+export const voteRescheduleValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+  body('requestId')
+    .optional()
+    .isMongoId()
+    .withMessage('Mã yêu cầu đổi lịch không hợp lệ'),
+  body('status')
+    .notEmpty()
+    .withMessage('Lựa chọn bỏ phiếu là bắt buộc')
+    .isIn(['accepted', 'declined'])
+    .withMessage('Lựa chọn bỏ phiếu phải là accepted hoặc declined'),
+];
+

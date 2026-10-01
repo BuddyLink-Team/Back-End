@@ -13,6 +13,7 @@ describe('Playdate Management Integration Flow', () => {
   let guestParentId = '';
   let hostChildId = '';
   let createdPlaydateId = '';
+  let invitedPlaydateId = '';
 
   beforeAll(async () => {
     // Register host parent
@@ -208,6 +209,7 @@ describe('Playdate Management Integration Flow', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.chatConversationId).toBeDefined();
     expect(res.body.data.chatConversationId).not.toBeNull();
+    invitedPlaydateId = res.body.data.id;
 
     // Verify conversation document in MongoDB
     const Conversation = (await import('../../src/modules/chat/conversation.model.js')).default;
@@ -256,5 +258,68 @@ describe('Playdate Management Integration Flow', () => {
     expect(res4.status).toBe(403);
     expect(res4.body.success).toBe(false);
     expect(res4.body.error.code).toBe('QUOTA_EXCEEDED');
+  });
+
+  it('11. PUT /api/v1/playdates/:id/respond: should allow invited guest to accept playdate invitation', async () => {
+    const res = await request(app)
+      .put(`/api/v1/playdates/${invitedPlaydateId}/respond`)
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({ status: 'accepted' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    const guestParticipant = res.body.data.participants.find(
+      (p) => p.parentId === guestParentId
+    );
+    expect(guestParticipant).toBeDefined();
+    expect(guestParticipant.status).toBe('accepted');
+  });
+
+  it('12. POST /api/v1/playdates/:id/reschedule: should create pending reschedule request requiring participant consensus', async () => {
+    const newDate = new Date(Date.now() + 86400000 * 7).toISOString();
+    const res = await request(app)
+      .post(`/api/v1/playdates/${invitedPlaydateId}/reschedule`)
+      .set('Authorization', `Bearer ${hostToken}`)
+      .send({
+        newDate,
+        newStartTime: '15:30 - 17:30',
+        newLocation: {
+          name: 'Công viên Gia Định Mới',
+          address: 'Gò Vấp, TP. Hồ Chí Minh',
+        },
+        reason: 'Cuối tuần này bé bận học vẽ, dời sang tuần sau nhé',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.rescheduleRequest.status).toBe('pending');
+    expect(res.body.data.rescheduleRequest.responses.length).toBe(1);
+    expect(res.body.data.rescheduleRequest.responses[0].parentId._id.toString()).toBe(guestParentId);
+  });
+
+  it('13. PUT /api/v1/playdates/:id/reschedule/vote: should update playdate schedule when all accepted participants agree', async () => {
+    const res = await request(app)
+      .put(`/api/v1/playdates/${invitedPlaydateId}/reschedule/vote`)
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({ status: 'accepted' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.rescheduleRequest.status).toBe('accepted');
+    expect(res.body.data.playdate.time).toBe('15:30 - 17:30');
+    expect(res.body.data.playdate.location.name).toBe('Công viên Gia Định Mới');
+  });
+
+  it('14. GET /api/v1/places/nearby: should return nearby child-friendly places from adapter cache', async () => {
+    const res = await request(app)
+      .get('/api/v1/places/nearby?type=park')
+      .set('Authorization', `Bearer ${hostToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.data[0].placeType).toBe('park');
   });
 });
