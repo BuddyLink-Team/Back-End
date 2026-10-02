@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import childRepository from './child.repository.js';
 import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
@@ -22,16 +23,51 @@ class ChildService {
   async createChild(userId, childData) {
     const parentId = await this._getParentId(userId);
 
-    // Enforce subscription quota on child profiles count
-    await subscriptionService.checkChildProfileQuota(parentId);
+    let session = null;
+    try {
+      const topologyType = mongoose.connection?.client?.topology?.description?.type;
+      const isReplicaSet =
+        topologyType === 'ReplicaSetWithPrimary' ||
+        topologyType === 'ReplicaSetNoPrimary' ||
+        topologyType === 'Sharded';
+      if (isReplicaSet) {
+        session = await mongoose.startSession();
+        session.startTransaction();
+      }
+    } catch (e) {
+      session = null;
+    }
 
-    const child = await childRepository.create({
-      ...childData,
-      parentId,
-    });
+    try {
+      // Enforce subscription quota on child profiles count
+      const currentCount = await childRepository.countByParentId(parentId, session);
+      await subscriptionService.checkChildProfileQuota(parentId, currentCount, session);
 
-    return ChildResponseDTO.toResponse(child);
+      const child = await childRepository.create(
+        {
+          ...childData,
+          parentId,
+        },
+        session
+      );
+
+      if (session) {
+        await session.commitTransaction();
+        session.endSession();
+      }
+
+      return ChildResponseDTO.toResponse(child);
+    } catch (err) {
+      if (session) {
+        try {
+          await session.abortTransaction();
+        } catch (e) {}
+        session.endSession();
+      }
+      throw err;
+    }
   }
+
 
   /**
    * Get all children belonging to authenticated parent

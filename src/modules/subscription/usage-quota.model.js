@@ -16,17 +16,14 @@ const usageQuotaSchema = new mongoose.Schema(
     },
     periodValue: {
       type: String,
-      required: true, // 'YYYY-MM-DD' or 'YYYY-MM'
+      required: true, // 'YYYY-MM-DD' (daily) or 'YYYY-MM' (monthly)
     },
     counters: {
       // Used when periodType === 'daily':
-      discoveryViews: { type: Number, default: 0 },
+      discoverySwipes: { type: Number, default: 0, min: 0 },
 
       // Used when periodType === 'monthly':
-      connectionRequests: { type: Number, default: 0 },
-      playdatesCreated: { type: Number, default: 0 },
-      playdatesParticipated: { type: Number, default: 0 },
-      aiAssistantRequests: { type: Number, default: 0 },
+      playdatesCreated: { type: Number, default: 0, min: 0 },
     },
   },
   {
@@ -38,6 +35,7 @@ const usageQuotaSchema = new mongoose.Schema(
 // Prevent duplicate quota records for a parent in the same period
 usageQuotaSchema.index({ parentId: 1, periodType: 1, periodValue: 1 }, { unique: true });
 
-const UsageQuota = mongoose.models.UsageQuota || mongoose.model('UsageQuota', usageQuotaSchema);
+const UsageQuota =
+  mongoose.models.UsageQuota || mongoose.model('UsageQuota', usageQuotaSchema);
 
 export default UsageQuota;

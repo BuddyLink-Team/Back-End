@@ -4,7 +4,7 @@ class AppError extends Error {
 
     this.statusCode = statusCode;
     this.code = code;
-    this.details = Array.isArray(details) ? details : [];
+    this.details = details !== undefined && details !== null ? details : [];
     this.isOperational = isOperational;
 
     Error.captureStackTrace(this, this.constructor);

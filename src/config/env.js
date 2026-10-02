@@ -24,7 +24,11 @@ const env = {
   PAYOS: {
     CLIENT_ID: process.env.PAYOS_CLIENT_ID || '',
     API_KEY: process.env.PAYOS_API_KEY || '',
-    CHECKSUM_KEY: process.env.PAYOS_CHECKSUM_KEY || '',
+    CHECKSUM_KEY:
+      process.env.PAYOS_CHECKSUM_KEY ||
+      (process.env.NODE_ENV === 'test' || process.env.PAYMENT_MODE === 'mock'
+        ? 'test_payos_checksum_key_for_dev_and_test'
+        : ''),
     RETURN_URL: process.env.PAYOS_RETURN_URL || 'http://localhost:5173/payment/success',
     CANCEL_URL: process.env.PAYOS_CANCEL_URL || 'http://localhost:5173/payment/cancel',
   },

@@ -8,6 +8,7 @@ const subscriptionPlanSchema = new mongoose.Schema(
       enum: Object.values(SUBSCRIPTION_PLAN_CODES),
       required: true,
       unique: true,
+      trim: true,
     },
     name: {
       type: String,
@@ -18,10 +19,18 @@ const subscriptionPlanSchema = new mongoose.Schema(
       type: Number,
       required: true,
       default: 0,
+      min: 0,
     },
     currency: {
       type: String,
       default: 'VND',
+      trim: true,
+    },
+    durationMonths: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
     },
     billingCycle: {
       type: String,
@@ -30,8 +39,10 @@ const subscriptionPlanSchema = new mongoose.Schema(
     },
     features: {
       childProfilesLimit: { type: Number, default: 1 }, // -1 = unlimited
+      discoverySwipesLimitPerDay: { type: Number, default: 5 }, // -1 = unlimited
       discoveryViewLimitPerDay: { type: Number, default: 5 },
       connectionRequestsLimitPerMonth: { type: Number, default: 5 },
+      playdatesCreatedLimitPerMonth: { type: Number, default: 3 }, // -1 = unlimited
       playdatesLimitPerMonth: { type: Number, default: 3 },
       playdateParticipationLimitPerMonth: { type: Number, default: 3 },
       aiAssistantLimitPerMonth: { type: Number, default: 5 },
@@ -48,6 +59,7 @@ const subscriptionPlanSchema = new mongoose.Schema(
 );
 
 const SubscriptionPlan =
-  mongoose.models.SubscriptionPlan || mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
+  mongoose.models.SubscriptionPlan ||
+  mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
 
 export default SubscriptionPlan;

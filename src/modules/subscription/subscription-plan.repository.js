@@ -4,30 +4,26 @@ import logger from '../../shared/logger/index.js';
 
 class SubscriptionPlanRepository {
   async findAllActive() {
-    return SubscriptionPlan.find({ isActive: true });
+    return SubscriptionPlan.find({ isActive: true }).sort({ price: 1 });
   }
 
   async findByPlanCode(planCode) {
-    return SubscriptionPlan.findOne({ planCode });
-  }
-
-  async upsertPlan(planData) {
-    return SubscriptionPlan.findOneAndUpdate(
-      { planCode: planData.planCode },
-      { $set: planData },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    return SubscriptionPlan.findOne({ planCode, isActive: true });
   }
 
   /**
    * Seed default subscription plans into database if they do not exist
+   * Safe iteration without overwriting existing configured prices
    */
   async seedDefaultPlans() {
     try {
       for (const defaultPlan of SUBSCRIPTION_PLAN_DEFAULTS) {
-        await this.upsertPlan(defaultPlan);
+        const existing = await SubscriptionPlan.findOne({ planCode: defaultPlan.planCode });
+        if (!existing) {
+          await SubscriptionPlan.create(defaultPlan);
+          logger.info(`Seeded new subscription plan: ${defaultPlan.planCode}`);
+        }
       }
-      logger.info('Subscription plans seeded/verified successfully.');
     } catch (error) {
       logger.error(`Error seeding subscription plans: ${error.message}`);
     }

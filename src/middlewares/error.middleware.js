@@ -18,7 +18,7 @@ export const errorHandler = (error, _req, res, _next) => {
   let statusCode = error.statusCode || 500;
   let message = error.message || "Internal server error";
   let code = error.code || "INTERNAL_SERVER_ERROR";
-  let details = Array.isArray(error.details) ? error.details : [];
+  let details = error.details !== undefined && error.details !== null ? error.details : [];
 
   // Mongoose duplicate key error (code 11000)
   if (error.code === 11000) {
