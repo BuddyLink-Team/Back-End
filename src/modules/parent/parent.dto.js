@@ -3,12 +3,14 @@
  */
 
 export class ParentProfileDTO {
-  static toResponse(parent) {
+  static toResponse(parent, user = null) {
     if (!parent) return null;
 
     return {
       id: parent._id?.toString() || parent.id,
       userId: parent.userId?.toString() || parent.userId,
+      email: user?.email || parent.userId?.email || null,
+      phone: user?.phone || parent.userId?.phone || null,
       fullName: parent.fullName,
       avatarUrl: parent.avatarUrl || '',
       bio: parent.bio || '',

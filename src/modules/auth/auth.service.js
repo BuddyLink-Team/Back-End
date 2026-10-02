@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import env from '../../config/env.js';
 import userService from '../user/user.service.js';
 import parentService from '../parent/parent.service.js';
+import subscriptionService from '../subscription/subscription.service.js';
 import authRepository from './auth.repository.js';
 import mailAdapter from '../../integrations/mail/mail.adapter.js';
 import smsAdapter from '../../integrations/sms/sms.adapter.js';
@@ -75,7 +76,7 @@ class AuthService {
     if (trimmedPhone) {
       const existingPhone = await userService.getUserByPhone(trimmedPhone);
       if (existingPhone) {
-        throw new AppError('Số điện thoại đã được đăng ký', 409, 'PHONE_ALREADY_EXISTS');
+        throw new AppError('Phone number is already registered', 409, 'PHONE_ALREADY_EXISTS');
       }
     }
 
@@ -99,6 +100,9 @@ class AuthService {
         isVerifiedParent: false,
       },
     });
+
+    // Automatically create a Free subscription for the registered parent
+    await subscriptionService.createFreeSubscription(parent._id);
 
     const tokens = await this._generateTokenPair(user);
 
@@ -138,6 +142,9 @@ class AuthService {
           isVerifiedParent: false,
         },
       });
+
+      // Automatically create a Free subscription for the registered parent
+      await subscriptionService.createFreeSubscription(parent._id);
     } else {
       if (!user.isActive) {
         throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
@@ -167,7 +174,7 @@ class AuthService {
   }
 
   /**
-   * Parent Login (Email + Password)
+   * Universal Login (Email + Password) for both Parent and Admin
    */
   async login({ email, password }) {
     const normalizedEmail = email.toLowerCase().trim();
@@ -186,7 +193,11 @@ class AuthService {
       throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
     }
 
-    const parent = await parentService.getParentByUserId(user._id);
+    // If user is parent, get parent profile; if admin, parent is null
+    const parent = user.role === USER_ROLES.PARENT || user.role === 'parent'
+      ? await parentService.getParentByUserId(user._id)
+      : null;
+
     const tokens = await this._generateTokenPair(user);
 
     return {
@@ -196,36 +207,15 @@ class AuthService {
   }
 
   /**
-   * Admin Login
+   * Admin Login alias delegating to universal login for backward-compatibility
    */
   async loginAdmin({ email, password }) {
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await userService.getUserByEmail(normalizedEmail);
-
-    if (!user || !user.passwordHash) {
-      throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
-    }
-
-    const userRole = (user.role || '').toUpperCase();
-    if (userRole !== USER_ROLES.ADMIN && userRole !== 'ADMIN') {
+    const result = await this.login({ email, password });
+    const role = (result.dto?.user?.role || '').toUpperCase();
+    if (role !== USER_ROLES.ADMIN && role !== 'ADMIN') {
       throw new AppError('Access denied: Admin privileges required', 403, 'FORBIDDEN');
     }
-
-    if (!user.isActive) {
-      throw new AppError('Admin account is disabled', 403, 'ACCOUNT_DISABLED');
-    }
-
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
-    }
-
-    const tokens = await this._generateTokenPair(user);
-
-    return {
-      dto: AuthResponseDTO.toResponse({ user, parent: null, tokens }),
-      tokens,
-    };
+    return result;
   }
 
   /**

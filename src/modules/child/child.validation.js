@@ -5,33 +5,33 @@ export const createChildValidation = [
   body('displayName')
     .trim()
     .notEmpty()
-    .withMessage('Tên hoặc biệt danh của bé là bắt buộc')
+    .withMessage('Child display name is required')
     .isLength({ min: 2, max: 50 })
-    .withMessage('Tên bé phải từ 2 đến 50 ký tự'),
+    .withMessage('Child display name must be between 2 and 50 characters'),
   body('dateOfBirth')
     .notEmpty()
-    .withMessage('Ngày sinh của bé là bắt buộc')
+    .withMessage('Child date of birth is required')
     .isISO8601()
     .toDate()
-    .withMessage('Ngày sinh phải có định dạng hợp lệ (YYYY-MM-DD)')
+    .withMessage('Date of birth must be a valid date format (YYYY-MM-DD)')
     .custom((value) => {
       const birthDate = new Date(value);
       const now = new Date();
       if (birthDate > now) {
-        throw new Error('Ngày sinh không thể ở tương lai');
+        throw new Error('Date of birth cannot be in the future');
       }
       return true;
     }),
   body('gender')
     .trim()
     .notEmpty()
-    .withMessage('Giới tính của bé là bắt buộc')
+    .withMessage('Child gender is required')
     .isIn(Object.values(CHILD_GENDERS))
-    .withMessage(`Giới tính phải là: ${Object.values(CHILD_GENDERS).join(', ')}`),
+    .withMessage(`Gender must be one of: ${Object.values(CHILD_GENDERS).join(', ')}`),
   body('interests')
     .optional()
     .isArray()
-    .withMessage('Sở thích phải là một mảng chuỗi'),
+    .withMessage('Interests must be an array of strings'),
   body('interests.*')
     .optional()
     .trim()
@@ -39,7 +39,7 @@ export const createChildValidation = [
   body('favoriteActivities')
     .optional()
     .isArray()
-    .withMessage('Hoạt động ưa thích phải là một mảng chuỗi'),
+    .withMessage('Favorite activities must be an array of strings'),
   body('favoriteActivities.*')
     .optional()
     .trim()
@@ -47,7 +47,7 @@ export const createChildValidation = [
   body('personality')
     .optional()
     .isArray()
-    .withMessage('Tính cách phải là một mảng chuỗi'),
+    .withMessage('Personality traits must be an array of strings'),
   body('personality.*')
     .optional()
     .trim()
@@ -55,10 +55,10 @@ export const createChildValidation = [
 ];
 
 export const updateChildValidation = [
-  param('id').isMongoId().withMessage('Mã ID của bé không hợp lệ'),
+  param('id').isMongoId().withMessage('Invalid child ID format'),
   ...createChildValidation.map((validator) => validator.optional()),
 ];
 
 export const childIdParamValidation = [
-  param('id').isMongoId().withMessage('Mã ID của bé không hợp lệ'),
+  param('id').isMongoId().withMessage('Invalid child ID format'),
 ];

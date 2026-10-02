@@ -1,20 +1,20 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const aiMessageSchema = new mongoose.Schema(
   {
     role: {
       type: String,
-      enum: ['user', 'assistant', 'system', 'tool'],
+      enum: ["user", "assistant", "system", "tool"],
       required: true,
     },
     content: {
       type: String,
-      default: '',
+      default: "",
     },
     toolCalls: [
       {
         id: String,
-        type: { type: String, default: 'function' },
+        type: { type: String, default: "function" },
         function: {
           name: String,
           arguments: String,
@@ -27,20 +27,20 @@ const aiMessageSchema = new mongoose.Schema(
       default: Date.now,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const aiChatSessionSchema = new mongoose.Schema(
   {
     parentId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Parent',
+      ref: "Parent",
       required: true,
       index: true,
     },
     title: {
       type: String,
-      default: 'Cuộc trò chuyện mới',
+      default: "Cuộc trò chuyện mới",
       trim: true,
     },
     messages: [aiMessageSchema],
@@ -56,13 +56,14 @@ const aiChatSessionSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    collection: 'ai_chat_sessions',
-  }
+    collection: "ai_chat_sessions",
+  },
 );
 
 aiChatSessionSchema.index({ parentId: 1, updatedAt: -1 });
 
 const AIChatSession =
-  mongoose.models.AIChatSession || mongoose.model('AIChatSession', aiChatSessionSchema);
+  mongoose.models.AIChatSession ||
+  mongoose.model("AIChatSession", aiChatSessionSchema);
 
 export default AIChatSession;

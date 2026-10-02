@@ -4,6 +4,7 @@ import env from './config/env.js';
 import connectDatabase from './config/database.js';
 import { initSocket } from './config/socket.js';
 import logger from './shared/logger/index.js';
+import subscriptionService from './modules/subscription/subscription.service.js';
 
 const server = http.createServer(app);
 
@@ -15,7 +16,10 @@ const startServer = async () => {
     // 1. Connect MongoDB
     await connectDatabase();
 
-    // 2. Start HTTP Server
+    // 2. Seed Default Subscription Plans if not present
+    await subscriptionService.seedSubscriptionPlans();
+
+    // 3. Start HTTP Server
     server.listen(env.PORT, () => {
       logger.info(`BuddyLink server running in ${env.NODE_ENV} mode at http://localhost:${env.PORT}`);
     });

@@ -33,6 +33,7 @@ const subscriptionPlanSchema = new mongoose.Schema(
       discoveryViewLimitPerDay: { type: Number, default: 5 },
       connectionRequestsLimitPerMonth: { type: Number, default: 5 },
       playdatesLimitPerMonth: { type: Number, default: 3 },
+      playdateParticipationLimitPerMonth: { type: Number, default: 3 },
       aiAssistantLimitPerMonth: { type: Number, default: 5 },
     },
     isActive: {
