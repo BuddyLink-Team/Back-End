@@ -2,7 +2,7 @@ import { Router } from 'express';
 import chatController from './chat.controller.js';
 import authenticate from '../../middlewares/auth.middleware.js';
 import validate from '../../middlewares/validate.middleware.js';
-import { uploadSingleImage, handleUploadError } from '../../middlewares/upload.middleware.js';
+import { uploadSingleImage } from '../../middlewares/upload.middleware.js';
 import {
   createDirectConversationValidation,
   conversationIdParamValidation,
@@ -59,7 +59,6 @@ router.post(
 router.post(
   '/upload',
   uploadSingleImage,
-  handleUploadError,
   chatController.uploadAttachment
 );
 
