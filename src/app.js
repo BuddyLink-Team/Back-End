@@ -14,7 +14,9 @@ import authRoutes from "./modules/auth/auth.route.js";
 import userRoutes from "./modules/user/user.route.js";
 import parentRoutes from "./modules/parent/parent.route.js";
 import childRoutes from "./modules/child/child.route.js";
+import chatRoutes from "./modules/chat/chat.route.js";
 import subscriptionRoutes from "./modules/subscription/subscription.route.js";
+import safetyRoutes from "./modules/safety/safety.route.js";
 
 const app = express();
 
@@ -70,7 +72,9 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/parent", parentRoutes);
 app.use("/api/v1/children", childRoutes);
+app.use("/api/v1/chat", chatRoutes);
 app.use("/api/v1/subscriptions", subscriptionRoutes);
+app.use("/api/v1/safety", safetyRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);

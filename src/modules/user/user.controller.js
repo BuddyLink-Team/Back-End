@@ -31,8 +31,7 @@ class UserController {
    */
   async updateAvatar(req, res, next) {
     try {
-      const fileBuffer = req.file?.buffer;
-      const result = await userService.updateMyAvatar(req.userId, fileBuffer);
+      const result = await userService.updateMyAvatar(req.userId, req.file?.buffer, req.file?.mimetype);
       return successResponse(res, result, 'Avatar updated successfully', 200);
     } catch (error) {
       return next(error);

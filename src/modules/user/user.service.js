@@ -85,12 +85,12 @@ class UserService {
   /**
    * Unified Update Avatar: delegates to parentService if parent
    */
-  async updateMyAvatar(userId, fileBuffer) {
+  async updateMyAvatar(userId, fileBuffer, mimetype) {
     const user = await this.getUserById(userId);
     const role = (user.role || '').toLowerCase();
 
     if (role === 'parent') {
-      return parentService.updateAvatar(userId, fileBuffer);
+      return parentService.updateAvatar(userId, fileBuffer, mimetype);
     }
 
     throw new AppError('Avatar update is only supported for parent accounts', 400, 'OPERATION_NOT_SUPPORTED');

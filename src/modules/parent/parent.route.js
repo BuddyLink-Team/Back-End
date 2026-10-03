@@ -21,7 +21,7 @@ router.get('/me', parentController.getMyProfile);
 router.put('/me', validate(updateParentProfileValidation), parentController.updateProfile);
 
 // Avatar update
-router.patch('/me/avatar', uploadAvatar.single('avatar'), parentController.updateAvatar);
+router.patch('/me/avatar', uploadAvatar, parentController.updateAvatar);
 
 // Onboarding preferences
 router.put(
