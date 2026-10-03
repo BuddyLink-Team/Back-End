@@ -3,6 +3,11 @@ import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/AppError.js';
 
+/**
+ * Single Cloud Storage adapter (Cloudinary) for all image uploads (avatars, chat attachments...).
+ * Falls back to inline base64 data URLs outside production when Cloudinary is not configured,
+ * and never calls the real Cloudinary API in the test environment.
+ */
 class StorageAdapter {
   constructor() {
     this.isCloudinaryConfigured = false;
@@ -10,6 +15,11 @@ class StorageAdapter {
   }
 
   initCloudinary() {
+    if (env.NODE_ENV === 'test') {
+      logger.info('Cloud Storage running in test mode (no external uploads).');
+      return;
+    }
+
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME || env.STORAGE?.BUCKET;
     const apiKey = process.env.CLOUDINARY_API_KEY || env.STORAGE?.ACCESS_KEY;
     const apiSecret = process.env.CLOUDINARY_API_SECRET || env.STORAGE?.SECRET_KEY;
@@ -31,25 +41,22 @@ class StorageAdapter {
       this.isCloudinaryConfigured = true;
       logger.info('Cloudinary Storage adapter configured successfully');
     } else {
-      logger.info('Cloud Storage running in fallback inline mode (base64 data URL).');
+      logger.warn('Cloudinary credentials missing. Cloud Storage running in fallback inline mode (base64 data URL).');
     }
   }
 
   /**
-   * Upload an image file buffer to cloud storage (or fallback)
-   * @param {Object} file Express.Multer file object
-   * @param {string} folder Target folder name
+   * Upload an image buffer to cloud storage (or fallback)
+   * @param {Buffer} buffer - Image file buffer
+   * @param {Object} [options]
+   * @param {string} [options.folder] - Target folder name
+   * @param {Array<Object>} [options.transformation] - Cloudinary transformations
+   * @param {string} [options.mimetype] - Verified image mimetype (used by the fallback data URL)
    * @returns {Promise<{ url: string, publicId: string }>}
    */
-  async uploadImage(file, folder = 'buddylink/chat') {
-    if (!file) {
-      throw new AppError('No file provided for upload', 400, 'FILE_REQUIRED');
-    }
-
-    // Allowed mime types
-    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new AppError('Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed', 400, 'INVALID_FILE_TYPE');
+  async uploadImage(buffer, { folder = 'buddylink/uploads', transformation, mimetype = 'image/jpeg' } = {}) {
+    if (!buffer) {
+      throw new AppError('No file buffer provided for upload', 400, 'UPLOAD_BUFFER_EMPTY');
     }
 
     if (this.isCloudinaryConfigured) {
@@ -58,6 +65,7 @@ class StorageAdapter {
           {
             folder,
             resource_type: 'image',
+            ...(transformation ? { transformation } : {}),
           },
           (error, result) => {
             if (error) {
@@ -65,22 +73,40 @@ class StorageAdapter {
               return reject(new AppError('Failed to upload file to Cloud Storage', 500, 'STORAGE_UPLOAD_ERROR'));
             }
             resolve({
-              url: result.secure_url,
+              url: result.secure_url || result.url,
               publicId: result.public_id,
             });
           }
         );
-        uploadStream.end(file.buffer);
+        uploadStream.end(buffer);
       });
     }
 
-    // Fallback mode: Convert buffer to data URI for development & testing
-    const base64 = file.buffer.toString('base64');
-    const dataUri = `data:${file.mimetype};base64,${base64}`;
+    if (env.NODE_ENV === 'production') {
+      throw new AppError('Cloud Storage is not configured', 500, 'STORAGE_NOT_CONFIGURED');
+    }
+
+    // Fallback mode: inline data URL for local development & testing
     return {
-      url: dataUri,
-      publicId: `local-${Date.now()}-${file.originalname}`,
+      url: `data:${mimetype};base64,${buffer.toString('base64')}`,
+      publicId: `local-${Date.now()}`,
     };
+  }
+
+  /**
+   * Delete an image by public ID
+   * @param {string} publicId
+   * @returns {Promise<Object|null>}
+   */
+  async deleteImage(publicId) {
+    if (!this.isCloudinaryConfigured || !publicId) return null;
+
+    try {
+      return await cloudinary.uploader.destroy(publicId);
+    } catch (error) {
+      logger.warn(`Cloudinary delete failed for ${publicId}: ${error.message}`);
+      return null;
+    }
   }
 }
 

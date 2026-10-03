@@ -3,6 +3,33 @@ import { ParentProfileDTO } from './parent.dto.js';
 import { successResponse } from '../../shared/response/index.js';
 
 class ParentController {
+  async getMyProfile(req, res, next) {
+    try {
+      const dto = await parentService.getMyProfile(req.userId);
+      return successResponse(res, dto, 'Parent profile retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async updateProfile(req, res, next) {
+    try {
+      const dto = await parentService.updateProfile(req.userId, req.body);
+      return successResponse(res, dto, 'Parent profile updated successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async updateAvatar(req, res, next) {
+    try {
+      const result = await parentService.updateAvatar(req.userId, req.file?.buffer, req.file?.mimetype);
+      return successResponse(res, result, 'Avatar updated successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async updateOnboardingPreferences(req, res, next) {
     try {
       const { location, preferences } = req.body;
@@ -12,16 +39,6 @@ class ParentController {
       });
 
       return successResponse(res, dto, 'Onboarding preferences updated successfully', 200);
-    } catch (error) {
-      return next(error);
-    }
-  }
-
-  async getMyProfile(req, res, next) {
-    try {
-      const parent = await parentService.getParentByUserId(req.userId);
-      const dto = ParentProfileDTO.toResponse(parent);
-      return successResponse(res, dto, 'Parent profile retrieved', 200);
     } catch (error) {
       return next(error);
     }

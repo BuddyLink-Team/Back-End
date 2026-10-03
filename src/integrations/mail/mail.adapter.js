@@ -1,6 +1,6 @@
-import nodemailer from 'nodemailer';
-import env from '../../config/env.js';
-import logger from '../../shared/logger/index.js';
+import nodemailer from "nodemailer";
+import env from "../../config/env.js";
+import logger from "../../shared/logger/index.js";
 
 class MailAdapter {
   constructor() {
@@ -20,12 +20,14 @@ class MailAdapter {
         },
       });
     } else {
-      logger.warn('SMTP configuration missing. Email will run in mock mode (logged to console).');
+      logger.warn(
+        "SMTP configuration missing. Email will run in mock mode (logged to console).",
+      );
     }
   }
 
-  async sendEmailOtp({ to, otp, fullName = 'Quý phụ huynh', minutes = 5 }) {
-    const subject = 'BuddyLink - Mã xác thực tài khoản Email của bạn';
+  async sendEmailOtp({ to, otp, fullName = "Quý phụ huynh", minutes = 5 }) {
+    const subject = "BuddyLink - Mã xác thực tài khoản Email của bạn";
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
         <h2 style="color: #4F46E5; text-align: center; margin-bottom: 24px;">Xác thực tài khoản BuddyLink</h2>
@@ -44,11 +46,21 @@ class MailAdapter {
       </div>
     `;
 
-    return this._send({ to, subject, html, text: `Mã xác thực BuddyLink của bạn là: ${otp} (Hiệu lực ${minutes} phút).` });
+    return this._send({
+      to,
+      subject,
+      html,
+      text: `Mã xác thực BuddyLink của bạn là: ${otp} (Hiệu lực ${minutes} phút).`,
+    });
   }
 
-  async sendPasswordResetEmail({ to, token, fullName = 'Quý phụ huynh', minutes = 15 }) {
-    const subject = 'BuddyLink - Yêu cầu đặt lại mật khẩu của bạn';
+  async sendPasswordResetEmail({
+    to,
+    token,
+    fullName = "Quý phụ huynh",
+    minutes = 15,
+  }) {
+    const subject = "BuddyLink - Yêu cầu đặt lại mật khẩu của bạn";
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
         <h2 style="color: #EF4444; text-align: center; margin-bottom: 24px;">Đặt lại mật khẩu BuddyLink</h2>
@@ -67,14 +79,23 @@ class MailAdapter {
       </div>
     `;
 
-    return this._send({ to, subject, html, text: `Mã đặt lại mật khẩu BuddyLink của bạn là: ${token} (Hiệu lực ${minutes} phút).` });
+    return this._send({
+      to,
+      subject,
+      html,
+      text: `Mã đặt lại mật khẩu BuddyLink của bạn là: ${token} (Hiệu lực ${minutes} phút).`,
+    });
   }
 
   async _send({ to, subject, html, text }) {
     // In test environment, bypass network SMTP to run tests fast and prevent network timeouts
-    if (process.env.NODE_ENV === 'test') {
+    if (process.env.NODE_ENV === "test") {
       logger.info(`[TEST MOCK EMAIL] To: ${to} | Subject: ${subject}`);
-      return { success: true, messageId: `test-mail-${Date.now()}`, mock: true };
+      return {
+        success: true,
+        messageId: `test-mail-${Date.now()}`,
+        mock: true,
+      };
     }
 
     if (this.transporter) {
