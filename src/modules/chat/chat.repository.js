@@ -24,7 +24,7 @@ class ChatRepository {
     return Conversation.find(query)
       .populate('participants', 'fullName avatarUrl verification location')
       .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'title scheduledDate status location')
+      .populate('playdateId', 'activity scheduledDate time status location')
       .sort({ updatedAt: -1 })
       .lean();
   }
@@ -38,7 +38,7 @@ class ChatRepository {
     return Conversation.findOne({ _id: conversationId, isActive: true })
       .populate('participants', 'fullName avatarUrl verification location')
       .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'title scheduledDate status location')
+      .populate('playdateId', 'activity scheduledDate time status location')
       .lean();
   }
 
@@ -58,15 +58,23 @@ class ChatRepository {
    * @returns {Promise<Object|null>}
    */
   async findDirectConversation(parentIdA, parentIdB) {
+    const pairKey = [parentIdA.toString(), parentIdB.toString()].sort().join('_');
     return Conversation.findOne({
-      type: CONVERSATION_TYPES.DIRECT,
-      participants: { $all: [parentIdA, parentIdB], $size: 2 },
-      isActive: true,
+      $or: [
+        { pairKey, isActive: true },
+        {
+          type: CONVERSATION_TYPES.DIRECT,
+          participants: { $all: [parentIdA, parentIdB], $size: 2 },
+          isActive: true,
+        },
+      ],
     })
       .populate('participants', 'fullName avatarUrl verification location')
       .populate('lastMessage.senderId', 'fullName avatarUrl')
+      .populate('playdateId', 'activity scheduledDate time status location')
       .lean();
   }
+
 
   /**
    * Create a new conversation document
@@ -142,7 +150,8 @@ class ChatRepository {
       updateOps.$inc = incOps;
     }
 
-    return Conversation.findByIdAndUpdate(conversationId, updateOps, { new: true });
+    await Conversation.findByIdAndUpdate(conversationId, updateOps, { new: true });
+    return this.findConversationById(conversationId);
   }
 
   /**

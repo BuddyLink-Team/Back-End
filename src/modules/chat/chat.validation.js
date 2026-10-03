@@ -25,15 +25,22 @@ export const sendMessageValidation = [
     .withMessage('conversationId must be a valid MongoDB ObjectId'),
   body('content')
     .optional()
-    .trim(),
+    .isString()
+    .withMessage('content must be a string')
+    .trim()
+    .isLength({ max: 5000 })
+    .withMessage('content cannot exceed 5000 characters'),
   body('type')
     .optional()
-    .isIn(Object.values(MESSAGE_TYPES))
-    .withMessage(`type must be one of: ${Object.values(MESSAGE_TYPES).join(', ')}`),
+    .isIn([MESSAGE_TYPES.TEXT, MESSAGE_TYPES.IMAGE, MESSAGE_TYPES.EMOJI])
+    .withMessage(`type must be one of: ${[MESSAGE_TYPES.TEXT, MESSAGE_TYPES.IMAGE, MESSAGE_TYPES.EMOJI].join(', ')}`),
   body('mediaUrl')
     .optional()
     .isString()
-    .withMessage('mediaUrl must be a valid URL string'),
+    .isLength({ max: 2048 })
+    .withMessage('mediaUrl cannot exceed 2048 characters')
+    .isURL({ protocols: ['http', 'https'], require_protocol: true })
+    .withMessage('mediaUrl must be a valid HTTP or HTTPS URL'),
   body().custom((value) => {
     const hasContent = value.content && value.content.trim().length > 0;
     const hasMedia = value.mediaUrl && value.mediaUrl.trim().length > 0;
