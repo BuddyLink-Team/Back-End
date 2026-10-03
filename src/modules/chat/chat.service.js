@@ -191,7 +191,10 @@ class ChatService {
     if (!file) {
       throw new AppError('No image file uploaded', 400, 'FILE_REQUIRED');
     }
-    const result = await storageAdapter.uploadImage(file, 'buddylink/chat');
+    const result = await storageAdapter.uploadImage(file.buffer, {
+      folder: 'buddylink/chat',
+      mimetype: file.mimetype,
+    });
     return {
       mediaUrl: result.url,
       publicId: result.publicId,

@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, jest } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
+import storageAdapter from '../../src/integrations/storage/storage.adapter.js';
+import { PNG_BUFFER } from '../helpers/imageHelper.js';
 
 describe('Chat Module Integration Tests (TASK-BE-10)', () => {
   let parentTokenA = '';
@@ -95,14 +97,34 @@ describe('Chat Module Integration Tests (TASK-BE-10)', () => {
   });
 
   it('6. POST /api/v1/chat/upload: should upload an image attachment via Cloud Storage adapter', async () => {
-    const buffer = Buffer.from('fake-image-content-for-testing');
+    // Mock Cloud Storage upload to prevent real external API call in test
+    const uploadSpy = jest
+      .spyOn(storageAdapter, 'uploadImage')
+      .mockResolvedValueOnce({
+        url: 'https://res.cloudinary.com/test-cloud/image/upload/v1/buddylink/chat/play.png',
+        publicId: 'buddylink/chat/play',
+      });
+
     const res = await request(app)
       .post('/api/v1/chat/upload')
       .set('Authorization', `Bearer ${parentTokenA}`)
-      .attach('image', buffer, 'test-baby-play.png');
+      .attach('image', PNG_BUFFER, 'test-baby-play.png');
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data.mediaUrl).toBeDefined();
+    expect(res.body.data.mediaUrl).toBe('https://res.cloudinary.com/test-cloud/image/upload/v1/buddylink/chat/play.png');
+    expect(uploadSpy).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({ folder: 'buddylink/chat', mimetype: 'image/png' }));
+
+    uploadSpy.mockRestore();
+  });
+
+  it('7. POST /api/v1/chat/upload: should reject a non-image file renamed to .png', async () => {
+    const res = await request(app)
+      .post('/api/v1/chat/upload')
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .attach('image', Buffer.from('fake-image-content-for-testing'), 'test-baby-play.png');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_FILE_TYPE');
   });
 });

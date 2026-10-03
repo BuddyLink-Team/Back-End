@@ -4,7 +4,7 @@ import userService from "../user/user.service.js";
 import AppError from "../../shared/exceptions/AppError.js";
 import { ParentProfileDTO } from "./parent.dto.js";
 import geocodingAdapter from "../../integrations/maps/geocoding.adapter.js";
-import cloudinaryAdapter from "../../integrations/storage/cloudinary.adapter.js";
+import storageAdapter from "../../integrations/storage/storage.adapter.js";
 
 class ParentService {
   async getParentByUserId(userId) {
@@ -170,7 +170,7 @@ class ParentService {
     return ParentProfileDTO.toResponse(updatedParent, user);
   }
 
-  async updateAvatar(userId, fileBuffer) {
+  async updateAvatar(userId, fileBuffer, mimetype) {
     const parent = await parentRepository.findByUserId(userId);
     if (!parent) {
       throw new AppError("Parent profile not found", 404, "PARENT_NOT_FOUND");
@@ -184,12 +184,13 @@ class ParentService {
       );
     }
 
-    const uploadResult = await cloudinaryAdapter.uploadImage(fileBuffer, {
+    const uploadResult = await storageAdapter.uploadImage(fileBuffer, {
       folder: "buddylink/parents/avatars",
       transformation: [
         { width: 400, height: 400, crop: "fill", gravity: "face" },
         { quality: "auto", fetch_format: "auto" },
       ],
+      mimetype,
     });
 
     const updatedParent = await parentRepository.updateByUserId(userId, {

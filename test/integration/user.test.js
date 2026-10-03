@@ -3,7 +3,8 @@ import request from "supertest";
 import bcrypt from "bcryptjs";
 import app from "../../src/app.js";
 import User from "../../src/modules/user/user.model.js";
-import cloudinaryAdapter from "../../src/integrations/storage/cloudinary.adapter.js";
+import storageAdapter from "../../src/integrations/storage/storage.adapter.js";
+import { JPEG_BUFFER } from "../helpers/imageHelper.js";
 
 describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
   let parentToken = "";
@@ -97,7 +98,7 @@ describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
   describe("Unified PATCH /api/v1/user/me/avatar", () => {
     it("should upload avatar for parent user", async () => {
       const uploadSpy = jest
-        .spyOn(cloudinaryAdapter, "uploadImage")
+        .spyOn(storageAdapter, "uploadImage")
         .mockResolvedValueOnce({
           url: "https://res.cloudinary.com/test/avatar-unified.jpg",
           publicId: "avatar123",
@@ -106,7 +107,7 @@ describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
       const res = await request(app)
         .patch("/api/v1/user/me/avatar")
         .set("Authorization", `Bearer ${parentToken}`)
-        .attach("avatar", Buffer.from("fake-avatar"), {
+        .attach("avatar", JPEG_BUFFER, {
           filename: "avatar.jpg",
           contentType: "image/jpeg",
         });
