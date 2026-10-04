@@ -19,6 +19,7 @@ const ratingFeedbackSchema = new mongoose.Schema(
       required: true,
       min: 1,
       max: 5,
+      validate: { validator: Number.isInteger, message: 'Rating must be an integer' },
     },
     feedback: {
       type: String,

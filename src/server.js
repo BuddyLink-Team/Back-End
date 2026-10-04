@@ -6,6 +6,12 @@ import { initSocket } from './config/socket.js';
 import logger from './shared/logger/index.js';
 import subscriptionService from './modules/subscription/subscription.service.js';
 
+import { seedBadges } from './modules/gamification/gamification.service.js';
+import { startGamificationJob, runGamificationJob } from './modules/gamification/gamification.job.js';
+
+import UserBadge from './modules/gamification/user-badge.model.js';
+import RatingFeedback from './modules/rating-feedback/rating-feedback.model.js';
+
 const server = http.createServer(app);
 
 // Initialize Socket.io
@@ -18,6 +24,12 @@ const startServer = async () => {
 
     // 2. Seed Default Subscription Plans if not present
     await subscriptionService.seedSubscriptionPlans();
+
+    await Promise.all([UserBadge.init(), RatingFeedback.init()]);
+    await seedBadges();
+    startGamificationJob();
+    // Catch up after downtime without delaying HTTP startup.
+    void runGamificationJob();
 
     // 3. Start HTTP Server
     server.listen(env.PORT, () => {

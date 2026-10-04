@@ -16,6 +16,9 @@ import parentRoutes from "./modules/parent/parent.route.js";
 import childRoutes from "./modules/child/child.route.js";
 import subscriptionRoutes from "./modules/subscription/subscription.route.js";
 
+import gamificationRoutes from './modules/gamification/gamification.route.js';
+import ratingFeedbackRoutes from './modules/rating-feedback/rating-feedback.route.js';
+
 const app = express();
 
 // Security Headers
@@ -32,9 +35,10 @@ app.use(
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.originalUrl?.includes('/subscriptions/payments/verify/'),
   message: {
     success: false,
     message: "Too many requests, please try again later.",
@@ -71,6 +75,9 @@ app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/parent", parentRoutes);
 app.use("/api/v1/children", childRoutes);
 app.use("/api/v1/subscriptions", subscriptionRoutes);
+
+app.use('/api/v1/gamification', gamificationRoutes);
+app.use('/api/v1/playdates', ratingFeedbackRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);
