@@ -88,6 +88,46 @@ class ChildService {
   async countChildrenByParentId(parentId) {
     return childRepository.countByParentId(parentId);
   }
+
+  /**
+   * Get public profile of a child, masking data per privacySettings
+   * @param {string} childId
+   */
+  async getPublicProfile(childId) {
+    const child = await childRepository.findByIdWithParent(childId);
+    if (!child) {
+      throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
+    }
+
+    const priv = child.privacySettings || {};
+    const parent = child.parentId || {};
+
+    // Calculate age in years
+    const ageYears = child.dateOfBirth
+      ? Math.floor((Date.now() - new Date(child.dateOfBirth)) / (365.25 * 24 * 3600 * 1000))
+      : null;
+
+    return {
+      childId: child._id,
+      displayName: priv.showFullName !== false ? child.displayName : child.displayName?.split(' ').pop(),
+      age:         priv.showAge     !== false ? ageYears : null,
+      gender:      priv.showGender  !== false ? child.gender : null,
+      avatarUrl:   priv.showRealPhoto === true ? child.avatarUrl : null,
+      schoolLevel: priv.showSchool  === true  ? child.schoolLevel : null,
+      interests:   priv.showInterests   !== false ? (child.interests || [])         : [],
+      favoriteActivities: priv.showInterests !== false ? (child.favoriteActivities || []) : [],
+      personality: priv.showPersonality !== false ? (child.personality || [])       : [],
+      parent: {
+        fullName:        parent.fullName,
+        avatarUrl:       parent.avatarUrl || null,
+        bio:             parent.bio       || null,
+        area:            parent.area      || parent.city || null,
+        isVerifiedParent: parent.isVerifiedParent || false,
+        verifiedPhone:   parent.verifiedPhone || false,
+        verifiedEmail:   parent.verifiedEmail || false,
+      },
+    };
+  }
 }
 
 export default new ChildService();

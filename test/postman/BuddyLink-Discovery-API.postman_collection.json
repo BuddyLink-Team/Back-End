@@ -6,13 +6,34 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "base_url", "value": "http://localhost:5000/api/v1" },
-    { "key": "parent_a_token", "value": "" },
-    { "key": "parent_b_token", "value": "" },
-    { "key": "parent_a_id", "value": "" },
-    { "key": "parent_b_id", "value": "" },
-    { "key": "child_a_id", "value": "" },
-    { "key": "child_b_id", "value": "" }
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000/api/v1"
+    },
+    {
+      "key": "parent_a_token",
+      "value": ""
+    },
+    {
+      "key": "parent_b_token",
+      "value": ""
+    },
+    {
+      "key": "parent_a_id",
+      "value": ""
+    },
+    {
+      "key": "parent_b_id",
+      "value": ""
+    },
+    {
+      "key": "child_a_id",
+      "value": ""
+    },
+    {
+      "key": "child_b_id",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -22,97 +43,318 @@
           "name": "1. Register Parent A (Searcher)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"fullName\": \"Parent A - Discovery Test\",\n  \"email\": \"discovery-parent-a@test.com\",\n  \"password\": \"Password123!\"\n}"
             },
-            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] }
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Register Parent A - Status 201', () => pm.response.to.have.status(201));", "pm.test('Success = true', () => pm.expect(res.success).to.eql(true));", "if (res.data?.tokens) { pm.collectionVariables.set('parent_a_token', res.data.tokens.accessToken); console.log('✅ Parent A token saved'); }"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Register Parent A - Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Success = true', () => pm.expect(res.success).to.eql(true));",
+                  "if (res.data?.tokens) { pm.collectionVariables.set('parent_a_token', res.data.tokens.accessToken); console.log('✅ Parent A token saved'); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "2. Get Parent A Profile & ID",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "url": { "raw": "{{base_url}}/parent/me", "host": ["{{base_url}}"], "path": ["parent", "me"] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/parent/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "parent",
+                "me"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 200', () => pm.response.to.have.status(200));", "if (res.data) { pm.collectionVariables.set('parent_a_id', res.data.id || res.data._id); console.log('✅ Parent A ID:', res.data.id || res.data._id); }"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "if (res.data) { pm.collectionVariables.set('parent_a_id', res.data.id || res.data._id); console.log('✅ Parent A ID:', res.data.id || res.data._id); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "3. Update Parent A Location (District 1, HCM)",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"location\": {\n    \"address\": \"123 Nguyen Hue, District 1\",\n    \"area\": \"Quận 1\",\n    \"city\": \"Hồ Chí Minh\",\n    \"coordinates\": {\n      \"type\": \"Point\",\n      \"coordinates\": [106.7009, 10.7769]\n    }\n  },\n  \"preferences\": {\n    \"maxDistanceKm\": 15,\n    \"preferredAgeRange\": { \"min\": 3, \"max\": 8 },\n    \"preferredPlaydateDays\": [\"weekend\"],\n    \"preferredTimeSlots\": [\"morning\"],\n    \"preferredLocations\": [\"park\", \"outdoor\"]\n  }\n}"
+              "raw": "{\n  \"location\": {\n    \"address\": \"123 Nguyen Hue, District 1\",\n    \"area\": \"Quận 1\",\n    \"city\": \"Hồ Chí Minh\",\n    \"coordinates\": [106.7009, 10.7769]\n  },\n  \"preferences\": {\n    \"maxDistanceKm\": 15,\n    \"preferredAgeRange\": { \"min\": 3, \"max\": 8 },\n    \"preferredPlaydateDays\": [\"weekend\"],\n    \"preferredTimeSlots\": [\"morning\"],\n    \"preferredLocations\": [\"park\", \"outdoor\"]\n  }\n}"
             },
-            "url": { "raw": "{{base_url}}/parent/me", "host": ["{{base_url}}"], "path": ["parent", "me"] }
+            "url": {
+              "raw": "{{base_url}}/parent/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "parent",
+                "me"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "console.log('✅ Parent A location → District 1, HCM');"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "console.log('✅ Parent A location → District 1, HCM');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "4. Create Child for Parent A",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"displayName\": \"Bé An\",\n  \"dateOfBirth\": \"2020-06-15\",\n  \"gender\": \"boy\",\n  \"interests\": [\"Lego\", \"Vẽ tranh\", \"Khủng long\"],\n  \"favoriteActivities\": [\"Đi công viên\", \"Bơi lội\"],\n  \"personality\": [\"Năng động\", \"Hòa đồng\"]\n}"
             },
-            "url": { "raw": "{{base_url}}/children", "host": ["{{base_url}}"], "path": ["children"] }
+            "url": {
+              "raw": "{{base_url}}/children",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "children"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 201', () => pm.response.to.have.status(201));", "if (res.data) { pm.collectionVariables.set('child_a_id', res.data.id || res.data._id); console.log('✅ Child A:', res.data.displayName); }"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "if (res.data) { pm.collectionVariables.set('child_a_id', res.data.id || res.data._id); console.log('✅ Child A:', res.data.displayName); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "5. Register Parent B (Nearby)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"fullName\": \"Parent B - Nearby\",\n  \"email\": \"discovery-parent-b@test.com\",\n  \"password\": \"Password123!\"\n}"
             },
-            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] }
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 201', () => pm.response.to.have.status(201));", "if (res.data?.tokens) { pm.collectionVariables.set('parent_b_token', res.data.tokens.accessToken); console.log('✅ Parent B token saved'); }"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "if (res.data?.tokens) { pm.collectionVariables.set('parent_b_token', res.data.tokens.accessToken); console.log('✅ Parent B token saved'); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "6. Get Parent B Profile & ID",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_b_token}}" }],
-            "url": { "raw": "{{base_url}}/parent/me", "host": ["{{base_url}}"], "path": ["parent", "me"] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_b_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/parent/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "parent",
+                "me"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 200', () => pm.response.to.have.status(200));", "if (res.data) { pm.collectionVariables.set('parent_b_id', res.data.id || res.data._id); console.log('✅ Parent B ID:', res.data.id || res.data._id); }"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "if (res.data) { pm.collectionVariables.set('parent_b_id', res.data.id || res.data._id); console.log('✅ Parent B ID:', res.data.id || res.data._id); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "7. Update Parent B Location (Bình Thạnh ~2km)",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_b_token}}" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_b_token}}"
+              }
+            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"location\": {\n    \"address\": \"456 Điện Biên Phủ, Bình Thạnh\",\n    \"area\": \"Bình Thạnh\",\n    \"city\": \"Hồ Chí Minh\",\n    \"coordinates\": {\n      \"type\": \"Point\",\n      \"coordinates\": [106.7109, 10.7969]\n    }\n  },\n  \"preferences\": {\n    \"preferredPlaydateDays\": [\"weekend\"],\n    \"preferredTimeSlots\": [\"morning\"],\n    \"preferredLocations\": [\"park\"]\n  }\n}"
+              "raw": "{\n  \"location\": {\n    \"address\": \"456 Điện Biên Phủ, Bình Thạnh\",\n    \"area\": \"Bình Thạnh\",\n    \"city\": \"Hồ Chí Minh\",\n    \"coordinates\": [106.7109, 10.7969]\n  },\n  \"preferences\": {\n    \"preferredPlaydateDays\": [\"weekend\"],\n    \"preferredTimeSlots\": [\"morning\"],\n    \"preferredLocations\": [\"park\"]\n  }\n}"
             },
-            "url": { "raw": "{{base_url}}/parent/me", "host": ["{{base_url}}"], "path": ["parent", "me"] }
+            "url": {
+              "raw": "{{base_url}}/parent/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "parent",
+                "me"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "console.log('✅ Parent B location → Bình Thạnh (~2km from A)');"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "console.log('✅ Parent B location → Bình Thạnh (~2km from A)');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "8. Create Child for Parent B",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_b_token}}" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_b_token}}"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"displayName\": \"Bé Mèo\",\n  \"dateOfBirth\": \"2021-03-10\",\n  \"gender\": \"girl\",\n  \"interests\": [\"Lego\", \"Vẽ tranh\", \"Âm nhạc\"],\n  \"favoriteActivities\": [\"Đi công viên\", \"Đạp xe\"],\n  \"personality\": [\"Sáng tạo\", \"Hòa đồng\"]\n}"
             },
-            "url": { "raw": "{{base_url}}/children", "host": ["{{base_url}}"], "path": ["children"] }
+            "url": {
+              "raw": "{{base_url}}/children",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "children"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 201', () => pm.response.to.have.status(201));", "if (res.data) { pm.collectionVariables.set('child_b_id', res.data.id || res.data._id); console.log('✅ Child B:', res.data.displayName); }"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "if (res.data) { pm.collectionVariables.set('child_b_id', res.data.id || res.data._id); console.log('✅ Child B:', res.data.displayName); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         }
       ]
     },
@@ -123,46 +365,226 @@
           "name": "GET Discovery - Default (parent location)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "url": { "raw": "{{base_url}}/discovery", "host": ["{{base_url}}"], "path": ["discovery"] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/discovery",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "", "pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('Success = true', () => pm.expect(res.success).to.eql(true));", "pm.test('Has profiles array', () => { pm.expect(res.data.profiles).to.be.an('array'); console.log('📋 Found', res.data.profiles.length, 'profiles'); });", "pm.test('Has meta with remainingViews', () => { pm.expect(res.data.meta).to.have.property('remainingViews'); pm.expect(res.data.meta).to.have.property('isPremium'); console.log('📊 Remaining:', res.data.meta.remainingViews, '| Premium:', res.data.meta.isPremium); });", "", "pm.test('Profile shape matches FE contract', () => {", "  if (res.data.profiles.length > 0) {", "    const p = res.data.profiles[0];", "    pm.expect(p).to.have.all.keys('childId','parentId','displayName','age','gender','avatarUrl','interests','favoriteActivities','personality','parent','matchScore','distanceKm');", "    pm.expect(p.parent).to.have.all.keys('fullName','avatarUrl','area','city','isVerifiedParent');", "    console.log('🎯 Top:', p.displayName, '| Score:', p.matchScore, '| Dist:', p.distanceKm+'km');", "  }", "});", "", "pm.test('Sorted by matchScore DESC', () => {", "  const profiles = res.data.profiles;", "  for (let i = 1; i < profiles.length; i++) pm.expect(profiles[i-1].matchScore).to.be.at.least(profiles[i].matchScore);", "});", "", "pm.test('No self-children', () => {", "  const myId = pm.collectionVariables.get('parent_a_id');", "  res.data.profiles.forEach(p => pm.expect(p.parentId).to.not.eql(myId));", "});"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Success = true', () => pm.expect(res.success).to.eql(true));",
+                  "pm.test('Has profiles array', () => { pm.expect(res.data.profiles).to.be.an('array'); console.log('📋 Found', res.data.profiles.length, 'profiles'); });",
+                  "pm.test('Has meta with remainingViews', () => { pm.expect(res.data.meta).to.have.property('remainingViews'); pm.expect(res.data.meta).to.have.property('isPremium'); console.log('📊 Remaining:', res.data.meta.remainingViews, '| Premium:', res.data.meta.isPremium); });",
+                  "",
+                  "pm.test('Profile shape matches FE contract', () => {",
+                  "  if (res.data.profiles.length > 0) {",
+                  "    const p = res.data.profiles[0];",
+                  "    pm.expect(p).to.have.all.keys('childId','parentId','displayName','age','gender','avatarUrl','interests','favoriteActivities','personality','parent','matchScore','distanceKm');",
+                  "    pm.expect(p.parent).to.have.all.keys('fullName','avatarUrl','area','city','isVerifiedParent');",
+                  "    console.log('🎯 Top:', p.displayName, '| Score:', p.matchScore, '| Dist:', p.distanceKm+'km');",
+                  "  }",
+                  "});",
+                  "",
+                  "pm.test('Sorted by matchScore DESC', () => {",
+                  "  const profiles = res.data.profiles;",
+                  "  for (let i = 1; i < profiles.length; i++) pm.expect(profiles[i-1].matchScore).to.be.at.least(profiles[i].matchScore);",
+                  "});",
+                  "",
+                  "pm.test('No self-children', () => {",
+                  "  const myId = pm.collectionVariables.get('parent_a_id');",
+                  "  res.data.profiles.forEach(p => pm.expect(p.parentId).to.not.eql(myId));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "GET Discovery - Custom Coords & 5km Radius",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "url": { "raw": "{{base_url}}/discovery?lat=10.7769&lng=106.7009&maxDistanceKm=5", "host": ["{{base_url}}"], "path": ["discovery"], "query": [{ "key": "lat", "value": "10.7769" }, { "key": "lng", "value": "106.7009" }, { "key": "maxDistanceKm", "value": "5" }] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/discovery?lat=10.7769&lng=106.7009&maxDistanceKm=5",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery"
+              ],
+              "query": [
+                {
+                  "key": "lat",
+                  "value": "10.7769"
+                },
+                {
+                  "key": "lng",
+                  "value": "106.7009"
+                },
+                {
+                  "key": "maxDistanceKm",
+                  "value": "5"
+                }
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('All within 5km', () => { res.data.profiles.forEach(p => pm.expect(p.distanceKm).to.be.at.most(5)); console.log('📍', res.data.profiles.length, 'profiles within 5km'); });"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('All within 5km', () => { res.data.profiles.forEach(p => pm.expect(p.distanceKm).to.be.at.most(5)); console.log('📍', res.data.profiles.length, 'profiles within 5km'); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "GET Discovery - Age Filter (3-6)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "url": { "raw": "{{base_url}}/discovery?ageMin=3&ageMax=6", "host": ["{{base_url}}"], "path": ["discovery"], "query": [{ "key": "ageMin", "value": "3" }, { "key": "ageMax", "value": "6" }] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/discovery?ageMin=3&ageMax=6",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery"
+              ],
+              "query": [
+                {
+                  "key": "ageMin",
+                  "value": "3"
+                },
+                {
+                  "key": "ageMax",
+                  "value": "6"
+                }
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('Ages within 3-6', () => { res.data.profiles.forEach(p => { pm.expect(p.age).to.be.at.least(3); pm.expect(p.age).to.be.at.most(6); }); console.log('👶 Filtered:', res.data.profiles.length, 'results'); });"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Ages within 3-6', () => { res.data.profiles.forEach(p => { pm.expect(p.age).to.be.at.least(3); pm.expect(p.age).to.be.at.most(6); }); console.log('👶 Filtered:', res.data.profiles.length, 'results'); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "GET Discovery - Interest Filter",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "url": { "raw": "{{base_url}}/discovery?interests=Lego,Vẽ tranh", "host": ["{{base_url}}"], "path": ["discovery"], "query": [{ "key": "interests", "value": "Lego,Vẽ tranh" }] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/discovery?interests=Lego,Vẽ tranh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery"
+              ],
+              "query": [
+                {
+                  "key": "interests",
+                  "value": "Lego,Vẽ tranh"
+                }
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('Has matching interests', () => { res.data.profiles.forEach(p => { const match = p.interests.some(i => ['Lego','Vẽ tranh'].includes(i)); pm.expect(match).to.eql(true); }); console.log('🎨', res.data.profiles.length, 'with matching interests'); });"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has matching interests', () => { res.data.profiles.forEach(p => { const match = p.interests.some(i => ['Lego','Vẽ tranh'].includes(i)); pm.expect(match).to.eql(true); }); console.log('🎨', res.data.profiles.length, 'with matching interests'); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "GET Discovery - No Auth (401)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.cookies.clear();"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Success = false', () => pm.expect(pm.response.json().success).to.eql(false));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [],
-            "url": { "raw": "{{base_url}}/discovery", "host": ["{{base_url}}"], "path": ["discovery"] }
-          },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 401', () => pm.response.to.have.status(401));", "pm.test('Success = false', () => pm.expect(pm.response.json().success).to.eql(false));"], "type": "text/javascript" } }]
+            "url": {
+              "raw": "{{base_url}}/discovery",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery"
+              ]
+            }
+          }
         }
       ]
     },
@@ -173,70 +595,299 @@
           "name": "Swipe LIKE on Child B ✅",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "body": { "mode": "raw", "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true\n}" },
-            "url": { "raw": "{{base_url}}/discovery/swipe", "host": ["{{base_url}}"], "path": ["discovery", "swipe"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 201', () => pm.response.to.have.status(201));", "pm.test('Has swipe data', () => { pm.expect(res.data.swipeId).to.exist; pm.expect(res.data.isLike).to.eql(true); console.log('💚 Liked! Remaining:', res.data.remainingViews); });"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Has swipe data', () => { pm.expect(res.data.swipeId).to.exist; pm.expect(res.data.isLike).to.eql(true); console.log('💚 Liked! Remaining:', res.data.remainingViews); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "Swipe DUPLICATE (409) ❌",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "body": { "mode": "raw", "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true\n}" },
-            "url": { "raw": "{{base_url}}/discovery/swipe", "host": ["{{base_url}}"], "path": ["discovery", "swipe"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 409', () => pm.response.to.have.status(409));", "pm.test('DUPLICATE_SWIPE', () => pm.expect(pm.response.json().error.code).to.eql('DUPLICATE_SWIPE'));", "console.log('🚫 Duplicate correctly rejected');"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('DUPLICATE_SWIPE', () => pm.expect(pm.response.json().error.code).to.eql('DUPLICATE_SWIPE'));",
+                  "console.log('🚫 Duplicate correctly rejected');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "Swipe Invalid ID (400) ❌",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "body": { "mode": "raw", "raw": "{\n  \"targetChildId\": \"invalid-id\",\n  \"isLike\": true\n}" },
-            "url": { "raw": "{{base_url}}/discovery/swipe", "host": ["{{base_url}}"], "path": ["discovery", "swipe"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"invalid-id\",\n  \"isLike\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));", "console.log('✅ Invalid MongoId rejected');"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "console.log('✅ Invalid MongoId rejected');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "Swipe Missing isLike (400) ❌",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "body": { "mode": "raw", "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\"\n}" },
-            "url": { "raw": "{{base_url}}/discovery/swipe", "host": ["{{base_url}}"], "path": ["discovery", "swipe"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));", "console.log('✅ Missing isLike rejected');"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "console.log('✅ Missing isLike rejected');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "Swipe Non-existent Child (404) ❌",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "body": { "mode": "raw", "raw": "{\n  \"targetChildId\": \"000000000000000000000000\",\n  \"isLike\": true\n}" },
-            "url": { "raw": "{{base_url}}/discovery/swipe", "host": ["{{base_url}}"], "path": ["discovery", "swipe"] }
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"000000000000000000000000\",\n  \"isLike\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 404', () => pm.response.to.have.status(404));", "pm.test('CHILD_NOT_FOUND', () => pm.expect(pm.response.json().error.code).to.eql('CHILD_NOT_FOUND'));"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('CHILD_NOT_FOUND', () => pm.expect(pm.response.json().error.code).to.eql('CHILD_NOT_FOUND'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         },
         {
           "name": "Swipe No Auth (401) 🔒",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.cookies.clear();"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                  "console.log('🔒 Unauthenticated swipe blocked');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true\n}" },
-            "url": { "raw": "{{base_url}}/discovery/swipe", "host": ["{{base_url}}"], "path": ["discovery", "swipe"] }
-          },
-          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 401', () => pm.response.to.have.status(401));", "console.log('🔒 Unauthenticated swipe blocked');"], "type": "text/javascript" } }]
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
+          }
         },
         {
           "name": "Verify Swiped Excluded from Discovery",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{parent_a_token}}" }],
-            "url": { "raw": "{{base_url}}/discovery", "host": ["{{base_url}}"], "path": ["discovery"] }
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/discovery",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery"
+              ]
+            }
           },
-          "event": [{ "listen": "test", "script": { "exec": ["const res = pm.response.json();", "pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('Swiped child excluded', () => {", "  const childBId = pm.collectionVariables.get('child_b_id');", "  const found = res.data.profiles.find(p => p.childId === childBId);", "  pm.expect(found).to.be.undefined;", "  console.log('✅ Child B excluded after swipe');", "});"], "type": "text/javascript" } }]
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Swiped child excluded', () => {",
+                  "  const childBId = pm.collectionVariables.get('child_b_id');",
+                  "  const found = res.data.profiles.find(p => p.childId === childBId);",
+                  "  pm.expect(found).to.be.undefined;",
+                  "  console.log('✅ Child B excluded after swipe');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         }
       ]
     }

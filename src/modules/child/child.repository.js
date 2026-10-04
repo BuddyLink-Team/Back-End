@@ -32,6 +32,18 @@ class ChildRepository {
   async countByParentId(parentId) {
     return Child.countDocuments({ parentId, isArchived: false });
   }
+
+  /**
+   * Find a child by ID and populate parent info for public profile view
+   */
+  async findByIdWithParent(childId) {
+    return Child.findOne({ _id: childId, isArchived: false })
+      .populate({
+        path: 'parentId',
+        select: 'fullName avatarUrl bio area city isVerifiedParent verifiedPhone verifiedEmail',
+      })
+      .lean();
+  }
 }
 
 export default new ChildRepository();

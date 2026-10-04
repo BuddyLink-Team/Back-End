@@ -26,6 +26,25 @@ const childSchema = new mongoose.Schema(
     interests: [{ type: String, trim: true }],
     favoriteActivities: [{ type: String, trim: true }],
     personality: [{ type: String, trim: true }],
+    avatarUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    schoolLevel: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    privacySettings: {
+      showRealPhoto:   { type: Boolean, default: false },
+      showFullName:    { type: Boolean, default: true  },
+      showAge:         { type: Boolean, default: true  },
+      showGender:      { type: Boolean, default: true  },
+      showInterests:   { type: Boolean, default: true  },
+      showPersonality: { type: Boolean, default: true  },
+      showSchool:      { type: Boolean, default: false },
+    },
     isArchived: {
       type: Boolean,
       default: false,

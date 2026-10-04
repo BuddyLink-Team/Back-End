@@ -87,6 +87,13 @@ class DiscoveryService {
       DISCOVERY_DEFAULTS.MAX_RESULTS_PER_REQUEST
     );
 
+    // Calculate current parent's children interests set once
+    const currentSet = new Set();
+    currentChildren.forEach((child) => {
+      (child.interests || []).forEach((i) => currentSet.add(i.toLowerCase()));
+      (child.favoriteActivities || []).forEach((a) => currentSet.add(a.toLowerCase()));
+    });
+
     // Step 8: Calculate match scores and sort
     const scoredProfiles = rawProfiles.map((profile) => {
       const matchScore = this._calculateMatchScore(
@@ -96,11 +103,22 @@ class DiscoveryService {
         profile.parent,
         profile.distanceKm
       );
+
+      const targetSet = new Set();
+      (profile.child.interests || []).forEach((i) => targetSet.add(i.toLowerCase()));
+      (profile.child.favoriteActivities || []).forEach((a) => targetSet.add(a.toLowerCase()));
+
+      let matchedInterestsCount = 0;
+      targetSet.forEach((item) => {
+        if (currentSet.has(item)) matchedInterestsCount++;
+      });
+
       return {
         child: profile.child,
         parent: profile.parent,
         matchScore,
         distanceKm: profile.distanceKm,
+        matchedInterestsCount,
       };
     });
 
