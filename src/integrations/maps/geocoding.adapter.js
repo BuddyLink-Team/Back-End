@@ -80,16 +80,16 @@ class GeocodingAdapter {
       );
     }
 
-    // Fallback: match by city/province name in the predefined coordinates map
+    // Fallback: Tìm theo tên Tỉnh/Thành phố trong danh sách tọa độ có sẵn
     const normalizedCity = cleanCity.toLowerCase();
     for (const [key, coords] of Object.entries(DEFAULT_CITY_COORDINATES)) {
       if (normalizedCity.includes(key)) {
-        logger.info(`[Geocoding Fallback] Using fallback coordinates for "${cleanCity}": [${coords}]`);
+        logger.info(`[Geocoding Fallback] Gán tọa độ trung tâm thành phố "${cleanCity}": [${coords}]`);
         return coords;
       }
     }
 
-    // Default to Ho Chi Minh City coordinates if no match is found
+    // Mặc định trung tâm TP.HCM nếu không khớp
     return [106.6297, 10.8231];
   }
 }

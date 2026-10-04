@@ -1,60 +1,90 @@
 import { body, param, query } from 'express-validator';
 
+// 24-hour time format: 'HH:mm' or 'HH:mm - HH:mm'
+const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)(\s*-\s*([01]\d|2[0-3]):([0-5]\d))?$/;
+
+/**
+ * Validation rules for GET /playdates
+ */
 export const getPlaydatesValidation = [
   query('status')
     .optional()
     .trim()
     .isIn(['all', 'upcoming', 'pending', 'confirmed', 'completed', 'cancelled'])
-    .withMessage('Trạng thái lọc không hợp lệ (all, upcoming, pending, confirmed, completed, cancelled)'),
+    .withMessage('Invalid filter status (all, upcoming, pending, confirmed, completed, cancelled)'),
   query('search')
     .optional()
     .trim()
     .isString()
-    .withMessage('Từ khóa tìm kiếm phải là chuỗi ký tự'),
+    .withMessage('Search term must be a string'),
+  query('fromDate')
+    .optional()
+    .isISO8601()
+    .withMessage('fromDate must be a valid ISO8601 date'),
+  query('toDate')
+    .optional()
+    .isISO8601()
+    .withMessage('toDate must be a valid ISO8601 date'),
   query('page')
     .optional()
     .isInt({ min: 1 })
-    .withMessage('Trang phải là số nguyên dương'),
+    .withMessage('Page must be a positive integer'),
   query('limit')
     .optional()
     .isInt({ min: 1, max: 100 })
-    .withMessage('Giới hạn phải là số từ 1 đến 100'),
+    .withMessage('Limit must be between 1 and 100'),
 ];
 
+/**
+ * Validation rules for Playdate ID param
+ */
 export const playdateIdParamValidation = [
   param('id')
     .isMongoId()
-    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+    .withMessage('Invalid playdate ID'),
 ];
 
+/**
+ * Validation rules for POST /playdates (Create Playdate)
+ */
 export const createPlaydateValidation = [
   body('hostChildId')
     .notEmpty()
-    .withMessage('Vui lòng chọn bé tham gia của bạn')
+    .withMessage('Please select your participating child')
     .isMongoId()
-    .withMessage('Mã hồ sơ bé không hợp lệ'),
+    .withMessage('Invalid child profile ID'),
   body('scheduledDate')
     .notEmpty()
-    .withMessage('Ngày hẹn chơi là bắt buộc')
+    .withMessage('Scheduled date is required')
     .isISO8601()
     .toDate()
-    .withMessage('Ngày hẹn chơi không hợp lệ'),
+    .withMessage('Invalid scheduled date')
+    .custom((value) => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (new Date(value) < today) {
+        throw new Error('Scheduled date must be in the future');
+      }
+      return true;
+    }),
   body('time')
     .trim()
     .notEmpty()
-    .withMessage('Thời gian hẹn là bắt buộc'),
+    .withMessage('Time is required')
+    .matches(TIME_REGEX)
+    .withMessage('Time must be in 24-hour HH:mm format'),
   body('activity')
     .trim()
     .notEmpty()
-    .withMessage('Hoạt động là bắt buộc'),
+    .withMessage('Activity description is required'),
   body('location.name')
     .trim()
     .notEmpty()
-    .withMessage('Tên địa điểm là bắt buộc'),
+    .withMessage('Location name is required'),
   body('location.address')
     .trim()
     .notEmpty()
-    .withMessage('Địa chỉ là bắt buộc'),
+    .withMessage('Location address is required'),
   body('location.placeId')
     .optional()
     .trim()
@@ -65,53 +95,74 @@ export const createPlaydateValidation = [
   body('participants')
     .optional()
     .isArray()
-    .withMessage('Danh sách người tham gia phải là một mảng'),
+    .withMessage('Participants must be an array'),
   body('participants.*.parentId')
-    .optional()
+    .notEmpty()
+    .withMessage('Participant parentId is required')
     .isMongoId()
-    .withMessage('Mã phụ huynh tham gia không hợp lệ'),
+    .withMessage('Invalid participant parentId'),
   body('participants.*.childId')
-    .optional()
+    .notEmpty()
+    .withMessage('Participant childId is required')
     .isMongoId()
-    .withMessage('Mã bé tham gia không hợp lệ'),
+    .withMessage('Invalid participant childId'),
 ];
 
+/**
+ * Validation rules for PATCH /playdates/:id/cancel
+ */
 export const cancelPlaydateValidation = [
   param('id')
     .isMongoId()
-    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+    .withMessage('Invalid playdate ID'),
   body('reason')
     .optional()
     .trim()
     .isString()
-    .withMessage('Lý do hủy phải là chuỗi ký tự'),
+    .withMessage('Cancellation reason must be a string'),
 ];
 
+/**
+ * Validation rules for PUT /playdates/:id/respond
+ */
 export const respondPlaydateValidation = [
   param('id')
     .isMongoId()
-    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+    .withMessage('Invalid playdate ID'),
   body('status')
     .notEmpty()
-    .withMessage('Trạng thái phản hồi là bắt buộc')
+    .withMessage('Response status is required')
     .isIn(['accepted', 'declined'])
-    .withMessage('Trạng thái phản hồi phải là accepted hoặc declined'),
+    .withMessage('Status must be accepted or declined'),
 ];
 
+/**
+ * Validation rules for POST /playdates/:id/reschedule
+ */
 export const createRescheduleValidation = [
   param('id')
     .isMongoId()
-    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+    .withMessage('Invalid playdate ID'),
   body('newDate')
     .notEmpty()
-    .withMessage('Ngày mới là bắt buộc')
+    .withMessage('New date is required')
     .isISO8601()
     .toDate()
-    .withMessage('Ngày mới không hợp lệ'),
+    .withMessage('Invalid new date')
+    .custom((value) => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (new Date(value) < today) {
+        throw new Error('New proposed date must be in the future');
+      }
+      return true;
+    }),
   body('newStartTime')
     .trim()
     .notEmpty()
-    .withMessage('Giờ mới là bắt buộc'),
+    .withMessage('New start time is required')
+    .matches(TIME_REGEX)
+    .withMessage('New start time must be in 24-hour HH:mm format'),
   body('newLocation.name')
     .optional()
     .trim(),
@@ -123,18 +174,20 @@ export const createRescheduleValidation = [
     .trim(),
 ];
 
+/**
+ * Validation rules for PUT /playdates/:id/reschedule/vote
+ */
 export const voteRescheduleValidation = [
   param('id')
     .isMongoId()
-    .withMessage('Mã ID buổi hẹn chơi không hợp lệ'),
+    .withMessage('Invalid playdate ID'),
   body('requestId')
     .optional()
     .isMongoId()
-    .withMessage('Mã yêu cầu đổi lịch không hợp lệ'),
+    .withMessage('Invalid reschedule request ID'),
   body('status')
     .notEmpty()
-    .withMessage('Lựa chọn bỏ phiếu là bắt buộc')
+    .withMessage('Vote choice is required')
     .isIn(['accepted', 'declined'])
-    .withMessage('Lựa chọn bỏ phiếu phải là accepted hoặc declined'),
+    .withMessage('Vote choice must be accepted or declined'),
 ];
-

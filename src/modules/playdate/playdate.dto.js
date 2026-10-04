@@ -112,3 +112,56 @@ export class PlaydateResponseDTO {
     return playdates.map((p) => PlaydateResponseDTO.toResponse(p, currentParentId));
   }
 }
+
+/**
+ * Reschedule Request Data Transfer Object
+ */
+export class RescheduleResponseDTO {
+  static toResponse(request) {
+    if (!request) return null;
+
+    const requestedBy = request.requestedBy && typeof request.requestedBy === 'object'
+      ? {
+          id: request.requestedBy._id?.toString() || request.requestedBy.id,
+          fullName: request.requestedBy.fullName,
+          avatarUrl: request.requestedBy.avatarUrl || '',
+          isVerified: Boolean(request.requestedBy.verification?.isVerifiedParent),
+        }
+      : { id: request.requestedBy?.toString() };
+
+    const responses = (request.responses || []).map((r) => {
+      const pIdStr = (r.parentId?._id || r.parentId?.id || r.parentId)?.toString();
+      const parentObj = r.parentId && typeof r.parentId === 'object'
+        ? {
+            _id: (r.parentId._id || r.parentId.id)?.toString(),
+            id: (r.parentId._id || r.parentId.id)?.toString(),
+            fullName: r.parentId.fullName,
+            avatarUrl: r.parentId.avatarUrl || '',
+            isVerified: Boolean(r.parentId.verification?.isVerifiedParent),
+          }
+        : { _id: pIdStr, id: pIdStr };
+
+      return {
+        parentId: parentObj,
+        parent: parentObj,
+        status: r.status,
+        respondedAt: r.respondedAt || null,
+      };
+    });
+
+    return {
+      id: request._id?.toString() || request.id,
+      playdateId: request.playdateId?.toString(),
+      requestedBy,
+      newDate: request.newDate,
+      newStartTime: request.newStartTime,
+      newLocation: request.newLocation || null,
+      reason: request.reason || '',
+      status: request.status,
+      responses,
+      resolvedAt: request.resolvedAt || null,
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
+    };
+  }
+}

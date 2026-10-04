@@ -5,6 +5,7 @@ import User from '../../src/modules/user/user.model.js';
 import Parent from '../../src/modules/parent/parent.model.js';
 import Child from '../../src/modules/child/child.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
+import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 
 describe('Playdate Management Integration Flow', () => {
   let hostToken = '';
@@ -103,7 +104,23 @@ describe('Playdate Management Integration Flow', () => {
     expect(res.body.success).toBe(false);
   });
 
-  it('5. PATCH /api/v1/playdates/:id/complete: should succeed when host completes it', async () => {
+  it('4b. PATCH /api/v1/playdates/:id/complete: should reject completing if scheduled time has not arrived (400)', async () => {
+    const res = await request(app)
+      .patch(`/api/v1/playdates/${createdPlaydateId}/complete`)
+      .set('Authorization', `Bearer ${hostToken}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('CANNOT_COMPLETE_YET');
+  });
+
+  it('5. PATCH /api/v1/playdates/:id/complete: should succeed when host completes it after scheduled time', async () => {
+    // Update scheduledDate to past so CANNOT_COMPLETE_YET check passes
+    await Playdate.findByIdAndUpdate(createdPlaydateId, {
+      scheduledDate: new Date(Date.now() - 3600000),
+      time: '08:00',
+    });
+
     const res = await request(app)
       .patch(`/api/v1/playdates/${createdPlaydateId}/complete`)
       .set('Authorization', `Bearer ${hostToken}`);
@@ -321,5 +338,172 @@ describe('Playdate Management Integration Flow', () => {
     expect(Array.isArray(res.body.data)).toBe(true);
     expect(res.body.data.length).toBeGreaterThanOrEqual(1);
     expect(res.body.data[0].placeType).toBe('park');
+  });
+
+  it('15. Search isolation: stranger search must not return other parents playdates', async () => {
+    const strangerRes = await request(app).post('/api/v1/auth/register').send({
+      fullName: 'Stranger Parent',
+      email: `stranger-${Date.now()}@test.com`,
+      password: 'Password123!',
+    });
+    const strangerToken = strangerRes.body.data.tokens.accessToken;
+
+    const res = await request(app)
+      .get('/api/v1/playdates?search=Lego')
+      .set('Authorization', `Bearer ${strangerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.playdates).toEqual([]);
+    expect(res.body.data.counts.all).toBe(0);
+  });
+
+  it('16. GET /api/v1/playdates/:id/reschedule: should return 403 when user is not host or participant', async () => {
+    const strangerRes = await request(app).post('/api/v1/auth/register').send({
+      fullName: 'Another Stranger',
+      email: `stranger2-${Date.now()}@test.com`,
+      password: 'Password123!',
+    });
+    const strangerToken = strangerRes.body.data.tokens.accessToken;
+
+    const res = await request(app)
+      .get(`/api/v1/playdates/${invitedPlaydateId}/reschedule`)
+      .set('Authorization', `Bearer ${strangerToken}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('17. PUT /api/v1/playdates/:id/respond: should reject second response with 400 ALREADY_RESPONDED', async () => {
+    const res = await request(app)
+      .put(`/api/v1/playdates/${invitedPlaydateId}/respond`)
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({ status: 'declined' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('ALREADY_RESPONDED');
+  });
+
+  it('18. POST /api/v1/playdates: should ignore mass assignment fields like completedAt and cancellation', async () => {
+    let child = await Child.findOne({ parentId: guestParentId });
+    if (!child) {
+      const childRes = await request(app)
+        .post('/api/v1/children')
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({
+          displayName: 'Bé Test',
+          dateOfBirth: '2021-01-01',
+          gender: 'boy',
+          interests: ['music'],
+        });
+      child = { _id: childRes.body.data.id };
+    }
+
+    const res = await request(app)
+      .post('/api/v1/playdates')
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({
+        hostChildId: child._id.toString(),
+        scheduledDate: new Date(Date.now() + 86400000 * 2).toISOString(),
+        time: '10:00 - 12:00',
+        activity: 'Chơi cát bãi biển',
+        location: {
+          name: 'Bãi cát Thảo Điền',
+          address: 'Quận 2, TP. Hồ Chí Minh',
+        },
+        completedAt: new Date(),
+        cancellation: {
+          cancelledBy: guestParentId,
+          reason: 'Hacked',
+        },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.status).toBe('upcoming');
+    expect(res.body.data.completedAt).toBeNull();
+    expect(res.body.data.cancellation.cancelledBy).toBeNull();
+    expect(res.body.data.cancellation.reason).not.toBe('Hacked');
+  });
+
+  it('19. POST /api/v1/playdates: should reject host adding self as participant (400 CANNOT_INVITE_SELF)', async () => {
+    const res = await request(app)
+      .post('/api/v1/playdates')
+      .set('Authorization', `Bearer ${hostToken}`)
+      .send({
+        hostChildId,
+        scheduledDate: new Date(Date.now() + 86400000 * 3).toISOString(),
+        time: '14:00 - 16:00',
+        activity: 'Chơi bóng rổ',
+        location: {
+          name: 'Sân bóng thiếu nhi',
+          address: 'Quận 7, TP. Hồ Chí Minh',
+        },
+        participants: [
+          { parentId: hostParentId, childId: hostChildId },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('CANNOT_INVITE_SELF');
+  });
+
+  it('20. POST /api/v1/playdates/:id/reschedule: should reject non-host requesting reschedule (403 FORBIDDEN_RESCHEDULE)', async () => {
+    const res = await request(app)
+      .post(`/api/v1/playdates/${invitedPlaydateId}/reschedule`)
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({
+        newDate: new Date(Date.now() + 86400000 * 10).toISOString(),
+        newStartTime: '09:00 - 11:00',
+        reason: 'Guest wants to change time',
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('FORBIDDEN_RESCHEDULE');
+  });
+
+  it('21. PUT /api/v1/playdates/:id/respond: should reject participation when Free quota exceeded (403 QUOTA_EXCEEDED)', async () => {
+    let guestChild = await Child.findOne({ parentId: guestParentId });
+    if (!guestChild) {
+      guestChild = await Child.create({
+        parentId: guestParentId,
+        displayName: 'Bé Guest',
+        dateOfBirth: new Date('2021-01-01'),
+        gender: 'boy',
+      });
+    }
+
+    // Create a new playdate where guest is invited
+    const newPlaydate = await Playdate.create({
+      hostParentId,
+      hostChildId,
+      scheduledDate: new Date(Date.now() + 86400000 * 4),
+      time: '15:00 - 17:00',
+      activity: 'Đá cầu',
+      location: { name: 'Công viên', address: 'Quận 1' },
+      participants: [
+        { parentId: guestParentId, childId: guestChild._id, status: 'pending' },
+      ],
+      status: 'upcoming',
+    });
+
+    // Artificially max out guest's participation quota
+    const yearMonth = new Date().toISOString().slice(0, 7);
+    await UsageQuota.findOneAndUpdate(
+      { parentId: guestParentId, periodType: 'monthly', periodValue: yearMonth },
+      { $set: { 'counters.playdatesParticipated': 3 } },
+      { upsert: true }
+    );
+
+    const res = await request(app)
+      .put(`/api/v1/playdates/${newPlaydate._id}/respond`)
+      .set('Authorization', `Bearer ${guestToken}`)
+      .send({ status: 'accepted' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('QUOTA_EXCEEDED');
   });
 });

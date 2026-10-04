@@ -1,21 +1,12 @@
 import playdateRepository from './playdate.repository.js';
+import rescheduleRepository from './reschedule.repository.js';
 import parentService from '../parent/parent.service.js';
-import Child from '../child/child.model.js';
-import Connection from '../connection/connection.model.js';
-import { CONNECTION_STATUS } from '../connection/connection.constants.js';
-import Subscription from '../subscription/subscription.model.js';
-import {
-  SUBSCRIPTION_PLAN_CODES,
-  SUBSCRIPTION_STATUS,
-  QUOTA_PERIOD_TYPES,
-} from '../subscription/subscription.constants.js';
-import UsageQuota from '../subscription/usage-quota.model.js';
-import Conversation from '../chat/conversation.model.js';
-import Message from '../chat/message.model.js';
-import { CONVERSATION_TYPES, MESSAGE_TYPES } from '../chat/chat.constants.js';
-import RescheduleRequest from './reschedule-request.model.js';
+import childService from '../child/child.service.js';
+import connectionService from '../connection/connection.service.js';
+import subscriptionService from '../subscription/subscription.service.js';
+import chatService from '../chat/chat.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
-import { PlaydateResponseDTO } from './playdate.dto.js';
+import { PlaydateResponseDTO, RescheduleResponseDTO } from './playdate.dto.js';
 import { PLAYDATE_STATUS, PARTICIPANT_STATUS, RESCHEDULE_STATUS } from './playdate.constants.js';
 
 class PlaydateService {
@@ -25,34 +16,35 @@ class PlaydateService {
   async _getParentId(userId) {
     const parent = await parentService.getParentByUserId(userId);
     if (!parent) {
-      throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
     return parent._id;
   }
 
   /**
-   * Get playdates for authenticated parent with status filter and counts
+   * Get playdates for authenticated parent with status filter, counts, and pagination
    */
   async getPlaydates(userId, query = {}) {
     const parentId = await this._getParentId(userId);
-    const playdates = await playdateRepository.findForParent(parentId, query);
+    const { playdates, pagination } = await playdateRepository.findForParent(parentId, query);
     const counts = await playdateRepository.countByStatusesForParent(parentId);
 
     return {
       playdates: PlaydateResponseDTO.toResponseList(playdates, parentId),
       counts,
+      pagination,
     };
   }
 
   /**
-   * Get single playdate detail by ID
+   * Get playdate by ID with role authorization check
    */
   async getPlaydateById(userId, id) {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
 
     const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
@@ -62,82 +54,47 @@ class PlaydateService {
     );
 
     if (!isHost && !isParticipant) {
-      throw new AppError('Bạn không có quyền xem thông tin buổi hẹn này', 403, 'FORBIDDEN');
+      throw new AppError('You do not have permission to view this playdate', 403, 'FORBIDDEN');
     }
 
     return PlaydateResponseDTO.toResponse(playdate, parentId);
   }
 
   /**
-   * Get friends of authenticated parent that can be invited to a playdate
-   */
-  async getInvitableFriends(userId) {
-    const hostParentId = await this._getParentId(userId);
-
-    const connections = await Connection.find({
-      status: CONNECTION_STATUS.ACCEPTED,
-      parents: hostParentId,
-    }).populate('parents', 'fullName avatarUrl verification location');
-
-    const friendParents = [];
-    for (const conn of connections) {
-      const other = conn.parents.find((p) => p._id.toString() !== hostParentId.toString());
-      if (other) {
-        friendParents.push(other);
-      }
-    }
-
-    const friendParentIds = friendParents.map((p) => p._id);
-    const children = await Child.find({
-      parentId: { $in: friendParentIds },
-      isArchived: false,
-    }).select('parentId displayName dateOfBirth gender interests favoriteActivities personality avatarUrl');
-
-    const childrenMap = {};
-    for (const child of children) {
-      const pid = child.parentId.toString();
-      if (!childrenMap[pid]) childrenMap[pid] = [];
-      childrenMap[pid].push({
-        id: child._id.toString(),
-        displayName: child.displayName,
-        gender: child.gender,
-        dateOfBirth: child.dateOfBirth,
-        interests: child.interests || [],
-      });
-    }
-
-    return friendParents.map((p) => ({
-      id: p._id.toString(),
-      fullName: p.fullName,
-      avatarUrl: p.avatarUrl || '',
-      isVerified: Boolean(p.verification?.isVerifiedParent),
-      location: p.location || null,
-      children: childrenMap[p._id.toString()] || [],
-    }));
-  }
-
-  /**
-   * Complete a playdate (Host only)
+   * Mark a playdate as completed (Host only, once scheduled time has arrived)
    */
   async completePlaydate(userId, id) {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
 
     const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
     if (hostParentIdStr !== parentId.toString()) {
-      throw new AppError('Chỉ người tổ chức (host) mới có quyền hoàn thành buổi hẹn chơi', 403, 'FORBIDDEN');
-    }
-
-    if (playdate.status === PLAYDATE_STATUS.CANCELLED) {
-      throw new AppError('Không thể hoàn thành buổi hẹn đã bị hủy', 400, 'INVALID_PLAYDATE_STATUS');
+      throw new AppError('Only the host can complete the playdate', 403, 'FORBIDDEN');
     }
 
     if (playdate.status === PLAYDATE_STATUS.COMPLETED) {
-      return PlaydateResponseDTO.toResponse(playdate, parentId);
+      throw new AppError('This playdate is already completed', 400, 'ALREADY_COMPLETED');
+    }
+
+    if (playdate.status === PLAYDATE_STATUS.CANCELLED) {
+      throw new AppError('Cannot complete a cancelled playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    // Verify scheduled date and time has arrived ("Date/Time arrives -> Completed")
+    const scheduled = new Date(playdate.scheduledDate);
+    if (playdate.time) {
+      const match = playdate.time.match(/^(\d{2}):(\d{2})/);
+      if (match) {
+        scheduled.setHours(parseInt(match[1], 10), parseInt(match[2], 10), 0, 0);
+      }
+    }
+
+    if (new Date() < scheduled) {
+      throw new AppError('Playdate can only be completed once the scheduled time has arrived', 400, 'CANNOT_COMPLETE_YET');
     }
 
     const updated = await playdateRepository.updateById(id, {
@@ -149,172 +106,129 @@ class PlaydateService {
   }
 
   /**
+   * Get connected friends and their children eligible for playdate invitation
+   */
+  async getInvitableFriends(userId) {
+    const parentId = await this._getParentId(userId);
+    const connections = await connectionService.getAcceptedConnections(parentId);
+
+    const friends = [];
+    for (const conn of connections) {
+      const friendParent = conn.parents.find(
+        (p) => (p._id || p).toString() !== parentId.toString()
+      );
+      if (!friendParent) continue;
+
+      const children = await childService.getChildrenByParentId(friendParent._id);
+      friends.push({
+        id: friendParent._id.toString(),
+        fullName: friendParent.fullName,
+        avatarUrl: friendParent.avatarUrl || '',
+        isVerified: Boolean(friendParent.verification?.isVerifiedParent),
+        location: friendParent.location || null,
+        children: children.map((c) => ({
+          id: c.id || c._id?.toString(),
+          displayName: c.displayName,
+          dateOfBirth: c.dateOfBirth,
+          gender: c.gender,
+          interests: c.interests || [],
+        })),
+      });
+    }
+
+    return friends;
+  }
+
+  /**
    * Create a new playdate
-   * Includes:
-   * 1. Friendship validation with invited parents
-   * 2. Monthly quota check (max 3 playdates/month for Free tier)
-   * 3. Automatic playdate chat group creation
    */
   async createPlaydate(userId, data) {
     const hostParentId = await this._getParentId(userId);
 
-    // 1. Verify host child belongs to host parent and is not archived
-    const hostChild = await Child.findOne({
-      _id: data.hostChildId,
-      parentId: hostParentId,
-      isArchived: false,
-    });
-    if (!hostChild) {
-      throw new AppError('Hồ sơ bé tham gia không hợp lệ hoặc không thuộc về bạn', 400, 'INVALID_HOST_CHILD');
+    // 1. Verify hostChildId belongs to host
+    const isHostChildValid = await childService.isChildOwnedByParent(data.hostChildId, hostParentId);
+    if (!isHostChildValid) {
+      throw new AppError('Child does not belong to your profile', 400, 'INVALID_HOST_CHILD');
     }
 
-    // 2. Friendship validation: all invited participants must be accepted friends
-    const participantsData = Array.isArray(data.participants) ? data.participants : [];
-    const invitedParentIds = [
-      ...new Set(
-        participantsData
-          .map((p) => (p.parentId?._id || p.parentId)?.toString())
-          .filter((id) => Boolean(id) && id !== hostParentId.toString())
-      ),
-    ];
+    // 2. Filter, deduplicate, and validate participants
+    const rawParticipants = Array.isArray(data.participants) ? data.participants : [];
 
-    if (invitedParentIds.length > 0) {
-      const acceptedConnections = await Connection.find({
-        status: CONNECTION_STATUS.ACCEPTED,
-        parents: hostParentId,
-      }).lean();
+    // Prevent host from adding themselves as participant
+    const hasHost = rawParticipants.some(
+      (p) => (p.parentId?._id || p.parentId)?.toString() === hostParentId.toString()
+    );
+    if (hasHost) {
+      throw new AppError('Host cannot invite themselves to a playdate', 400, 'CANNOT_INVITE_SELF');
+    }
 
-      const friendParentIdSet = new Set(
-        acceptedConnections
-          .flatMap((c) => c.parents.map((p) => p.toString()))
-          .filter((id) => id !== hostParentId.toString())
-      );
-
-      const notFriend = invitedParentIds.find((id) => !friendParentIdSet.has(id));
-      if (notFriend) {
-        throw new AppError(
-          'Chỉ có thể mời các phụ huynh đã kết nối bạn bè tham gia buổi hẹn',
-          400,
-          'NOT_CONNECTED_FRIEND'
-        );
-      }
-
-      // Verify each invited child exists and belongs to invited parent
-      for (const participant of participantsData) {
-        const pParentId = participant.parentId?._id || participant.parentId;
-        const pChildId = participant.childId?._id || participant.childId;
-        if (pChildId && pParentId) {
-          const childDoc = await Child.findOne({
-            _id: pChildId,
-            parentId: pParentId,
-            isArchived: false,
-          });
-          if (!childDoc) {
-            throw new AppError(
-              'Hồ sơ bé được mời không tồn tại hoặc không hợp lệ',
-              400,
-              'INVALID_PARTICIPANT_CHILD'
-            );
-          }
-        }
+    // Deduplicate participants by parentId
+    const seenParents = new Set();
+    const uniqueParticipants = [];
+    for (const p of rawParticipants) {
+      const pid = (p.parentId?._id || p.parentId)?.toString();
+      if (!seenParents.has(pid)) {
+        seenParents.add(pid);
+        uniqueParticipants.push(p);
       }
     }
 
-    // 3. Quota check: 3 playdates/month for Free plan
-    const activeSubscription = await Subscription.findOne({
-      parentId: hostParentId,
-      status: SUBSCRIPTION_STATUS.ACTIVE,
-    });
+    // Verify friendship and child ownership for all participants
+    for (const p of uniqueParticipants) {
+      const targetParentId = p.parentId?._id || p.parentId;
+      const targetChildId = p.childId?._id || p.childId;
 
-    const isPaidPlan =
-      activeSubscription &&
-      activeSubscription.planCode !== SUBSCRIPTION_PLAN_CODES.FREE &&
-      (!activeSubscription.endDate || new Date(activeSubscription.endDate) > new Date());
+      const isFriend = await connectionService.areParentsConnected(hostParentId, targetParentId);
+      if (!isFriend) {
+        throw new AppError('Only connected friends can be invited to a playdate', 400, 'NOT_CONNECTED_FRIEND');
+      }
 
-    const currentPeriod = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-
-    if (!isPaidPlan) {
-      const usageQuota = await UsageQuota.findOne({
-        parentId: hostParentId,
-        periodType: QUOTA_PERIOD_TYPES.MONTHLY,
-        periodValue: currentPeriod,
-      });
-
-      const playdatesCreatedCount = usageQuota?.counters?.playdatesCreated || 0;
-      if (playdatesCreatedCount >= 3) {
-        throw new AppError(
-          'Bạn đã đạt giới hạn tạo 3 cuộc hẹn/tháng của gói Miễn phí. Vui lòng nâng cấp gói để tạo thêm.',
-          403,
-          'QUOTA_EXCEEDED'
-        );
+      const isParticipantChildValid = await childService.isChildOwnedByParent(targetChildId, targetParentId);
+      if (!isParticipantChildValid) {
+        throw new AppError('Invited child does not belong to the selected parent', 400, 'INVALID_PARTICIPANT_CHILD');
       }
     }
 
-    // 4. Create playdate document
-    const formattedParticipants = participantsData.map((p) => ({
+    // 3. Check and consume creation quota via SubscriptionService
+    await subscriptionService.checkAndConsumeQuota(hostParentId, 'playdateCreate');
+
+    // 4. Create playdate document with whitelisted fields
+    const formattedParticipants = uniqueParticipants.map((p) => ({
       parentId: p.parentId?._id || p.parentId,
       childId: p.childId?._id || p.childId,
       status: PARTICIPANT_STATUS.PENDING,
       invitedAt: new Date(),
     }));
 
+    const { hostChildId, scheduledDate, time, activity, location, note } = data;
+
     const playdate = await playdateRepository.create({
-      ...data,
-      participants: formattedParticipants,
       hostParentId,
+      hostChildId,
+      scheduledDate,
+      time,
+      activity,
+      location,
+      note: note || '',
+      participants: formattedParticipants,
       status: PLAYDATE_STATUS.UPCOMING,
     });
 
-    // Increment usage quota for the current month
-    await UsageQuota.findOneAndUpdate(
-      {
-        parentId: hostParentId,
-        periodType: QUOTA_PERIOD_TYPES.MONTHLY,
-        periodValue: currentPeriod,
-      },
-      {
-        $inc: { 'counters.playdatesCreated': 1 },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+    // 5. Auto-generate dedicated group chat room for the playdate
+    const participantParentIds = uniqueParticipants.map(
+      (p) => (p.parentId?._id || p.parentId)?.toString()
+    );
+    const conversation = await chatService.createPlaydateConversation(
+      playdate._id,
+      hostParentId,
+      participantParentIds,
+      data.activity
     );
 
-    // 5. Auto-generate dedicated group chat room for the playdate
-    try {
-      const allParentIds = [
-        hostParentId.toString(),
-        ...participantsData.map((p) => (p.parentId?._id || p.parentId)?.toString()),
-      ].filter(Boolean);
-      const uniqueParentIds = [...new Set(allParentIds)];
-
-      const conversation = await Conversation.create({
-        type: CONVERSATION_TYPES.PLAYDATE,
-        playdateId: playdate._id,
-        participants: uniqueParentIds,
-        isActive: true,
-      });
-
-      const initialMessage = await Message.create({
-        conversationId: conversation._id,
-        senderId: hostParentId,
-        type: MESSAGE_TYPES.SYSTEM,
-        content: `Buổi hẹn "${data.activity}" đã được tạo thành công. Các phụ huynh có thể trao đổi tại đây.`,
-      });
-
-      conversation.lastMessage = {
-        messageId: initialMessage._id,
-        senderId: hostParentId,
-        content: initialMessage.content,
-        type: MESSAGE_TYPES.SYSTEM,
-        sentAt: new Date(),
-      };
-      await conversation.save();
-
+    if (conversation) {
       await playdateRepository.updateById(playdate._id, {
         chatConversationId: conversation._id,
       });
-    } catch (chatError) {
-      // Chat room creation should not crash playdate creation, but log warning
-      // logger can record if needed
     }
 
     const populated = await playdateRepository.findById(playdate._id);
@@ -322,60 +236,69 @@ class PlaydateService {
   }
 
   /**
-   * Cancel a playdate (Host only)
+   * Cancel an upcoming playdate (Host only)
    */
   async cancelPlaydate(userId, id, reason = '') {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
 
     const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
     if (hostParentIdStr !== parentId.toString()) {
-      throw new AppError('Chỉ người tổ chức (host) mới có quyền hủy buổi hẹn', 403, 'FORBIDDEN');
+      throw new AppError('Only the host can cancel the playdate', 403, 'FORBIDDEN');
+    }
+
+    if (playdate.status === PLAYDATE_STATUS.CANCELLED) {
+      throw new AppError('This playdate is already cancelled', 400, 'ALREADY_CANCELLED');
     }
 
     if (playdate.status === PLAYDATE_STATUS.COMPLETED) {
-      throw new AppError('Không thể hủy buổi hẹn đã hoàn thành', 400, 'INVALID_PLAYDATE_STATUS');
+      throw new AppError('Cannot cancel a completed playdate', 400, 'INVALID_PLAYDATE_STATUS');
     }
 
     const updated = await playdateRepository.updateById(id, {
       status: PLAYDATE_STATUS.CANCELLED,
       cancellation: {
         cancelledBy: parentId,
-        reason: reason || 'Hủy bởi người tổ chức',
+        reason: reason || 'Cancelled by host',
         cancelledAt: new Date(),
       },
     });
+
+    // Cancel all pending reschedule requests for this playdate
+    await rescheduleRepository.updateMany(
+      { playdateId: id, status: RESCHEDULE_STATUS.PENDING },
+      { $set: { status: RESCHEDULE_STATUS.CANCELLED, resolvedAt: new Date() } }
+    );
 
     return PlaydateResponseDTO.toResponse(updated, parentId);
   }
 
   /**
    * Respond to a playdate invitation (RSVP: accept / decline)
-   * PUT /api/v1/playdates/:id/respond
    */
   async respondToPlaydate(userId, id, status) {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
 
     if (playdate.status === PLAYDATE_STATUS.CANCELLED) {
-      throw new AppError('Không thể phản hồi buổi hẹn đã bị hủy', 400, 'CANNOT_RESPOND_CANCELLED');
+      throw new AppError('Cannot respond to a cancelled playdate', 400, 'CANNOT_RESPOND_CANCELLED');
     }
 
     if (playdate.status === PLAYDATE_STATUS.COMPLETED) {
-      throw new AppError('Không thể phản hồi buổi hẹn đã hoàn thành', 400, 'CANNOT_RESPOND_COMPLETED');
+      throw new AppError('Cannot respond to a completed playdate', 400, 'CANNOT_RESPOND_COMPLETED');
     }
 
     const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
     if (hostParentIdStr === parentId.toString()) {
-      throw new AppError('Người tổ chức không cần phản hồi lời mời của chính mình', 400, 'HOST_CANNOT_RSVP');
+      throw new AppError('Host does not need to RSVP to their own playdate', 400, 'HOST_CANNOT_RSVP');
     }
 
     const participant = playdate.participants?.find(
@@ -383,7 +306,16 @@ class PlaydateService {
     );
 
     if (!participant) {
-      throw new AppError('Bạn không có trong danh sách được mời của buổi hẹn này', 403, 'NOT_INVITED');
+      throw new AppError('You are not invited to this playdate', 403, 'NOT_INVITED');
+    }
+
+    if (participant.status !== PARTICIPANT_STATUS.PENDING) {
+      throw new AppError('You have already responded to this invitation', 400, 'ALREADY_RESPONDED');
+    }
+
+    // Check participation quota if accepting (Free plan limit: 3/month)
+    if (status === PARTICIPANT_STATUS.ACCEPTED) {
+      await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate');
     }
 
     // Update participant RSVP status
@@ -397,59 +329,51 @@ class PlaydateService {
   }
 
   /**
-   * Create a Reschedule Request for an upcoming playdate
-   * POST /api/v1/playdates/:id/reschedule
+   * Propose a reschedule for an upcoming playdate (Host only per Section 6.2 spec)
    */
   async createRescheduleRequest(userId, id, { newDate, newStartTime, newLocation, reason = '' }) {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
 
     if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
-      throw new AppError('Chỉ có thể đề xuất đổi lịch cho buổi hẹn sắp diễn ra', 400, 'INVALID_PLAYDATE_STATUS_FOR_RESCHEDULE');
+      throw new AppError('Can only reschedule upcoming playdates', 400, 'INVALID_PLAYDATE_STATUS_FOR_RESCHEDULE');
     }
 
     const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
     const isHost = hostParentIdStr === parentId.toString();
-    const isAcceptedParticipant = playdate.participants?.some(
-      (p) =>
-        (p.parentId?._id || p.parentId)?.toString() === parentId.toString() &&
-        p.status === PARTICIPANT_STATUS.ACCEPTED
+
+    // Section 6.2 specification: "Host -> Reschedule"
+    if (!isHost) {
+      throw new AppError('Only the host can propose a reschedule', 403, 'FORBIDDEN_RESCHEDULE');
+    }
+
+    // Cancel any previous pending reschedule requests for this playdate
+    await rescheduleRepository.updateMany(
+      { playdateId: id, status: RESCHEDULE_STATUS.PENDING },
+      { $set: { status: RESCHEDULE_STATUS.CANCELLED, resolvedAt: new Date() } }
     );
 
-    if (!isHost && !isAcceptedParticipant) {
-      throw new AppError('Chỉ người tổ chức hoặc phụ huynh đã đồng ý tham gia mới có quyền đề xuất đổi lịch', 403, 'FORBIDDEN_RESCHEDULE');
-    }
-
-    // Check if there is already an active pending reschedule request
-    const existingPending = await RescheduleRequest.findOne({
-      playdateId: id,
-      status: RESCHEDULE_STATUS.PENDING,
-    });
-    if (existingPending) {
-      throw new AppError('Đang có một đề xuất đổi lịch chờ phản hồi cho buổi hẹn này', 400, 'ACTIVE_RESCHEDULE_EXISTS');
-    }
-
-    // Section 6.2 rule: All currently Accepted participants must vote (plus host if host did not propose)
-    const requiredParentIds = [];
-    if (!isHost) {
-      requiredParentIds.push(hostParentIdStr);
-    }
-    for (const p of playdate.participants || []) {
-      const pidStr = (p.parentId?._id || p.parentId)?.toString();
-      if (p.status === PARTICIPANT_STATUS.ACCEPTED && pidStr !== parentId.toString()) {
-        requiredParentIds.push(pidStr);
-      }
-    }
+    // Identify participants who have accepted the current playdate
+    const acceptedParticipants = (playdate.participants || []).filter(
+      (p) => p.status === PARTICIPANT_STATUS.ACCEPTED
+    );
 
     let initialStatus = RESCHEDULE_STATUS.PENDING;
     let resolvedAt = null;
 
-    // If no other accepted participants need to vote, immediately apply the reschedule
-    if (requiredParentIds.length === 0) {
+    // Build consensus voters list (only accepted participants need to vote)
+    const responses = acceptedParticipants.map((p) => ({
+      parentId: p.parentId?._id || p.parentId,
+      status: PARTICIPANT_STATUS.PENDING,
+      respondedAt: null,
+    }));
+
+    // If there are no accepted participants yet, auto-apply the new schedule immediately
+    if (responses.length === 0) {
       initialStatus = RESCHEDULE_STATUS.ACCEPTED;
       resolvedAt = new Date();
 
@@ -463,44 +387,41 @@ class PlaydateService {
       await playdateRepository.updateById(id, updateFields);
     }
 
-    const responses = requiredParentIds.map((pid) => ({
-      parentId: pid,
-      status: PARTICIPANT_STATUS.PENDING,
-      respondedAt: null,
-    }));
-
-    const rescheduleReq = await RescheduleRequest.create({
+    const rescheduleReq = await rescheduleRepository.create({
       playdateId: id,
       requestedBy: parentId,
       newDate: new Date(newDate),
       newStartTime,
-      newLocation: newLocation || null,
+      newLocation: newLocation && newLocation.name ? newLocation : playdate.location,
       reason: reason || '',
       status: initialStatus,
       responses,
       resolvedAt,
     });
 
-    const populatedReq = await RescheduleRequest.findById(rescheduleReq._id)
-      .populate('requestedBy', 'fullName avatarUrl verification')
-      .populate('responses.parentId', 'fullName avatarUrl verification');
+    const populatedReq = await rescheduleRepository.findById(rescheduleReq._id);
+    const updatedPlaydate = await playdateRepository.findById(id);
 
     return {
-      rescheduleRequest: populatedReq,
+      rescheduleRequest: RescheduleResponseDTO.toResponse(populatedReq),
       isAutoApplied: initialStatus === RESCHEDULE_STATUS.ACCEPTED,
+      playdate: PlaydateResponseDTO.toResponse(updatedPlaydate, parentId),
     };
   }
 
   /**
-   * Vote on a pending reschedule request (Accept or Decline)
-   * PUT /api/v1/playdates/:id/reschedule/vote
+   * Vote on a pending reschedule request (Atomic update)
    */
   async voteRescheduleRequest(userId, id, { requestId, status }) {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
+    }
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Can only vote on upcoming playdates', 400, 'INVALID_PLAYDATE_STATUS');
     }
 
     const query = {
@@ -511,80 +432,102 @@ class PlaydateService {
       query._id = requestId;
     }
 
-    const rescheduleReq = await RescheduleRequest.findOne(query).sort({ createdAt: -1 });
-    if (!rescheduleReq) {
-      throw new AppError('Không tìm thấy đề xuất đổi lịch đang chờ phản hồi', 404, 'RESCHEDULE_NOT_FOUND');
+    const existingReq = await rescheduleRepository.findOne(query);
+    if (!existingReq) {
+      throw new AppError('No pending reschedule request found to vote on', 404, 'RESCHEDULE_NOT_FOUND');
     }
 
-    const responseEntry = rescheduleReq.responses?.find(
-      (r) => r.parentId.toString() === parentId.toString()
+    // Atomic update of the individual participant's vote
+    const updatedReq = await rescheduleRepository.findOneAndUpdate(
+      {
+        _id: existingReq._id,
+        status: RESCHEDULE_STATUS.PENDING,
+        responses: {
+          $elemMatch: {
+            parentId,
+            status: PARTICIPANT_STATUS.PENDING,
+          },
+        },
+      },
+      {
+        $set: {
+          'responses.$.status': status,
+          'responses.$.respondedAt': new Date(),
+        },
+      },
+      { new: true }
     );
 
-    if (!responseEntry) {
-      throw new AppError('Bạn không có quyền bỏ phiếu cho đề xuất đổi lịch này', 403, 'NOT_AUTHORIZED_TO_VOTE');
+    if (!updatedReq) {
+      const isVoter = existingReq.responses?.some(
+        (r) => (r.parentId?._id || r.parentId)?.toString() === parentId.toString()
+      );
+      if (!isVoter) {
+        throw new AppError('You do not have permission to vote on this reschedule request', 403, 'NOT_AUTHORIZED_TO_VOTE');
+      }
+      throw new AppError('You have already voted or this request is already resolved', 400, 'ALREADY_VOTED');
     }
-
-    responseEntry.status = status;
-    responseEntry.respondedAt = new Date();
 
     // Section 6.2 rule: If ANY participant declines, request is declined and old schedule kept
     if (status === PARTICIPANT_STATUS.DECLINED) {
-      rescheduleReq.status = RESCHEDULE_STATUS.DECLINED;
-      rescheduleReq.resolvedAt = new Date();
+      updatedReq.status = RESCHEDULE_STATUS.DECLINED;
+      updatedReq.resolvedAt = new Date();
+      await updatedReq.save();
     } else if (status === PARTICIPANT_STATUS.ACCEPTED) {
       // Check if ALL required voters accepted
-      const allAccepted = rescheduleReq.responses.every(
+      const allAccepted = updatedReq.responses.every(
         (r) => r.status === PARTICIPANT_STATUS.ACCEPTED
       );
 
       if (allAccepted) {
-        rescheduleReq.status = RESCHEDULE_STATUS.ACCEPTED;
-        rescheduleReq.resolvedAt = new Date();
+        updatedReq.status = RESCHEDULE_STATUS.ACCEPTED;
+        updatedReq.resolvedAt = new Date();
+        await updatedReq.save();
 
         // Update playdate schedule
         const updateFields = {
-          scheduledDate: rescheduleReq.newDate,
-          time: rescheduleReq.newStartTime,
+          scheduledDate: updatedReq.newDate,
+          time: updatedReq.newStartTime,
         };
-        if (rescheduleReq.newLocation && rescheduleReq.newLocation.name) {
-          updateFields.location = rescheduleReq.newLocation;
+        if (updatedReq.newLocation && updatedReq.newLocation.name) {
+          updateFields.location = updatedReq.newLocation;
         }
         await playdateRepository.updateById(id, updateFields);
       }
     }
 
-    await rescheduleReq.save();
-
-    const populatedReq = await RescheduleRequest.findById(rescheduleReq._id)
-      .populate('requestedBy', 'fullName avatarUrl verification')
-      .populate('responses.parentId', 'fullName avatarUrl verification');
-
+    const populatedReq = await rescheduleRepository.findById(updatedReq._id);
     const updatedPlaydate = await playdateRepository.findById(id);
 
     return {
-      rescheduleRequest: populatedReq,
+      rescheduleRequest: RescheduleResponseDTO.toResponse(populatedReq),
       playdate: PlaydateResponseDTO.toResponse(updatedPlaydate, parentId),
     };
   }
 
   /**
    * Get active or latest reschedule request for a playdate
-   * GET /api/v1/playdates/:id/reschedule
    */
   async getRescheduleRequest(userId, id) {
     const parentId = await this._getParentId(userId);
     const playdate = await playdateRepository.findById(id);
 
     if (!playdate) {
-      throw new AppError('Không tìm thấy buổi hẹn chơi', 404, 'PLAYDATE_NOT_FOUND');
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
 
-    const rescheduleReq = await RescheduleRequest.findOne({ playdateId: id })
-      .sort({ createdAt: -1 })
-      .populate('requestedBy', 'fullName avatarUrl verification')
-      .populate('responses.parentId', 'fullName avatarUrl verification');
+    const hostParentIdStr = (playdate.hostParentId?._id || playdate.hostParentId)?.toString();
+    const isHost = hostParentIdStr === parentId.toString();
+    const isParticipant = playdate.participants?.some(
+      (p) => (p.parentId?._id || p.parentId)?.toString() === parentId.toString()
+    );
 
-    return rescheduleReq;
+    if (!isHost && !isParticipant) {
+      throw new AppError('You do not have permission to view this playdate information', 403, 'FORBIDDEN');
+    }
+
+    const rescheduleReq = await rescheduleRepository.findLatestByPlaydateId(id);
+    return RescheduleResponseDTO.toResponse(rescheduleReq);
   }
 }
 

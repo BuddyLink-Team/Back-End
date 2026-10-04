@@ -1,6 +1,5 @@
 import childRepository from './child.repository.js';
 import parentService from '../parent/parent.service.js';
-import subscriptionService from '../subscription/subscription.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { ChildResponseDTO } from './child.dto.js';
 
@@ -11,7 +10,7 @@ class ChildService {
   async _getParentId(userId) {
     const parent = await parentService.getParentByUserId(userId);
     if (!parent) {
-      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+      throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
     }
     return parent._id;
   }
@@ -21,9 +20,6 @@ class ChildService {
    */
   async createChild(userId, childData) {
     const parentId = await this._getParentId(userId);
-
-    // Enforce subscription quota on child profiles count
-    await subscriptionService.checkChildProfileQuota(parentId);
 
     const child = await childRepository.create({
       ...childData,
@@ -48,9 +44,26 @@ class ChildService {
   async getChildById(id) {
     const child = await childRepository.findById(id);
     if (!child) {
-      throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
+      throw new AppError('Hồ sơ trẻ không tồn tại', 404, 'CHILD_NOT_FOUND');
     }
     return ChildResponseDTO.toResponse(child);
+  }
+
+  /**
+   * Get all active children belonging to a parent ID directly
+   */
+  async getChildrenByParentId(parentId) {
+    const children = await childRepository.findByParentId(parentId);
+    return ChildResponseDTO.toResponseList(children);
+  }
+
+  /**
+   * Check if a child belongs to a specific parent
+   */
+  async isChildOwnedByParent(childId, parentId) {
+    const child = await childRepository.findById(childId);
+    if (!child) return false;
+    return child.parentId?.toString() === parentId.toString();
   }
 
   /**
@@ -61,7 +74,7 @@ class ChildService {
 
     const updatedChild = await childRepository.updateById(id, parentId, updateData);
     if (!updatedChild) {
-      throw new AppError('Child not found or you are not authorized to update this profile', 404, 'CHILD_NOT_FOUND');
+      throw new AppError('Không tìm thấy bé hoặc bạn không có quyền chỉnh sửa', 404, 'CHILD_NOT_FOUND');
     }
 
     return ChildResponseDTO.toResponse(updatedChild);
@@ -75,10 +88,10 @@ class ChildService {
 
     const deletedChild = await childRepository.softDeleteById(id, parentId);
     if (!deletedChild) {
-      throw new AppError('Child not found or you are not authorized to delete this profile', 404, 'CHILD_NOT_FOUND');
+      throw new AppError('Không tìm thấy bé hoặc bạn không có quyền xóa', 404, 'CHILD_NOT_FOUND');
     }
 
-    return { message: 'Child profile deleted successfully' };
+    return { message: 'Xóa hồ sơ bé thành công' };
   }
 
   /**

@@ -4,11 +4,12 @@ import { successResponse } from '../../shared/response/index.js';
 class PlaydateController {
   /**
    * GET /api/v1/playdates?status=...
+   * Retrieve playdates list with counts and pagination metadata
    */
   async getPlaydates(req, res, next) {
     try {
       const data = await playdateService.getPlaydates(req.userId, req.query);
-      return successResponse(res, data, 'Lấy danh sách buổi hẹn chơi thành công', 200);
+      return successResponse(res, data, 'Playdates list retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -16,11 +17,12 @@ class PlaydateController {
 
   /**
    * GET /api/v1/playdates/:id
+   * Retrieve single playdate detail
    */
   async getPlaydateById(req, res, next) {
     try {
       const playdate = await playdateService.getPlaydateById(req.userId, req.params.id);
-      return successResponse(res, playdate, 'Lấy thông tin chi tiết buổi hẹn thành công', 200);
+      return successResponse(res, playdate, 'Playdate details retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -28,11 +30,12 @@ class PlaydateController {
 
   /**
    * GET /api/v1/playdates/friends
+   * Retrieve connected friends eligible for playdate invitation
    */
   async getInvitableFriends(req, res, next) {
     try {
       const friends = await playdateService.getInvitableFriends(req.userId);
-      return successResponse(res, friends, 'Lấy danh sách bạn bè kết nối thành công', 200);
+      return successResponse(res, friends, 'Connected friends retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -40,11 +43,12 @@ class PlaydateController {
 
   /**
    * POST /api/v1/playdates
+   * Create a new playdate
    */
   async createPlaydate(req, res, next) {
     try {
       const playdate = await playdateService.createPlaydate(req.userId, req.body);
-      return successResponse(res, playdate, 'Tạo buổi hẹn chơi thành công', 201);
+      return successResponse(res, playdate, 'Playdate created successfully', 201);
     } catch (error) {
       return next(error);
     }
@@ -52,12 +56,12 @@ class PlaydateController {
 
   /**
    * PATCH /api/v1/playdates/:id/complete
-   * Chuyển trạng thái sự kiện sang completed khi host nhấn complete
+   * Mark playdate as completed by host once scheduled time has arrived
    */
   async completePlaydate(req, res, next) {
     try {
       const playdate = await playdateService.completePlaydate(req.userId, req.params.id);
-      return successResponse(res, playdate, 'Đã chuyển trạng thái sự kiện sang hoàn thành', 200);
+      return successResponse(res, playdate, 'Playdate marked as completed', 200);
     } catch (error) {
       return next(error);
     }
@@ -65,11 +69,12 @@ class PlaydateController {
 
   /**
    * PATCH /api/v1/playdates/:id/cancel
+   * Cancel an upcoming playdate
    */
   async cancelPlaydate(req, res, next) {
     try {
       const playdate = await playdateService.cancelPlaydate(req.userId, req.params.id, req.body?.reason);
-      return successResponse(res, playdate, 'Hủy buổi hẹn chơi thành công', 200);
+      return successResponse(res, playdate, 'Playdate cancelled successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -77,7 +82,7 @@ class PlaydateController {
 
   /**
    * PUT /api/v1/playdates/:id/respond
-   * Phản hồi lời mời (RSVP: accepted / declined)
+   * Respond to playdate invitation (RSVP: accepted / declined)
    */
   async respondToPlaydate(req, res, next) {
     try {
@@ -86,7 +91,7 @@ class PlaydateController {
         req.params.id,
         req.body.status
       );
-      return successResponse(res, playdate, 'Phản hồi lời mời thành công', 200);
+      return successResponse(res, playdate, 'RSVP response recorded successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -94,7 +99,7 @@ class PlaydateController {
 
   /**
    * POST /api/v1/playdates/:id/reschedule
-   * Tạo đề xuất đổi lịch
+   * Propose a reschedule for an upcoming playdate
    */
   async createRescheduleRequest(req, res, next) {
     try {
@@ -107,8 +112,8 @@ class PlaydateController {
         res,
         result,
         result.isAutoApplied
-          ? 'Đã cập nhật lịch hẹn mới thành công'
-          : 'Đã gửi đề xuất đổi lịch đến các phụ huynh tham gia',
+          ? 'New schedule updated and auto-applied'
+          : 'Reschedule request sent to participants',
         201
       );
     } catch (error) {
@@ -118,7 +123,7 @@ class PlaydateController {
 
   /**
    * PUT /api/v1/playdates/:id/reschedule/vote
-   * Bỏ phiếu đồng ý hoặc từ chối đề xuất đổi lịch
+   * Vote on a pending reschedule request
    */
   async voteRescheduleRequest(req, res, next) {
     try {
@@ -127,7 +132,7 @@ class PlaydateController {
         req.params.id,
         req.body
       );
-      return successResponse(res, result, 'Bỏ phiếu đổi lịch thành công', 200);
+      return successResponse(res, result, 'Reschedule vote recorded successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -135,12 +140,12 @@ class PlaydateController {
 
   /**
    * GET /api/v1/playdates/:id/reschedule
-   * Lấy đề xuất đổi lịch mới nhất của buổi hẹn
+   * Get latest reschedule request for a playdate
    */
   async getRescheduleRequest(req, res, next) {
     try {
       const result = await playdateService.getRescheduleRequest(req.userId, req.params.id);
-      return successResponse(res, result, 'Lấy thông tin đề xuất đổi lịch thành công', 200);
+      return successResponse(res, result, 'Reschedule request retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }
