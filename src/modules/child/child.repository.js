@@ -40,7 +40,7 @@ class ChildRepository {
     return Child.findOne({ _id: childId, isArchived: false })
       .populate({
         path: 'parentId',
-        select: 'fullName avatarUrl bio area city isVerifiedParent verifiedPhone verifiedEmail',
+        select: 'fullName avatarUrl bio location verification preferences',
       })
       .lean();
   }
