@@ -14,7 +14,7 @@ const router = Router();
 
 // Routes for authenticated parents
 router.use(authenticate);
-router.use(authorizeRoles(USER_ROLES.PARENT, 'PARENT', 'parent'));
+router.use(authorizeRoles(USER_ROLES.PARENT));
 
 // Profile view & update
 router.get('/me', parentController.getMyProfile);

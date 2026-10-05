@@ -4,7 +4,7 @@ import env from './env.js';
 import logger from '../shared/logger/index.js';
 import registerChatSocket from '../sockets/chat.socket.js';
 import parentService from '../modules/parent/parent.service.js';
-import User from '../modules/user/user.model.js';
+import userService from '../modules/user/user.service.js';
 
 let io = null;
 
@@ -34,7 +34,7 @@ export const initSocket = (httpServer) => {
       const userId = decoded.sub || decoded.id;
 
       // Verify user existence, active status, and non-deleted
-      const user = await User.findOne({ _id: userId, deletedAt: null }).select('-passwordHash');
+      const user = await userService.getSessionUser(userId);
       if (!user) {
         return next(new Error('Authentication error: User not found or deleted'));
       }

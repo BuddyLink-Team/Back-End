@@ -34,13 +34,12 @@ export const sendMessageValidation = [
     .optional()
     .isIn([MESSAGE_TYPES.TEXT, MESSAGE_TYPES.IMAGE, MESSAGE_TYPES.EMOJI])
     .withMessage(`type must be one of: ${[MESSAGE_TYPES.TEXT, MESSAGE_TYPES.IMAGE, MESSAGE_TYPES.EMOJI].join(', ')}`),
+  // Ownership of the URL (our Cloud Storage only) is enforced in chatService.sendMessage,
+  // which is shared by the REST and socket paths
   body('mediaUrl')
     .optional()
     .isString()
-    .isLength({ max: 2048 })
-    .withMessage('mediaUrl cannot exceed 2048 characters')
-    .isURL({ protocols: ['http', 'https'], require_protocol: true })
-    .withMessage('mediaUrl must be a valid HTTP or HTTPS URL'),
+    .withMessage('mediaUrl must be a string'),
   body().custom((value) => {
     const hasContent = value.content && value.content.trim().length > 0;
     const hasMedia = value.mediaUrl && value.mediaUrl.trim().length > 0;
@@ -63,8 +62,8 @@ export const getMessagesValidation = [
     .withMessage('limit must be an integer between 1 and 100'),
   query('before')
     .optional()
-    .isISO8601()
-    .withMessage('before must be a valid ISO8601 date string'),
+    .isMongoId()
+    .withMessage('before must be a valid message id'),
 ];
 
 export const getConversationsValidation = [

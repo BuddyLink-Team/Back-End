@@ -33,10 +33,11 @@ const conversationSchema = new mongoose.Schema(
       default: {},
     },
     // Order-independent direct conversation pair identifier "minId_maxId"
+    // Indexed only by the partial unique index below: adding `index: true` here creates a
+    // same-named non-unique "pairKey_1" first and the unique index then fails to build
     pairKey: {
       type: String,
       default: null,
-      index: true,
     },
     isActive: {
       type: Boolean,

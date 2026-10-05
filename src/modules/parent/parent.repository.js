@@ -21,6 +21,10 @@ class ParentRepository {
     );
   }
 
+  async deleteByUserId(userId) {
+    return Parent.deleteOne({ userId });
+  }
+
   async updateVerification(userId, verificationUpdates) {
     const parent = await Parent.findOne({ userId });
     if (!parent) return null;

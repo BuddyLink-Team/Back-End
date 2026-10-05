@@ -1,5 +1,7 @@
 import userService from './user.service.js';
+import authService from '../auth/auth.service.js';
 import { successResponse } from '../../shared/response/index.js';
+import { TokenPairDTO } from '../auth/auth.dto.js';
 
 class UserController {
   /**
@@ -44,12 +46,21 @@ class UserController {
   async changePassword(req, res, next) {
     try {
       const { currentPassword, newPassword, confirmNewPassword } = req.body;
-      const result = await userService.changePassword(req.userId, {
+      await userService.changePassword(req.userId, {
         currentPassword,
         newPassword,
         confirmNewPassword,
       });
-      return successResponse(res, result, 'Password changed successfully', 200);
+
+      // Sign out every other device (they may hold a stolen session) and keep this one signed in
+      const tokens = await authService.rotateAllSessions(req.userId);
+
+      return successResponse(
+        res,
+        { success: true, tokens: TokenPairDTO.toResponse(tokens) },
+        'Password changed successfully',
+        200
+      );
     } catch (error) {
       return next(error);
     }

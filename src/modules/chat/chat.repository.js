@@ -87,9 +87,12 @@ class ChatRepository {
   }
 
   /**
-   * Find messages for a conversation with pagination
+   * Find messages for a conversation with cursor pagination
    * @param {string|ObjectId} conversationId
    * @param {Object} [options]
+   * @param {number} [options.limit=50]
+   * @param {string} [options.before] - Message id cursor; returns messages older than it.
+   *   ObjectIds are unique and time-ordered, unlike createdAt which can tie within a millisecond.
    * @returns {Promise<Array>}
    */
   async findMessages(conversationId, { limit = 50, before = null } = {}) {
@@ -99,12 +102,12 @@ class ChatRepository {
     };
 
     if (before) {
-      query.createdAt = { $lt: new Date(before) };
+      query._id = { $lt: before };
     }
 
     const messages = await Message.find(query)
       .populate('senderId', 'fullName avatarUrl verification')
-      .sort({ createdAt: -1 })
+      .sort({ _id: -1 })
       .limit(parseInt(limit, 10))
       .lean();
 

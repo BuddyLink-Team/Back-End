@@ -22,7 +22,7 @@ class ChildController {
 
   async getChildById(req, res, next) {
     try {
-      const child = await childService.getChildById(req.params.id);
+      const child = await childService.getChildById(req.userId, req.params.id);
       return successResponse(res, child, 'Child profile details retrieved successfully', 200);
     } catch (error) {
       return next(error);

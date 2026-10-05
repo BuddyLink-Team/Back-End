@@ -5,6 +5,10 @@ import storageAdapter from '../../src/integrations/storage/storage.adapter.js';
 import { PNG_BUFFER } from '../helpers/imageHelper.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import { CONNECTION_STATUS } from '../../src/modules/connection/connection.constants.js';
+import parentService from '../../src/modules/parent/parent.service.js';
+import Message from '../../src/modules/chat/message.model.js';
+import { registerChatSocket } from '../../src/sockets/chat.socket.js';
+import { SOCKET_EVENTS } from '../../src/modules/chat/chat.constants.js';
 
 describe('Chat Module Integration Tests (TASK-BE-10)', () => {
   let parentTokenA = '';
@@ -247,23 +251,172 @@ describe('Chat Module Integration Tests (TASK-BE-10)', () => {
     expect(resFromB.body.data.id).toBe(conversationId);
   });
 
-  it('12. Message pagination: should support before and limit query parameters', async () => {
+  it('12. Message pagination: should support before (message id cursor) and limit query parameters', async () => {
     // Post a second message
     const msg2Res = await request(app)
       .post(`/api/v1/chat/conversations/${conversationId}/messages`)
       .set('Authorization', `Bearer ${parentTokenB}`)
       .send({ content: 'Tin nhắn thứ hai' });
     expect(msg2Res.status).toBe(201);
-    const msg2CreatedAt = msg2Res.body.data.createdAt;
+    const msg2Id = msg2Res.body.data.id;
 
-    // Fetch messages before msg2
+    // Fetch messages older than msg2
     const paginatedRes = await request(app)
-      .get(`/api/v1/chat/conversations/${conversationId}/messages?limit=1&before=${encodeURIComponent(msg2CreatedAt)}`)
+      .get(`/api/v1/chat/conversations/${conversationId}/messages?limit=1&before=${msg2Id}`)
       .set('Authorization', `Bearer ${parentTokenA}`);
 
     expect(paginatedRes.status).toBe(200);
     expect(paginatedRes.body.data.length).toBe(1);
-    expect(new Date(paginatedRes.body.data[0].createdAt).getTime()).toBeLessThan(new Date(msg2CreatedAt).getTime());
+    expect(paginatedRes.body.data[0].id).not.toBe(msg2Id);
+    expect(paginatedRes.body.data[0].id < msg2Id).toBe(true);
+
+    // A date string is no longer a valid cursor
+    const invalidCursorRes = await request(app)
+      .get(`/api/v1/chat/conversations/${conversationId}/messages?before=${encodeURIComponent(new Date().toISOString())}`)
+      .set('Authorization', `Bearer ${parentTokenA}`);
+    expect(invalidCursorRes.status).toBe(400);
+  });
+
+  it('13. mediaUrl ownership: should only accept images uploaded through our own Cloud Storage', async () => {
+    const sendWithMedia = (mediaUrl) =>
+      request(app)
+        .post(`/api/v1/chat/conversations/${conversationId}/messages`)
+        .set('Authorization', `Bearer ${parentTokenA}`)
+        .send({ type: 'image', mediaUrl });
+
+    // External https image (tracking pixel / phishing) is rejected
+    const externalRes = await sendWithMedia('https://evil.example.com/pixel.png');
+    expect(externalRes.status).toBe(400);
+    expect(externalRes.body.error.code).toBe('INVALID_MEDIA_URL');
+
+    // Image from our Cloudinary account is accepted
+    const originalCloudName = storageAdapter.cloudName;
+    storageAdapter.cloudName = 'test-cloud';
+    try {
+      const ownedRes = await sendWithMedia('https://res.cloudinary.com/test-cloud/image/upload/v1/buddylink/chat/play.png');
+      expect(ownedRes.status).toBe(201);
+      expect(ownedRes.body.data.type).toBe('image');
+
+      // Same path on another Cloudinary account is rejected
+      const otherCloudRes = await sendWithMedia('https://res.cloudinary.com/other-cloud/image/upload/v1/x.png');
+      expect(otherCloudRes.status).toBe(400);
+    } finally {
+      storageAdapter.cloudName = originalCloudName;
+    }
+
+    // Inline data URL returned by the non-production fallback upload is accepted
+    const dataUrlRes = await sendWithMedia(`data:image/png;base64,${PNG_BUFFER.toString('base64')}`);
+    expect(dataUrlRes.status).toBe(201);
+  });
+
+  it('14. Safety validation: should validate block/report payloads and reject self-report', async () => {
+    const invalidBlockRes = await request(app)
+      .post('/api/v1/safety/block')
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .send({ blockedId: 'not-an-id' });
+    expect(invalidBlockRes.status).toBe(400);
+    expect(invalidBlockRes.body.error.code).toBe('VALIDATION_ERROR');
+
+    const longReasonRes = await request(app)
+      .post('/api/v1/safety/report')
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .send({ reportedUserId: parentIdB, reason: 'x'.repeat(201) });
+    expect(longReasonRes.status).toBe(400);
+
+    const invalidTargetTypeRes = await request(app)
+      .post('/api/v1/safety/report')
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .send({ reportedUserId: parentIdB, targetType: 'anything', reason: 'Spam' });
+    expect(invalidTargetTypeRes.status).toBe(400);
+
+    const selfReportRes = await request(app)
+      .post('/api/v1/safety/report')
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .send({ reportedUserId: parentIdA, targetType: 'user', reason: 'Spam' });
+    expect(selfReportRes.status).toBe(400);
+    expect(selfReportRes.body.error.code).toBe('SELF_REPORT_NOT_ALLOWED');
+
+    const validReportRes = await request(app)
+      .post('/api/v1/safety/report')
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .send({ reportedUserId: parentIdB, targetType: 'user', reason: 'Spam', description: 'Gửi tin quảng cáo' });
+    expect(validReportRes.status).toBe(201);
+  });
+
+  describe('Socket send_message handler', () => {
+    // Minimal socket/io stubs that capture registered handlers and emitted events
+    const createIoStub = () => {
+      const emitted = [];
+      return {
+        emitted,
+        to: (room) => ({ emit: (event, payload) => emitted.push({ room, event, payload }) }),
+      };
+    };
+
+    const createSocketStub = (parent) => {
+      const handlers = {};
+      return {
+        id: 'test-socket',
+        parent,
+        parentId: parent?._id.toString(),
+        rooms: new Set(),
+        handlers,
+        on: (event, handler) => {
+          handlers[event] = handler;
+        },
+        join: () => {},
+        leave: () => {},
+        emit: () => {},
+        to: () => ({ emit: () => {} }),
+      };
+    };
+
+    it('15. should echo tempId to the sender only (ack + own room) without storing it', async () => {
+      const parentA = await parentService.getParentById(parentIdA);
+      const io = createIoStub();
+      const socket = createSocketStub(parentA);
+      registerChatSocket(io, socket);
+
+      let ack;
+      await socket.handlers[SOCKET_EVENTS.SEND_MESSAGE](
+        { conversationId, content: 'Tin gui qua socket', tempId: 'tmp-123' },
+        (response) => {
+          ack = response;
+        },
+      );
+
+      expect(ack.success).toBe(true);
+      expect(ack.data.tempId).toBe('tmp-123');
+      expect(ack.data.isMine).toBe(true);
+
+      const senderEcho = io.emitted.find(
+        ({ room, event }) => room === `parent:${parentIdA}` && event === SOCKET_EVENTS.RECEIVE_MESSAGE,
+      );
+      const recipientEcho = io.emitted.find(
+        ({ room, event }) => room === `parent:${parentIdB}` && event === SOCKET_EVENTS.RECEIVE_MESSAGE,
+      );
+      expect(senderEcho.payload.tempId).toBe('tmp-123');
+      expect(recipientEcho.payload.tempId).toBeUndefined();
+
+      const storedMessage = await Message.findById(ack.data.id).lean();
+      expect(storedMessage.tempId).toBeUndefined();
+    });
+
+    it('16. should reject non-parent sockets with PARENT_REQUIRED', async () => {
+      const socket = createSocketStub(null);
+      registerChatSocket(createIoStub(), socket);
+
+      let ack;
+      await socket.handlers[SOCKET_EVENTS.SEND_MESSAGE](
+        { conversationId, content: 'Admin khong chat duoc' },
+        (response) => {
+          ack = response;
+        },
+      );
+
+      expect(ack.success).toBe(false);
+      expect(ack.code).toBe('PARENT_REQUIRED');
+    });
   });
 });
 

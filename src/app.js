@@ -20,6 +20,10 @@ import safetyRoutes from "./modules/safety/safety.route.js";
 
 const app = express();
 
+// Behind a reverse proxy, trust X-Forwarded-For so req.ip (used by every rate limiter)
+// is the real client IP instead of the proxy's shared IP
+app.set("trust proxy", env.TRUST_PROXY);
+
 // Security Headers
 app.use(helmet());
 

@@ -11,7 +11,7 @@ class ChatController {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
       }
       const conversations = await chatService.getUserConversations(parent, req.query);
       const data = ChatDTO.toConversationListResponse(conversations, parent._id);
@@ -26,7 +26,7 @@ class ChatController {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
       }
       const conversation = await chatService.getConversationById(parent, req.params.conversationId);
       const data = ChatDTO.toConversationResponse(conversation, parent._id);
@@ -42,7 +42,7 @@ class ChatController {
       const { targetParentId } = req.body;
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
       }
       const conversation = await chatService.getOrCreateDirectConversation(parent, targetParentId);
       const data = ChatDTO.toConversationResponse(conversation, parent._id);
@@ -57,7 +57,7 @@ class ChatController {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
       }
       const messages = await chatService.getMessages(parent, req.params.conversationId, req.query);
       const data = ChatDTO.toMessageListResponse(messages, parent._id);
@@ -72,7 +72,7 @@ class ChatController {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
       }
       const { content, type, mediaUrl } = req.body;
       const result = await chatService.sendMessage(parent, req.params.conversationId, {
@@ -98,7 +98,7 @@ class ChatController {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        throw new AppError('Hồ sơ phụ huynh không tồn tại', 404, 'PARENT_NOT_FOUND');
+        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
       }
       const result = await chatService.markAsRead(parent, req.params.conversationId);
 

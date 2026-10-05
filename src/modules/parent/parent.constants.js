@@ -23,3 +23,11 @@ export const CONNECTION_PRIVACY = Object.freeze({
 export const MESSAGE_PRIVACY = Object.freeze({
   CONNECTED_ONLY: 'connected_only',
 });
+
+// Business limits for matching preferences
+export const PREFERENCE_LIMITS = Object.freeze({
+  MIN_DISTANCE_KM: 1,
+  MAX_DISTANCE_KM: 100,
+  MIN_CHILD_AGE: 0,
+  MAX_CHILD_AGE: 18,
+});

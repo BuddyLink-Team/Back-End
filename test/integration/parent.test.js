@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
+import { describe, it, expect, beforeAll, jest } from "@jest/globals";
 import request from "supertest";
 import app from "../../src/app.js";
 import storageAdapter from "../../src/integrations/storage/storage.adapter.js";

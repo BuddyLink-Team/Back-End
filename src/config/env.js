@@ -7,6 +7,18 @@ const env = {
   PORT: parseInt(process.env.PORT, 10) || 5000,
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
 
+  // Business timezone used for daily/monthly quota periods (users are in Vietnam)
+  APP_TIMEZONE: process.env.APP_TIMEZONE || 'Asia/Ho_Chi_Minh',
+
+  // Number of reverse proxies in front of the app (Render/Railway/Nginx: 1).
+  // Required so req.ip (used by rate limiters) is the real client IP, not the proxy's.
+  TRUST_PROXY: process.env.TRUST_PROXY !== undefined
+    ? parseInt(process.env.TRUST_PROXY, 10) || 0
+    : process.env.NODE_ENV === 'production' ? 1 : 0,
+
+  // Refresh-token cookie SameSite: 'lax' when frontend and API share a site, 'none' when they are on
+  // different domains (requires HTTPS)
+
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/buddylink_db',
 
   JWT: {
