@@ -7,6 +7,7 @@ import logger from './shared/logger/index.js';
 import subscriptionService from './modules/subscription/subscription.service.js';
 import userService from './modules/user/user.service.js';
 import { startSubscriptionExpiryJob } from './jobs/subscription-expiry.job.js';
+import mailAdapter from './integrations/mail/mail.adapter.js';
 
 const server = http.createServer(app);
 
@@ -27,6 +28,9 @@ const startServer = async () => {
     // 4. Expire past-due paid plans now, then keep doing it on a schedule
     await subscriptionService.expireDueSubscriptions();
     startSubscriptionExpiryJob();
+
+    // Not awaited: only reports SMTP problems in the logs, never blocks startup
+    mailAdapter.verifyConnection();
 
     // 5. Start HTTP Server
     server.listen(env.PORT, () => {

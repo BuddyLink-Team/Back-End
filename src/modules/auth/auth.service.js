@@ -421,12 +421,16 @@ class AuthService {
       expiresInMinutes: OTP_CONFIG.EMAIL_EXPIRES_IN_MINUTES,
     });
 
-    await mailAdapter.sendEmailOtp({
+    const mailResult = await mailAdapter.sendEmailOtp({
       to: user.email,
       otp,
       fullName: parent?.fullName || 'Parent',
       minutes: OTP_CONFIG.EMAIL_EXPIRES_IN_MINUTES,
     });
+
+    if (!mailResult?.success) {
+      throw new AppError('Unable to send the verification email. Please try again later.', 502, 'EMAIL_SEND_FAILED');
+    }
 
     return { message: 'Email verification code sent successfully' };
   }

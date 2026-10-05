@@ -8,6 +8,7 @@ import AuthToken from '../../src/modules/auth/auth-token.model.js';
 import RefreshToken from '../../src/modules/auth/refresh-token.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { hashToken } from '../../src/shared/helpers/token.helper.js';
+import mailAdapter from '../../src/integrations/mail/mail.adapter.js';
 
 const uniqueEmail = (label) => `${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 
@@ -240,5 +241,20 @@ describe('Session transport', () => {
 
     const headerRes = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${token}`);
     expect(headerRes.status).toBe(200);
+  });
+});
+
+describe('Email OTP delivery', () => {
+  it('should report a failed email instead of claiming the code was sent', async () => {
+    const { token } = await register();
+    const sendSpy = jest
+      .spyOn(mailAdapter, '_send')
+      .mockResolvedValueOnce({ success: false, error: 'Connection timeout' });
+
+    const res = await request(app).post('/api/v1/auth/email/send-otp').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error.code).toBe('EMAIL_SEND_FAILED');
+    sendSpy.mockRestore();
   });
 });

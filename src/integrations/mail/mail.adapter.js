@@ -14,6 +14,8 @@ const escapeHtml = (value) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+const SMTP_TIMEOUT_MS = 10000;
+
 class MailAdapter {
   constructor() {
     this.transporter = null;
@@ -30,10 +32,30 @@ class MailAdapter {
           user: env.EMAIL.SMTP_USER,
           pass: env.EMAIL.SMTP_PASSWORD,
         },
+        // Fail fast instead of nodemailer's 2-minute default (e.g. when the host blocks SMTP ports)
+        connectionTimeout: SMTP_TIMEOUT_MS,
+        greetingTimeout: SMTP_TIMEOUT_MS,
+        socketTimeout: SMTP_TIMEOUT_MS,
       });
     } else {
       logger.warn(
         "SMTP configuration missing. Email will run in mock mode (logged to console).",
+      );
+    }
+  }
+
+  /**
+   * Check the SMTP connection and credentials (called once at startup so deploy logs show
+   * a misconfiguration right away).
+   */
+  async verifyConnection() {
+    if (!this.transporter || process.env.NODE_ENV === "test") return;
+    try {
+      await this.transporter.verify();
+      logger.info(`SMTP connection ready (${env.EMAIL.SMTP_HOST}:${env.EMAIL.SMTP_PORT})`);
+    } catch (error) {
+      logger.error(
+        `SMTP connection failed (${env.EMAIL.SMTP_HOST}:${env.EMAIL.SMTP_PORT}): [${error.code || "UNKNOWN"}] ${error.message}`,
       );
     }
   }
@@ -122,8 +144,7 @@ class MailAdapter {
         logger.info(`Email sent to ${to}: ${info.messageId}`);
         return { success: true, messageId: info.messageId };
       } catch (error) {
-        logger.error(`Error sending email to ${to}: ${error.message}`);
-        // Fallback gracefully without breaking test flow
+        logger.error(`Error sending email to ${to}: [${error.code || "UNKNOWN"}] ${error.message}`);
         return { success: false, error: error.message };
       }
     }
