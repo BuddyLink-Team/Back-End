@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import userRepository from './user.repository.js';
 import parentService from '../parent/parent.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
+import { USER_ROLES } from '../../shared/constants/index.js';
 import { UserProfileDTO } from './user.dto.js';
 
 class UserService {
@@ -42,14 +43,32 @@ class UserService {
   }
 
   /**
+   * Load the user attached to an authenticated request/socket (no password hash).
+   * Returns null when the user does not exist or was deleted.
+   */
+  async getSessionUser(userId) {
+    return userRepository.findActiveSessionUser(userId);
+  }
+
+  /**
+   * Hard delete a user (used to roll back a failed registration)
+   */
+  async deleteUserById(userId) {
+    return userRepository.hardDeleteById(userId);
+  }
+
+  async normalizeLegacyRoles() {
+    return userRepository.normalizeLegacyRoles();
+  }
+
+  /**
    * Unified View Profile: automatically delegates if parent, or returns standard UserProfileDTO
    */
   async getMyProfile(userId) {
     const user = await this.getUserById(userId);
-    const role = (user.role || '').toLowerCase();
 
-    if (role === 'parent') {
-      return parentService.getMyProfile(userId);
+    if (user.role === USER_ROLES.PARENT) {
+      return parentService.getMyProfile(user);
     }
 
     return UserProfileDTO.toResponse(user);
@@ -59,27 +78,37 @@ class UserService {
    * Unified Update Profile: delegates to parentService if parent, otherwise updates user fields (e.g. phone)
    */
   async updateMyProfile(userId, updateData) {
-    const user = await this.getUserById(userId);
-    const role = (user.role || '').toLowerCase();
+    let user = await this.getUserById(userId);
 
     // If phone is updated, update on User model
     if (updateData.phone !== undefined) {
       const trimmedPhone = updateData.phone ? updateData.phone.trim() : null;
-      if (trimmedPhone) {
-        const existingPhone = await this.getUserByPhone(trimmedPhone);
-        if (existingPhone && existingPhone._id.toString() !== userId.toString()) {
-          throw new AppError('Phone number is already in use', 409, 'PHONE_ALREADY_EXISTS');
+      const isPhoneChanged = (trimmedPhone || null) !== (user.phone || null);
+
+      if (isPhoneChanged) {
+        if (trimmedPhone) {
+          const existingPhone = await this.getUserByPhone(trimmedPhone);
+          if (existingPhone && existingPhone._id.toString() !== userId.toString()) {
+            throw new AppError('Phone number is already in use', 409, 'PHONE_ALREADY_EXISTS');
+          }
+        }
+        user = await this.updatePhone(userId, trimmedPhone);
+
+        // A new (unverified) number must go through OTP verification again
+        if (user.role === USER_ROLES.PARENT) {
+          await parentService.updateVerification(userId, {
+            isPhoneVerified: false,
+            isVerifiedParent: false,
+          });
         }
       }
-      await this.updatePhone(userId, trimmedPhone);
     }
 
-    if (role === 'parent') {
-      return parentService.updateProfile(userId, updateData);
+    if (user.role === USER_ROLES.PARENT) {
+      return parentService.updateProfile(user, updateData);
     }
 
-    const updatedUser = await this.getUserById(userId);
-    return UserProfileDTO.toResponse(updatedUser);
+    return UserProfileDTO.toResponse(user);
   }
 
   /**
@@ -87,9 +116,8 @@ class UserService {
    */
   async updateMyAvatar(userId, fileBuffer, mimetype) {
     const user = await this.getUserById(userId);
-    const role = (user.role || '').toLowerCase();
 
-    if (role === 'parent') {
+    if (user.role === USER_ROLES.PARENT) {
       return parentService.updateAvatar(userId, fileBuffer, mimetype);
     }
 

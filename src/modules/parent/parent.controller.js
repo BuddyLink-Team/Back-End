@@ -1,20 +1,24 @@
 import parentService from './parent.service.js';
-import { ParentProfileDTO } from './parent.dto.js';
+import userService from '../user/user.service.js';
 import { successResponse } from '../../shared/response/index.js';
 
 class ParentController {
   async getMyProfile(req, res, next) {
     try {
-      const dto = await parentService.getMyProfile(req.userId);
+      const dto = await parentService.getMyProfile(req.user);
       return successResponse(res, dto, 'Parent profile retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }
   }
 
+  /**
+   * Alias of PUT /user/me for parents: both endpoints share the same update flow
+   * (including phone change handling) so they cannot drift apart.
+   */
   async updateProfile(req, res, next) {
     try {
-      const dto = await parentService.updateProfile(req.userId, req.body);
+      const dto = await userService.updateMyProfile(req.userId, req.body);
       return successResponse(res, dto, 'Parent profile updated successfully', 200);
     } catch (error) {
       return next(error);
@@ -33,7 +37,7 @@ class ParentController {
   async updateOnboardingPreferences(req, res, next) {
     try {
       const { location, preferences } = req.body;
-      const dto = await parentService.updateOnboardingPreferences(req.userId, {
+      const dto = await parentService.updateOnboardingPreferences(req.user, {
         location,
         preferences,
       });

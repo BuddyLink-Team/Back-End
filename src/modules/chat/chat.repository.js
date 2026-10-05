@@ -4,13 +4,28 @@ import '../parent/parent.model.js';
 import '../playdate/playdate.model.js';
 import { CONVERSATION_TYPES } from './chat.constants.js';
 
-const PLAYDATE_POPULATE = {
+const PARENT_FIELDS = 'fullName avatarUrl verification location';
+const CHILD_FIELDS = 'displayName dateOfBirth gender interests';
+const PLAYDATE_SUMMARY_FIELDS = 'activity scheduledDate time status location';
+
+const CONVERSATION_BASE_POPULATE = [
+  { path: 'participants', select: PARENT_FIELDS },
+  { path: 'lastMessage.senderId', select: 'fullName avatarUrl' },
+];
+
+// Lightweight playdate info for conversation lists, headers and socket payloads
+const PLAYDATE_SUMMARY_POPULATE = { path: 'playdateId', select: PLAYDATE_SUMMARY_FIELDS };
+
+// Full playdate info (host + participants) for the playdate group chat detail view.
+// hostParentId, hostChildId and participants must stay selected for the nested populate to work.
+const PLAYDATE_DETAIL_POPULATE = {
   path: 'playdateId',
+  select: `${PLAYDATE_SUMMARY_FIELDS} hostParentId hostChildId participants`,
   populate: [
-    { path: 'hostParentId', select: 'fullName avatarUrl verification location' },
-    { path: 'hostChildId', select: 'displayName dateOfBirth gender interests' },
-    { path: 'participants.parentId', select: 'fullName avatarUrl verification location' },
-    { path: 'participants.childId', select: 'displayName dateOfBirth gender interests' },
+    { path: 'hostParentId', select: PARENT_FIELDS },
+    { path: 'hostChildId', select: CHILD_FIELDS },
+    { path: 'participants.parentId', select: PARENT_FIELDS },
+    { path: 'participants.childId', select: CHILD_FIELDS },
   ],
 };
 
@@ -32,9 +47,8 @@ class ChatRepository {
     }
 
     return Conversation.find(query)
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate(PLAYDATE_POPULATE)
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_SUMMARY_POPULATE)
       .sort({ updatedAt: -1 })
       .lean();
   }
@@ -46,9 +60,8 @@ class ChatRepository {
    */
   async findConversationById(conversationId) {
     return Conversation.findOne({ _id: conversationId, isActive: true })
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate(PLAYDATE_POPULATE)
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_SUMMARY_POPULATE)
       .lean();
   }
 
@@ -59,9 +72,8 @@ class ChatRepository {
    */
   async findConversationByPlaydateId(playdateId) {
     return Conversation.findOne({ playdateId, isActive: true })
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate(PLAYDATE_POPULATE)
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_DETAIL_POPULATE)
       .lean();
   }
 
@@ -92,9 +104,8 @@ class ChatRepository {
         },
       ],
     })
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'activity scheduledDate time status location')
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_SUMMARY_POPULATE)
       .lean();
   }
 
@@ -110,9 +121,12 @@ class ChatRepository {
   }
 
   /**
-   * Find messages for a conversation with pagination
+   * Find messages for a conversation with cursor pagination
    * @param {string|ObjectId} conversationId
    * @param {Object} [options]
+   * @param {number} [options.limit=50]
+   * @param {string} [options.before] - Message id cursor; returns messages older than it.
+   *   ObjectIds are unique and time-ordered, unlike createdAt which can tie within a millisecond.
    * @returns {Promise<Array>}
    */
   async findMessages(conversationId, { limit = 50, before = null } = {}) {
@@ -122,12 +136,12 @@ class ChatRepository {
     };
 
     if (before) {
-      query.createdAt = { $lt: new Date(before) };
+      query._id = { $lt: before };
     }
 
     const messages = await Message.find(query)
       .populate('senderId', 'fullName avatarUrl verification')
-      .sort({ createdAt: -1 })
+      .sort({ _id: -1 })
       .limit(parseInt(limit, 10))
       .lean();
 

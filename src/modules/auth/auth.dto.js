@@ -1,3 +1,5 @@
+import { USER_ROLES } from '../../shared/constants/index.js';
+
 /**
  * Data Transfer Objects for Authentication Module
  */
@@ -9,7 +11,7 @@ export class AuthResponseDTO {
         id: user._id?.toString() || user.id,
         email: user.email,
         phone: user.phone || null,
-        role: (user.role || 'parent').toLowerCase(),
+        role: user.role || USER_ROLES.PARENT,
       },
       parent: parent
         ? {
@@ -40,7 +42,7 @@ export class AuthUserDTO {
         id: user._id?.toString() || user.id,
         email: user.email,
         phone: user.phone || null,
-        role: (user.role || 'parent').toLowerCase(),
+        role: user.role || USER_ROLES.PARENT,
         isActive: user.isActive,
       },
       parent: parent

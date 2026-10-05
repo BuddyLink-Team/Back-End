@@ -172,6 +172,7 @@ erDiagram
         string type "phone_otp | password_reset | email_verify"
         date expiresAt "TTL Index: tự hủy khi hết hạn"
         boolean isUsed
+        int attempts "Số lần nhập sai, vô hiệu sau 5 lần"
         date createdAt
     }
 
@@ -613,6 +614,7 @@ interface IAuthToken {
   tokenHash: string; // Hash của mã OTP hoặc token ngẫu nhiên (SHA-256 / bcrypt)
   type: "phone_otp" | "password_reset" | "email_verify"; // Mục đích xác thực
   isUsed: boolean; // Trạng thái: true nếu đã xác thực thành công (Default: false)
+  attempts: number; // Số lần nhập sai mã (Default: 0). Đạt OTP_CONFIG.MAX_ATTEMPTS (5) thì mã bị vô hiệu
   expiresAt: Date; // Thời điểm hết hạn (OTP: 3-5 phút, Reset token: 15-30 phút)
   createdAt: Date;
 }

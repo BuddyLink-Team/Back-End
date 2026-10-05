@@ -1,11 +1,10 @@
 import chatRepository from './chat.repository.js';
 import parentService from '../parent/parent.service.js';
 import playdateService from '../playdate/playdate.service.js';
+import safetyService from '../safety/safety.service.js';
+import connectionService from '../connection/connection.service.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import AppError from '../../shared/exceptions/AppError.js';
-import Block from '../safety/block.model.js';
-import Connection from '../connection/connection.model.js';
-import { CONNECTION_STATUS } from '../connection/connection.constants.js';
 import { MESSAGE_PRIVACY } from '../parent/parent.constants.js';
 import { CONVERSATION_TYPES, MESSAGE_TYPES } from './chat.constants.js';
 
@@ -131,14 +130,9 @@ class ChatService {
     }
 
     // 1. Check if blocked in either direction
-    const isBlocked = await Block.findOne({
-      $or: [
-        { blockerId: currentParent._id, blockedId: targetParent._id },
-        { blockerId: targetParent._id, blockedId: currentParent._id },
-      ],
-    });
+    const isBlocked = await safetyService.isBlocked(currentParent._id, targetParent._id);
     if (isBlocked) {
-      throw new AppError('Không thể tạo cuộc trò chuyện vì người dùng đã bị chặn', 403, 'USER_BLOCKED');
+      throw new AppError('Cannot start a conversation because one of the users has blocked the other', 403, 'USER_BLOCKED');
     }
 
     // 2. Check messagePrivacy: connected_only and verify active connection
@@ -146,13 +140,9 @@ class ChatService {
     const currentPrivacy = currentParent.privacySettings?.messagePrivacy || MESSAGE_PRIVACY.CONNECTED_ONLY;
 
     if (targetPrivacy === MESSAGE_PRIVACY.CONNECTED_ONLY || currentPrivacy === MESSAGE_PRIVACY.CONNECTED_ONLY) {
-      const isConnected = await Connection.findOne({
-        parents: { $all: [currentParent._id, targetParent._id] },
-        status: CONNECTION_STATUS.ACCEPTED,
-      });
-
+      const isConnected = await connectionService.areConnected(currentParent._id, targetParent._id);
       if (!isConnected) {
-        throw new AppError('Chỉ có thể nhắn tin với người dùng đã kết nối', 403, 'CONNECTION_REQUIRED');
+        throw new AppError('You can only message parents you are connected with', 403, 'CONNECTION_REQUIRED');
       }
     }
 
@@ -227,34 +217,32 @@ class ChatService {
       .map((p) => p.toString());
 
     // Check if blocked in either direction
-    if (recipientIds.length > 0) {
-      const isBlocked = await Block.findOne({
-        $or: [
-          { blockerId: parent._id, blockedId: { $in: recipientIds } },
-          { blockerId: { $in: recipientIds }, blockedId: parent._id },
-        ],
-      });
-      if (isBlocked) {
-        throw new AppError('Không thể gửi tin nhắn vì người dùng đã bị chặn', 403, 'USER_BLOCKED');
-      }
+    const isBlocked = await safetyService.isBlockedWithAny(parent._id, recipientIds);
+    if (isBlocked) {
+      throw new AppError('Cannot send messages because one of the users has blocked the other', 403, 'USER_BLOCKED');
     }
 
     // Strict validation of payload for both HTTP and Socket
     let finalType = type || MESSAGE_TYPES.TEXT;
     const allowedUserTypes = [MESSAGE_TYPES.TEXT, MESSAGE_TYPES.IMAGE, MESSAGE_TYPES.EMOJI];
     if (!allowedUserTypes.includes(finalType)) {
-      throw new AppError('Loại tin nhắn không hợp lệ', 400, 'INVALID_MESSAGE_TYPE');
+      throw new AppError('Invalid message type', 400, 'INVALID_MESSAGE_TYPE');
+    }
+
+    // Socket payloads bypass express-validator, so check primitive types here
+    if ((content !== undefined && content !== null && typeof content !== 'string') ||
+      (mediaUrl !== undefined && mediaUrl !== null && typeof mediaUrl !== 'string')) {
+      throw new AppError('Invalid message payload', 400, 'INVALID_MESSAGE_PAYLOAD');
     }
 
     let finalContent = (content || '').trim();
     if (finalContent.length > 5000) {
-      throw new AppError('Nội dung tin nhắn không được vượt quá 5000 ký tự', 400, 'MESSAGE_TOO_LONG');
+      throw new AppError('Message content cannot exceed 5000 characters', 400, 'MESSAGE_TOO_LONG');
     }
 
-    if (mediaUrl) {
-      if (typeof mediaUrl !== 'string' || mediaUrl.length > 2048 || !/^https?:\/\/.+/i.test(mediaUrl.trim())) {
-        throw new AppError('Đường dẫn hình ảnh không hợp lệ', 400, 'INVALID_MEDIA_URL');
-      }
+    // Only accept images uploaded through our own Cloud Storage (POST /chat/upload)
+    if (mediaUrl && !storageAdapter.isOwnedMediaUrl(mediaUrl)) {
+      throw new AppError('Invalid media URL', 400, 'INVALID_MEDIA_URL');
     }
 
     if (mediaUrl && (!finalContent || finalType === MESSAGE_TYPES.IMAGE)) {
@@ -263,7 +251,7 @@ class ChatService {
     }
 
     if (!finalContent && !mediaUrl) {
-      throw new AppError('Tin nhắn không được để trống', 400, 'MESSAGE_EMPTY');
+      throw new AppError('Message cannot be empty', 400, 'MESSAGE_EMPTY');
     }
 
     // Create message document
