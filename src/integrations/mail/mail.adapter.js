@@ -2,6 +2,18 @@ import nodemailer from "nodemailer";
 import env from "../../config/env.js";
 import logger from "../../shared/logger/index.js";
 
+/**
+ * Escape user-provided text before inserting it into email HTML (e.g. a full name containing
+ * markup or links would otherwise be rendered inside our branded email)
+ */
+const escapeHtml = (value) =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 class MailAdapter {
   constructor() {
     this.transporter = null;
@@ -31,7 +43,7 @@ class MailAdapter {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
         <h2 style="color: #4F46E5; text-align: center; margin-bottom: 24px;">Xác thực tài khoản BuddyLink</h2>
-        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${fullName}</strong>,</p>
+        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${escapeHtml(fullName)}</strong>,</p>
         <p style="font-size: 15px; color: #374151; line-height: 1.6;">
           Cảm ơn bạn đã tham gia nền tảng <strong>BuddyLink</strong>! Vui lòng sử dụng mã OTP dưới đây để xác thực địa chỉ email của bạn:
         </p>
@@ -64,7 +76,7 @@ class MailAdapter {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
         <h2 style="color: #EF4444; text-align: center; margin-bottom: 24px;">Đặt lại mật khẩu BuddyLink</h2>
-        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${fullName}</strong>,</p>
+        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${escapeHtml(fullName)}</strong>,</p>
         <p style="font-size: 15px; color: #374151; line-height: 1.6;">
           Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn. Vui lòng nhập mã xác thực bên dưới để thiết lập mật khẩu mới:
         </p>

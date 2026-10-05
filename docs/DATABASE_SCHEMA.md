@@ -172,6 +172,7 @@ erDiagram
         string type "phone_otp | password_reset | email_verify"
         date expiresAt "TTL Index: tự hủy khi hết hạn"
         boolean isUsed
+        int attempts "Số lần nhập sai, vô hiệu sau 5 lần"
         date createdAt
     }
 
@@ -214,6 +215,7 @@ erDiagram
     CONNECTIONS {
         ObjectId _id PK
         ObjectId[] parents "Sorted [minId, maxId] triệt tiêu trùng 2 chiều"
+        string pairKey "minId_maxId, unique khi pending/accepted"
         ObjectId requesterId FK "Ref: parents._id"
         ObjectId recipientId FK "Ref: parents._id"
         string status "pending | accepted | declined | removed"
@@ -612,6 +614,7 @@ interface IAuthToken {
   tokenHash: string; // Hash của mã OTP hoặc token ngẫu nhiên (SHA-256 / bcrypt)
   type: "phone_otp" | "password_reset" | "email_verify"; // Mục đích xác thực
   isUsed: boolean; // Trạng thái: true nếu đã xác thực thành công (Default: false)
+  attempts: number; // Số lần nhập sai mã (Default: 0). Đạt OTP_CONFIG.MAX_ATTEMPTS (5) thì mã bị vô hiệu
   expiresAt: Date; // Thời điểm hết hạn (OTP: 3-5 phút, Reset token: 15-30 phút)
   createdAt: Date;
 }
@@ -713,6 +716,7 @@ _Ánh xạ: Mục 4.3._
 interface IConnection {
   _id: ObjectId;
   parents: [ObjectId, ObjectId]; // Mảng 2 phần tử luôn được sort [minId, maxId] để triệt tiêu bài toán đảo chiều (Reverse Duplicate)
+  pairKey: string; // `${minId}_${maxId}`, tự sinh từ parents trước khi validate; dùng làm khóa unique của cặp
   requesterId: ObjectId; // Tham chiếu parents._id gửi lời mời
   recipientId: ObjectId; // Tham chiếu parents._id nhận lời mời
   status: "pending" | "accepted" | "declined" | "removed";
@@ -726,7 +730,8 @@ interface IConnection {
 
 _Indexes:_
 
-- `{ parents: 1 }` (unique, `partialFilterExpression: { status: { $in: ["pending", "accepted"] } }` - Chống trùng 2 chiều khi đang chờ hoặc đã kết nối; cho phép gửi lại nếu bị `declined` hoặc `removed`)
+- `{ pairKey: 1 }` (unique, `partialFilterExpression: { status: { $in: ["pending", "accepted"] } }` - Chống trùng 2 chiều khi đang chờ hoặc đã kết nối; cho phép gửi lại nếu bị `declined` hoặc `removed`)
+  - ⚠️ Không đặt unique trên mảng `parents`: index trên mảng là multikey nên MongoDB kiểm tra trùng theo **từng phần tử**, khiến mỗi phụ huynh chỉ có được 1 kết nối pending/accepted.
 - `{ parents: 1, status: 1 }` (Tìm danh sách bạn bè / trạng thái quan hệ 2 chiều cực nhanh)
 - `{ recipientId: 1, status: 1 }` (Lấy danh sách lời mời kết nối đang chờ duyệt)
 - `{ requesterId: 1, createdAt: 1 }` (Kiểm tra quota gửi request trong tháng)

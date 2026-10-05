@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
+import { describe, it, expect, beforeAll, jest } from "@jest/globals";
 import request from "supertest";
 import app from "../../src/app.js";
-import cloudinaryAdapter from "../../src/integrations/storage/cloudinary.adapter.js";
+import storageAdapter from "../../src/integrations/storage/storage.adapter.js";
+import { PNG_BUFFER } from "../helpers/imageHelper.js";
 
 describe("Parent Profile Integration Flow", () => {
   let accessToken = "";
@@ -92,18 +93,16 @@ describe("Parent Profile Integration Flow", () => {
     it("should upload new avatar and update parent profile", async () => {
       // Mock Cloudinary upload to prevent real external API call in test
       const uploadSpy = jest
-        .spyOn(cloudinaryAdapter, "uploadImage")
+        .spyOn(storageAdapter, "uploadImage")
         .mockResolvedValueOnce({
           url: "https://res.cloudinary.com/test-cloud/image/upload/v12345/avatar.jpg",
           publicId: "buddylink/parents/avatars/avatar123",
         });
 
-      const fakeImageBuffer = Buffer.from("fake-image-content");
-
       const res = await request(app)
         .patch("/api/v1/parent/me/avatar")
         .set("Authorization", `Bearer ${accessToken}`)
-        .attach("avatar", fakeImageBuffer, {
+        .attach("avatar", PNG_BUFFER, {
           filename: "avatar.png",
           contentType: "image/png",
         });
@@ -128,6 +127,19 @@ describe("Parent Profile Integration Flow", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
+    });
+
+    it("should reject non-image content disguised with an image mimetype", async () => {
+      const res = await request(app)
+        .patch("/api/v1/parent/me/avatar")
+        .set("Authorization", `Bearer ${accessToken}`)
+        .attach("avatar", Buffer.from("<svg onload=alert(1)></svg> not a png"), {
+          filename: "avatar.png",
+          contentType: "image/png",
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_FILE_TYPE");
     });
   });
 

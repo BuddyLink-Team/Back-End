@@ -8,6 +8,16 @@ import {
   QUOTA_PERIOD_TYPES,
 } from './subscription.constants.js';
 import AppError from '../../shared/exceptions/AppError.js';
+import env from '../../config/env.js';
+import logger from '../../shared/logger/index.js';
+
+// Formats a date as YYYY-MM-DD in the business timezone (en-CA locale uses that order)
+const dayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: env.APP_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
 
 class SubscriptionService {
   /**
@@ -66,6 +76,13 @@ class SubscriptionService {
    */
   async getActiveSubscriptionByParentId(parentId) {
     let sub = await subscriptionRepository.findActiveByParentId(parentId);
+
+    // A paid plan past its end date is expired even if the scheduled job has not run yet
+    if (sub && sub.endDate && sub.endDate <= new Date()) {
+      await subscriptionRepository.markExpired(sub._id);
+      sub = null;
+    }
+
     if (!sub) {
       // Auto-heal by creating free subscription
       sub = await this.createFreeSubscription(parentId);
@@ -74,18 +91,40 @@ class SubscriptionService {
   }
 
   /**
-   * Helper to format current date string
+   * Expire paid subscriptions whose end date has passed and move those parents back to Free.
+   * Run periodically by the subscription expiry job.
+   * @returns {Promise<number>} Number of expired subscriptions
+   */
+  async expireDueSubscriptions(now = new Date()) {
+    const dueSubscriptions = await subscriptionRepository.findDueForExpiry(now);
+    let expiredCount = 0;
+
+    for (const subscription of dueSubscriptions) {
+      const expired = await subscriptionRepository.markExpired(subscription._id);
+      if (expired) {
+        expiredCount += 1;
+        await this.createFreeSubscription(subscription.parentId);
+      }
+    }
+
+    if (expiredCount > 0) {
+      logger.info(`Expired ${expiredCount} subscription(s) and downgraded them to Free`);
+    }
+    return expiredCount;
+  }
+
+  /**
+   * Quota period key in the business timezone (Asia/Ho_Chi_Minh by default), so daily quotas reset
+   * at local midnight rather than at 00:00 UTC (07:00 in Vietnam)
    * @param {'daily'|'monthly'} periodType
    * @param {Date} date
    */
   getPeriodValue(periodType, date = new Date()) {
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const localDay = dayFormatter.format(date); // YYYY-MM-DD
     if (periodType === QUOTA_PERIOD_TYPES.MONTHLY) {
-      return `${yyyy}-${mm}`;
+      return localDay.slice(0, 7);
     }
-    const dd = String(date.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+    return localDay;
   }
 
   /**
@@ -167,7 +206,7 @@ class SubscriptionService {
     const currentCount = await childService.countChildrenByParentId(parentId);
     if (currentCount >= limit) {
       throw new AppError(
-        `Bạn đã tạo tối đa ${limit} hồ sơ bé cho gói ${features.planCode === SUBSCRIPTION_PLAN_CODES.FREE ? 'Miễn phí' : 'hiện tại'}. Vui lòng nâng cấp lên Premium để quản lý không giới hạn số bé!`,
+        `Child profile limit reached (${limit}) for the ${features.planCode} plan. Upgrade to Premium for unlimited child profiles.`,
         403,
         'CHILD_QUOTA_EXCEEDED'
       );
@@ -228,34 +267,47 @@ class SubscriptionService {
         throw new AppError(`Unknown actionType: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
     }
 
-    // -1 signifies unlimited (Premium plan)
+    const periodValue = this.getPeriodValue(periodType);
+    const quotaExceeded = () =>
+      new AppError(
+        `Quota exceeded (${limit}/${limit}) for this feature on the current plan. Upgrade to Premium for unlimited usage.`,
+        403,
+        'QUOTA_EXCEEDED'
+      );
+
+    // -1 signifies unlimited (Premium plan); usage is still recorded for statistics
     if (limit === -1) {
       if (consume) {
-        const periodValue = this.getPeriodValue(periodType);
         await usageQuotaRepository.incrementCounter(parentId, periodType, periodValue, counterField, 1);
       }
       return { allowed: true, remaining: -1, limit: -1 };
     }
 
-    const periodValue = this.getPeriodValue(periodType);
-    const currentCounters = await usageQuotaRepository.getCounters(parentId, periodType, periodValue);
-    const currentUsed = currentCounters[counterField] || 0;
-
-    if (currentUsed >= limit) {
-      throw new AppError(
-        `Bạn đã sử dụng hết hạn mức (${currentUsed}/${limit}) cho tính năng này trong gói hiện tại. Vui lòng nâng cấp lên Premium để tiếp tục không giới hạn!`,
-        403,
-        'QUOTA_EXCEEDED'
-      );
+    if (!consume) {
+      const currentCounters = await usageQuotaRepository.getCounters(parentId, periodType, periodValue);
+      const currentUsed = currentCounters[counterField] || 0;
+      if (currentUsed >= limit) {
+        throw quotaExceeded();
+      }
+      return { allowed: true, remaining: Math.max(0, limit - currentUsed), limit };
     }
 
-    if (consume) {
-      await usageQuotaRepository.incrementCounter(parentId, periodType, periodValue, counterField, 1);
+    // Check and consume atomically so concurrent requests cannot exceed the limit
+    const updatedQuota = await usageQuotaRepository.incrementIfBelowLimit(
+      parentId,
+      periodType,
+      periodValue,
+      counterField,
+      limit
+    );
+    if (!updatedQuota) {
+      throw quotaExceeded();
     }
 
+    const used = updatedQuota.counters?.[counterField] || 0;
     return {
       allowed: true,
-      remaining: Math.max(0, limit - (currentUsed + (consume ? 1 : 0))),
+      remaining: Math.max(0, limit - used),
       limit,
     };
   }
