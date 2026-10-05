@@ -9,6 +9,7 @@ import RefreshToken from '../../src/modules/auth/refresh-token.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { hashToken } from '../../src/shared/helpers/token.helper.js';
 import mailAdapter from '../../src/integrations/mail/mail.adapter.js';
+import env from '../../src/config/env.js';
 
 const uniqueEmail = (label) => `${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 
@@ -256,5 +257,28 @@ describe('Email OTP delivery', () => {
     expect(res.status).toBe(502);
     expect(res.body.error.code).toBe('EMAIL_SEND_FAILED');
     sendSpy.mockRestore();
+  });
+
+  it('should send through the Brevo HTTP API with the verified sender', async () => {
+    const originalFetch = global.fetch;
+    env.EMAIL.BREVO_API_KEY = 'test-brevo-key';
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ messageId: '<brevo-1>' }) });
+
+    try {
+      const result = await mailAdapter._sendViaBrevo({ to: 'a@example.com', subject: 'S', html: '<p>H</p>', text: 'T' });
+
+      expect(result).toEqual({ success: true, messageId: '<brevo-1>' });
+      const [url, options] = global.fetch.mock.calls[0];
+      expect(url).toBe('https://api.brevo.com/v3/smtp/email');
+      expect(options.headers['api-key']).toBe('test-brevo-key');
+      expect(JSON.parse(options.body)).toMatchObject({ sender: { email: env.EMAIL.FROM }, to: [{ email: 'a@example.com' }] });
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'Key not found' });
+      const failed = await mailAdapter._sendViaBrevo({ to: 'a@example.com', subject: 'S', html: '', text: '' });
+      expect(failed.success).toBe(false);
+    } finally {
+      global.fetch = originalFetch;
+      env.EMAIL.BREVO_API_KEY = '';
+    }
   });
 });

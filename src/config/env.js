@@ -55,6 +55,8 @@ const env = {
     SMTP_USER: process.env.SMTP_USER || '',
     SMTP_PASSWORD: process.env.SMTP_PASSWORD || '',
     FROM: process.env.EMAIL_FROM || 'no-reply@buddylink.com',
+    // When set, emails are sent through the Brevo HTTP API (port 443) instead of SMTP
+    BREVO_API_KEY: process.env.BREVO_API_KEY || '',
   },
 
   STORAGE: {

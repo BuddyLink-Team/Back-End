@@ -15,6 +15,8 @@ const escapeHtml = (value) =>
     .replace(/'/g, "&#39;");
 
 const SMTP_TIMEOUT_MS = 10000;
+const BREVO_API_URL = "https://api.brevo.com/v3";
+const BREVO_TIMEOUT_MS = 10000;
 
 class MailAdapter {
   constructor() {
@@ -23,6 +25,11 @@ class MailAdapter {
   }
 
   initTransporter() {
+    if (env.EMAIL.BREVO_API_KEY) {
+      logger.info("Email provider: Brevo HTTP API.");
+      return;
+    }
+
     if (env.EMAIL.SMTP_HOST && env.EMAIL.SMTP_USER && env.EMAIL.SMTP_PASSWORD) {
       this.transporter = nodemailer.createTransport({
         host: env.EMAIL.SMTP_HOST,
@@ -49,7 +56,23 @@ class MailAdapter {
    * a misconfiguration right away).
    */
   async verifyConnection() {
-    if (!this.transporter || process.env.NODE_ENV === "test") return;
+    if (process.env.NODE_ENV === "test") return;
+
+    if (env.EMAIL.BREVO_API_KEY) {
+      try {
+        const response = await this._brevoRequest("/account", { method: "GET" });
+        if (response.ok) {
+          logger.info("Brevo API key is valid.");
+        } else {
+          logger.error(`Brevo API key check failed: HTTP ${response.status} ${await response.text()}`);
+        }
+      } catch (error) {
+        logger.error(`Brevo API unreachable: ${error.message}`);
+      }
+      return;
+    }
+
+    if (!this.transporter) return;
     try {
       await this.transporter.verify();
       logger.info(`SMTP connection ready (${env.EMAIL.SMTP_HOST}:${env.EMAIL.SMTP_PORT})`);
@@ -132,6 +155,10 @@ class MailAdapter {
       };
     }
 
+    if (env.EMAIL.BREVO_API_KEY) {
+      return this._sendViaBrevo({ to, subject, html, text });
+    }
+
     if (this.transporter) {
       try {
         const info = await this.transporter.sendMail({
@@ -149,9 +176,50 @@ class MailAdapter {
       }
     }
 
-    // In dev / test or when SMTP is unconfigured
+    // In dev / test or when no email provider is configured
     logger.info(`[MOCK EMAIL] To: ${to} | Subject: ${subject} | Body: ${text}`);
     return { success: true, mock: true };
+  }
+
+  _brevoRequest(path, { method, body }) {
+    return fetch(`${BREVO_API_URL}${path}`, {
+      method,
+      headers: {
+        "api-key": env.EMAIL.BREVO_API_KEY,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+    });
+  }
+
+  async _sendViaBrevo({ to, subject, html, text }) {
+    try {
+      const response = await this._brevoRequest("/smtp/email", {
+        method: "POST",
+        body: {
+          sender: { name: "BuddyLink Team", email: env.EMAIL.FROM },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          textContent: text,
+        },
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        logger.error(`Brevo failed to send email to ${to}: HTTP ${response.status} ${errorBody}`);
+        return { success: false, error: `Brevo HTTP ${response.status}` };
+      }
+
+      const { messageId } = await response.json();
+      logger.info(`Email sent to ${to} via Brevo: ${messageId}`);
+      return { success: true, messageId };
+    } catch (error) {
+      logger.error(`Error sending email to ${to} via Brevo: ${error.message}`);
+      return { success: false, error: error.message };
+    }
   }
 }
 
