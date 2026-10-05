@@ -64,6 +64,14 @@ app.use((req, res, next) => {
   next();
 });
 
+// Root & Health Check Routes
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "BuddyLink Server is running successfully!",
+  });
+});
+
 // Main API V1 Routes
 app.get("/api/v1", (req, res) => {
   res.status(200).json({
