@@ -1,11 +1,14 @@
 import { body } from "express-validator";
 
+// Emails are only trimmed and lower-cased (not normalizeEmail()): stripping Gmail dots or
+// "+tags" would map the address typed here to a different account than Google login uses.
+
 export const registerValidation = [
   body("email")
     .trim()
     .isEmail()
     .withMessage("Valid email is required")
-    .normalizeEmail(),
+    .toLowerCase(),
   body("password")
     .isLength({ min: 6 })
     .withMessage("Password must be at least 6 characters long"),
@@ -27,7 +30,7 @@ export const loginValidation = [
     .trim()
     .isEmail()
     .withMessage("Valid email is required")
-    .normalizeEmail(),
+    .toLowerCase(),
   body("password").notEmpty().withMessage("Password is required"),
 ];
 
@@ -54,6 +57,7 @@ export const verifyPhoneOtpValidation = [
   body("otp")
     .trim()
     .isLength({ min: 6, max: 6 })
+    .isNumeric({ no_symbols: true })
     .withMessage("OTP must be a 6-digit code"),
 ];
 
@@ -65,6 +69,7 @@ export const verifyEmailOtpValidation = [
   body("otp")
     .trim()
     .isLength({ min: 6, max: 6 })
+    .isNumeric({ no_symbols: true })
     .withMessage("OTP must be a 6-digit code"),
 ];
 
@@ -73,7 +78,7 @@ export const forgotPasswordValidation = [
     .trim()
     .isEmail()
     .withMessage("Valid email is required")
-    .normalizeEmail(),
+    .toLowerCase(),
 ];
 
 export const resetPasswordValidation = [
@@ -81,7 +86,7 @@ export const resetPasswordValidation = [
     .trim()
     .isEmail()
     .withMessage("Valid email is required")
-    .normalizeEmail(),
+    .toLowerCase(),
   body("token").trim().notEmpty().withMessage("Reset token/code is required"),
   body("newPassword")
     .isLength({ min: 6 })

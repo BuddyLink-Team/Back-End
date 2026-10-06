@@ -14,7 +14,7 @@ const router = Router();
 
 // Routes require authenticated parent
 router.use(authenticate);
-router.use(authorizeRoles(USER_ROLES.PARENT, 'PARENT', 'parent'));
+router.use(authorizeRoles(USER_ROLES.PARENT));
 
 router.get('/', childController.getMyChildren);
 router.post('/', validate(createChildValidation), childController.createChild);

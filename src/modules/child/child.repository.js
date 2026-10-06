@@ -5,8 +5,8 @@ class ChildRepository {
     return Child.create(childData);
   }
 
-  async findById(id) {
-    return Child.findOne({ _id: id, isArchived: false });
+  async findByIdAndParentId(id, parentId) {
+    return Child.findOne({ _id: id, parentId, isArchived: false });
   }
 
   async findByParentId(parentId) {
@@ -17,7 +17,7 @@ class ChildRepository {
     return Child.findOneAndUpdate(
       { _id: id, parentId, isArchived: false },
       { $set: updateData },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 

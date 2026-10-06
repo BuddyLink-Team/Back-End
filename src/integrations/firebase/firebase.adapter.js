@@ -16,10 +16,21 @@ async function getOrInitFirebaseAuth() {
   if (firebaseAuth) return firebaseAuth;
 
   try {
-    if (fs.existsSync(serviceAccountPath)) {
+    let serviceAccount = null;
+
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      try {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      } catch (e) {
+        logger.error(`[Firebase] Failed to parse FIREBASE_SERVICE_ACCOUNT env: ${e.message}`);
+      }
+    } else if (fs.existsSync(serviceAccountPath)) {
+      serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+    }
+
+    if (serviceAccount) {
       const { initializeApp, cert, getApps } = await import('firebase-admin/app');
       const { getAuth } = await import('firebase-admin/auth');
-      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
 
       const existingApps = getApps();
       if (existingApps.length > 0) {
@@ -34,7 +45,7 @@ async function getOrInitFirebaseAuth() {
       logger.info('[Firebase] Admin SDK initialized successfully');
       return firebaseAuth;
     } else {
-      logger.warn(`[Firebase] Service account file not found at: ${serviceAccountPath}`);
+      logger.warn(`[Firebase] Service account not found in env FIREBASE_SERVICE_ACCOUNT or at: ${serviceAccountPath}`);
     }
   } catch (error) {
     logger.warn(`[Firebase] Could not initialize Firebase Admin SDK: ${error.message}`);

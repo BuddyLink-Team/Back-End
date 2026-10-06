@@ -3,6 +3,18 @@ import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { ChildResponseDTO } from './child.dto.js';
+import { CHILD_EDITABLE_FIELDS } from './child.constants.js';
+
+/**
+ * Keep only client-editable fields so a request body cannot set parentId, isArchived, _id...
+ */
+const pickEditableFields = (data = {}) =>
+  CHILD_EDITABLE_FIELDS.reduce((picked, field) => {
+    if (data[field] !== undefined) {
+      picked[field] = data[field];
+    }
+    return picked;
+  }, {});
 
 class ChildService {
   /**
@@ -26,7 +38,7 @@ class ChildService {
     await subscriptionService.checkChildProfileQuota(parentId);
 
     const child = await childRepository.create({
-      ...childData,
+      ...pickEditableFields(childData),
       parentId,
     });
 
@@ -43,10 +55,12 @@ class ChildService {
   }
 
   /**
-   * Get child profile by ID
+   * Get one of the authenticated parent's child profiles by ID.
+   * Other parents' children are reported as not found to avoid leaking their existence.
    */
-  async getChildById(id) {
-    const child = await childRepository.findById(id);
+  async getChildById(userId, id) {
+    const parentId = await this._getParentId(userId);
+    const child = await childRepository.findByIdAndParentId(id, parentId);
     if (!child) {
       throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
     }
@@ -59,7 +73,7 @@ class ChildService {
   async updateChild(userId, id, updateData) {
     const parentId = await this._getParentId(userId);
 
-    const updatedChild = await childRepository.updateById(id, parentId, updateData);
+    const updatedChild = await childRepository.updateById(id, parentId, pickEditableFields(updateData));
     if (!updatedChild) {
       throw new AppError('Child not found or you are not authorized to update this profile', 404, 'CHILD_NOT_FOUND');
     }

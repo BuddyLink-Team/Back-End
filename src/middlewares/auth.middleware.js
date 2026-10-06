@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import env from "../config/env.js";
-import User from "../modules/user/user.model.js";
+import userService from "../modules/user/user.service.js";
 import AppError from "../shared/exceptions/AppError.js";
 import { getAccessTokenFromRequest } from "../shared/helpers/token.helper.js";
 import { TOKEN_TYPES } from "../modules/auth/auth.constants.js";
@@ -32,10 +32,7 @@ export const authenticate = async (req, _res, next) => {
       throw new AppError("Invalid access token", 401, "INVALID_ACCESS_TOKEN");
     }
 
-    const user = await User.findOne({
-      _id: decoded.sub || decoded.id,
-      deletedAt: null,
-    }).select("-passwordHash");
+    const user = await userService.getSessionUser(decoded.sub || decoded.id);
 
     if (!user) {
       throw new AppError("User not found", 401, "USER_NOT_FOUND");

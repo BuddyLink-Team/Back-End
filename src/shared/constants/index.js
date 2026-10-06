@@ -1,6 +1,6 @@
 export const USER_ROLES = Object.freeze({
-  PARENT: 'PARENT',
-  ADMIN: 'ADMIN',
+  PARENT: 'parent',
+  ADMIN: 'admin',
 });
 
 export const PAGINATION = Object.freeze({

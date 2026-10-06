@@ -25,6 +25,11 @@ const authTokenSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Failed verification attempts; the token is invalidated after OTP_CONFIG.MAX_ATTEMPTS
+    attempts: {
+      type: Number,
+      default: 0,
+    },
     expiresAt: {
       type: Date,
       required: true,

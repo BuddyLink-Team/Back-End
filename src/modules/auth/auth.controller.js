@@ -1,6 +1,5 @@
 import authService from './auth.service.js';
 import {
-  setAuthCookies,
   clearAuthCookies,
   getRefreshTokenFromRequest,
 } from '../../shared/helpers/token.helper.js';
@@ -10,9 +9,8 @@ class AuthController {
   async register(req, res, next) {
     try {
       const { fullName, email, password, phone } = req.body;
-      const { dto, tokens } = await authService.register({ fullName, email, password, phone });
+      const { dto } = await authService.register({ fullName, email, password, phone });
 
-      setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
       return successResponse(res, dto, 'User registered successfully', 201);
     } catch (error) {
       return next(error);
@@ -22,9 +20,8 @@ class AuthController {
   async googleAuth(req, res, next) {
     try {
       const { idToken } = req.body;
-      const { dto, tokens } = await authService.loginWithGoogle({ idToken });
+      const { dto } = await authService.loginWithGoogle({ idToken });
 
-      setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
       return successResponse(res, dto, 'Google authentication successful', 200);
     } catch (error) {
       return next(error);
@@ -34,9 +31,8 @@ class AuthController {
   async login(req, res, next) {
     try {
       const { email, password } = req.body;
-      const { dto, tokens } = await authService.login({ email, password });
+      const { dto } = await authService.login({ email, password });
 
-      setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
       return successResponse(res, dto, 'Login successful', 200);
     } catch (error) {
       return next(error);
@@ -46,9 +42,8 @@ class AuthController {
   async loginAdmin(req, res, next) {
     try {
       const { email, password } = req.body;
-      const { dto, tokens } = await authService.loginAdmin({ email, password });
+      const { dto } = await authService.loginAdmin({ email, password });
 
-      setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
       return successResponse(res, dto, 'Admin login successful', 200);
     } catch (error) {
       return next(error);
@@ -126,10 +121,9 @@ class AuthController {
 
   async refreshToken(req, res, next) {
     try {
-      const token = req.body?.refreshToken || getRefreshTokenFromRequest(req);
-      const { dto, tokens } = await authService.refreshToken(token);
+      const token = getRefreshTokenFromRequest(req);
+      const { dto } = await authService.refreshToken(token);
 
-      setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
       return successResponse(res, dto, 'Tokens refreshed successfully', 200);
     } catch (error) {
       return next(error);
@@ -138,7 +132,7 @@ class AuthController {
 
   async logout(req, res, next) {
     try {
-      const token = req.body?.refreshToken || getRefreshTokenFromRequest(req);
+      const token = getRefreshTokenFromRequest(req);
       const result = await authService.logout(token);
 
       clearAuthCookies(res);
