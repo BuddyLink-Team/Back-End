@@ -35,6 +35,10 @@ export const discoveryQueryValidation = [
       req.query.ageMin === undefined || parseInt(req.query.ageMin, 10) <= parseInt(value, 10)
     )
     .withMessage('Maximum age must be greater than or equal to minimum age'),
+  query('childId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid child profile ID'),
   query('interests')
     .optional()
     .isString()

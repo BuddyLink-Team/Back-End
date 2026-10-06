@@ -1,20 +1,9 @@
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
+
 /**
  * Shape discovery profile data for API responses
  */
 export class DiscoveryProfileDTO {
-  /**
-   * Calculate age in years from a date of birth
-   * @param {Date} dateOfBirth
-   * @returns {number|null}
-   */
-  static calculateAge(dateOfBirth) {
-    if (!dateOfBirth) return null;
-    const birthDate = new Date(dateOfBirth);
-    const diffMs = Date.now() - birthDate.getTime();
-    const ageDt = new Date(diffMs);
-    return Math.abs(ageDt.getUTCFullYear() - 1970);
-  }
-
   /**
    * Round distance to whole kilometers (minimum 1) so a family's exact location
    * cannot be triangulated from repeated queries.
@@ -39,7 +28,7 @@ export class DiscoveryProfileDTO {
       childId: child._id,
       parentId: parent._id,
       displayName: child.displayName,
-      age: DiscoveryProfileDTO.calculateAge(child.dateOfBirth),
+      age: calculateAgeYears(child.dateOfBirth),
       gender: child.gender,
       interests: child.interests || [],
       favoriteActivities: child.favoriteActivities || [],

@@ -114,6 +114,15 @@ class ChildService {
   }
 
   /**
+   * Active children of nearby parents for discovery (excludes swiped, applies age/interest filters)
+   * @param {Object} criteria - { parentIds, excludeChildIds, ageMin, ageMax, interests }
+   */
+  async getDiscoverableChildren(criteria) {
+    if (!criteria.parentIds || criteria.parentIds.length === 0) return [];
+    return childRepository.findDiscoverable(criteria);
+  }
+
+  /**
    * Get all active children belonging to a parent
    * @param {string|mongoose.Types.ObjectId} parentId
    */

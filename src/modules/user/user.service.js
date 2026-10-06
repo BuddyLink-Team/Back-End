@@ -53,6 +53,16 @@ class UserService {
   /**
    * Hard delete a user (used to roll back a failed registration)
    */
+  /**
+   * Keep only users whose account is active (not disabled or deleted)
+   * @param {Array<string|ObjectId>} userIds
+   * @returns {Promise<string[]>}
+   */
+  async getActiveUserIds(userIds) {
+    if (!userIds || userIds.length === 0) return [];
+    return userRepository.findActiveIdsByIds(userIds);
+  }
+
   async deleteUserById(userId) {
     return userRepository.hardDeleteById(userId);
   }

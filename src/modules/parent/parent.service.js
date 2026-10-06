@@ -75,6 +75,17 @@ class ParentService {
   async getParentById(id) {
     return parentRepository.findById(id);
   }
+
+  /**
+   * Parents visible in discovery near a point, nearest first
+   * @param {[number, number]} coordinates - [longitude, latitude]
+   * @param {number} maxDistanceMeters
+   * @param {Array<string|ObjectId>} excludeParentIds - Self and blocked parents
+   * @param {number} limit
+   */
+  async findNearbyVisibleParents(coordinates, maxDistanceMeters, excludeParentIds, limit) {
+    return parentRepository.findNearbyVisible(coordinates, maxDistanceMeters, excludeParentIds, limit);
+  }
   
   /**
    * Build the next location from a partial client update, geocoding when coordinates are absent.

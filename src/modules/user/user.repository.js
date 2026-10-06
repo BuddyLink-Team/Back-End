@@ -43,6 +43,18 @@ class UserRepository {
     return User.findOne({ _id: id, deletedAt: null }).select('-passwordHash');
   }
 
+  /**
+   * IDs (as strings) of the given users whose account is active and not deleted
+   * @param {Array<string|ObjectId>} ids
+   * @returns {Promise<string[]>}
+   */
+  async findActiveIdsByIds(ids) {
+    const users = await User.find({ _id: { $in: ids }, isActive: true, deletedAt: null })
+      .select('_id')
+      .lean();
+    return users.map((u) => u._id.toString());
+  }
+
   async hardDeleteById(id) {
     return User.deleteOne({ _id: id });
   }

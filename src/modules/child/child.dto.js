@@ -1,3 +1,5 @@
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
+
 export class ChildPublicProfileDTO {
   /**
    * Shape a child document (with populated parentId) into a safe public-facing response.
@@ -8,9 +10,7 @@ export class ChildPublicProfileDTO {
   static toResponse(child) {
     const parent = child.parentId || {};
 
-    const ageYears = child.dateOfBirth
-      ? Math.floor((Date.now() - new Date(child.dateOfBirth)) / (365.25 * 24 * 3600 * 1000))
-      : null;
+    const ageYears = calculateAgeYears(child.dateOfBirth);
 
     return {
       childId: child._id,
@@ -42,14 +42,7 @@ export class ChildResponseDTO {
   static toResponse(child) {
     if (!child) return null;
 
-    // Calculate approximate age from dateOfBirth
-    let age = null;
-    if (child.dateOfBirth) {
-      const birthDate = new Date(child.dateOfBirth);
-      const diffMs = Date.now() - birthDate.getTime();
-      const ageDt = new Date(diffMs);
-      age = Math.abs(ageDt.getUTCFullYear() - 1970);
-    }
+    const age = calculateAgeYears(child.dateOfBirth);
 
     return {
       id: child._id,
