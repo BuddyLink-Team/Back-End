@@ -56,25 +56,39 @@ class ChatRepository {
   /**
    * Find conversation by ID with populated participants
    * @param {string|ObjectId} conversationId
+   * @param {Object} [options]
+   * @param {boolean} [options.withPlaydateDetails=false] - Populate playdate host & participants
+   *   (needed by the playdate group chat detail view, too heavy for per-message broadcasts)
    * @returns {Promise<Object|null>}
    */
-  async findConversationById(conversationId) {
+  async findConversationById(conversationId, { withPlaydateDetails = false } = {}) {
     return Conversation.findOne({ _id: conversationId, isActive: true })
       .populate(CONVERSATION_BASE_POPULATE)
-      .populate(PLAYDATE_SUMMARY_POPULATE)
+      .populate(withPlaydateDetails ? PLAYDATE_DETAIL_POPULATE : PLAYDATE_SUMMARY_POPULATE)
       .lean();
   }
 
   /**
-   * Find playdate group conversation by playdateId
+   * Create the group conversation of a playdate, or replace its participants with the given list.
+   * A single atomic upsert so concurrent calls for the same playdate do not create duplicates.
    * @param {string|ObjectId} playdateId
-   * @returns {Promise<Object|null>}
+   * @param {Array<string|ObjectId>} participantIds - Host and accepted parents
+   * @returns {Promise<Object>} Conversation with playdate details populated
    */
-  async findConversationByPlaydateId(playdateId) {
-    return Conversation.findOne({ playdateId, isActive: true })
-      .populate(CONVERSATION_BASE_POPULATE)
-      .populate(PLAYDATE_DETAIL_POPULATE)
-      .lean();
+  async upsertPlaydateConversation(playdateId, participantIds) {
+    const conversation = await Conversation.findOneAndUpdate(
+      { playdateId, type: CONVERSATION_TYPES.PLAYDATE, isActive: true },
+      {
+        $set: { participants: participantIds },
+        $setOnInsert: {
+          playdateId,
+          type: CONVERSATION_TYPES.PLAYDATE,
+          isActive: true,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return this.findConversationById(conversation._id, { withPlaydateDetails: true });
   }
 
   /**
@@ -229,19 +243,6 @@ class ChatRepository {
       },
       { new: true }
     );
-  }
-
-  /**
-   * Ensure participants list has all accepted parent IDs
-   * @param {string|ObjectId} conversationId
-   * @param {Array<string|ObjectId>} participantIds
-   */
-  async syncParticipants(conversationId, participantIds) {
-    await Conversation.findByIdAndUpdate(
-      conversationId,
-      { $addToSet: { participants: { $each: participantIds } } }
-    );
-    return this.findConversationById(conversationId);
   }
 }
 

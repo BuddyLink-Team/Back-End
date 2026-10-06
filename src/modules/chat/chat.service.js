@@ -10,7 +10,8 @@ import { CONVERSATION_TYPES, MESSAGE_TYPES } from './chat.constants.js';
 
 class ChatService {
   /**
-   * Helper to resolve parent profile from parent object, userId or direct parentId
+   * Resolve the caller's parent profile from a parent object (socket handshake) or a userId (REST).
+   * A bare id is always treated as a userId: guessing between userId and parentId is ambiguous.
    * @private
    */
   async _resolveParent(parentOrUserId) {
@@ -18,18 +19,12 @@ class ChatService {
       throw new AppError('User or parent ID is required', 400, 'ID_REQUIRED');
     }
 
-    // If already a parent object/doc (e.g. passed from controller)
-    if (typeof parentOrUserId === 'object' && (parentOrUserId._id || parentOrUserId.id)) {
+    // Already a parent object/doc. Checked on `_id` only: an ObjectId also exposes an `id` getter.
+    if (typeof parentOrUserId === 'object' && parentOrUserId._id) {
       return parentOrUserId;
     }
 
-    // Try finding by userId first
-    let parent = await parentService.getParentByUserId(parentOrUserId);
-    if (!parent) {
-      // Try finding by parentId
-      parent = await parentService.getParentById(parentOrUserId);
-    }
-
+    const parent = await parentService.getParentByUserId(parentOrUserId);
     if (!parent) {
       throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
@@ -38,87 +33,106 @@ class ChatService {
   }
 
   /**
-   * Get all conversations for a parent with unread count and latest message
+   * Get the parent profile of the authenticated user (chat is parent-only)
+   * @param {string} userId
    */
-  async getUserConversations(userIdOrParentId, filter = {}) {
-    const parent = await this._resolveParent(userIdOrParentId);
-    return chatRepository.findUserConversations(parent._id, filter);
+  async getCallerParent(userId) {
+    return this._resolveParent(userId);
   }
 
   /**
-   * Get a conversation by ID, verifying parent membership
+   * Check that a parent is a member of a conversation (and still accepted for playdate chats)
+   * @private
    */
-  async getConversationById(userIdOrParentId, conversationId) {
-    const parent = await this._resolveParent(userIdOrParentId);
-    const conversation = await chatRepository.findConversationById(conversationId);
-
-    if (!conversation) {
-      throw new AppError('Conversation not found', 404, 'CONVERSATION_NOT_FOUND');
-    }
-
+  async _assertConversationAccess(conversation, parentId) {
+    const parentIdStr = parentId.toString();
     const isParticipant = (conversation.participants || []).some(
-      (p) => (p._id?.toString() || p.toString()) === parent._id.toString()
+      (p) => (p._id || p).toString() === parentIdStr
     );
 
     if (!isParticipant) {
       throw new AppError('You do not have access to this conversation', 403, 'FORBIDDEN_CONVERSATION_ACCESS');
     }
 
-    // TASK-BE-11: Enforce accepted status for playdate group chat
+    // Only the host and accepted participants may read or send in a playdate group chat
     if (conversation.type === CONVERSATION_TYPES.PLAYDATE && conversation.playdateId) {
-      const pId = conversation.playdateId._id || conversation.playdateId;
-      await playdateService.verifyPlaydateParticipant(pId, parent._id);
+      const playdateId = conversation.playdateId._id || conversation.playdateId;
+      await playdateService.verifyPlaydateParticipant(playdateId, parentId);
+    }
+  }
+
+  /**
+   * Create the playdate group conversation, or sync its members with the host and the
+   * currently accepted participants, then link it back to the playdate.
+   * @private
+   */
+  async _upsertPlaydateConversation(playdate) {
+    const memberIds = playdateService.getAcceptedParentIds(playdate);
+    const conversation = await chatRepository.upsertPlaydateConversation(playdate._id, memberIds);
+
+    if (playdate.chatConversationId?.toString() !== conversation._id.toString()) {
+      await playdateService.updateChatConversationId(playdate._id, conversation._id);
     }
 
     return conversation;
   }
 
   /**
-   * TASK-BE-11: Get or create a Playdate group conversation
-   * Enforces: ONLY parents with 'accepted' status (or host) can join
-   * @param {string} userIdOrParentId
-   * @param {string} playdateId
+   * Get all conversations for a parent with unread count and latest message
    */
-  async getOrCreatePlaydateConversation(userIdOrParentId, playdateId) {
-    const parent = await this._resolveParent(userIdOrParentId);
+  async getUserConversations(parentOrUserId, filter = {}) {
+    const parent = await this._resolveParent(parentOrUserId);
+    return chatRepository.findUserConversations(parent._id, filter);
+  }
 
-    // 1. Enforce accepted status
-    const playdate = await playdateService.verifyPlaydateParticipant(playdateId, parent._id);
-    const acceptedParentIds = playdateService.getAcceptedParentIds(playdate);
+  /**
+   * Get a conversation by ID, verifying parent membership.
+   * Playdate conversations include the playdate host & participants for the event panel.
+   * @param {Object|string} parentOrUserId
+   * @param {string} conversationId
+   * @param {Object} [options]
+   * @param {boolean} [options.withPlaydateDetails=true]
+   */
+  async getConversationById(parentOrUserId, conversationId, { withPlaydateDetails = true } = {}) {
+    const parent = await this._resolveParent(parentOrUserId);
+    const conversation = await chatRepository.findConversationById(conversationId, { withPlaydateDetails });
 
-    // 2. Check if conversation already exists for this playdate
-    const existing = await chatRepository.findConversationByPlaydateId(playdate._id);
-    if (existing) {
-      // Sync participants in case new participants were accepted
-      const synced = await chatRepository.syncParticipants(existing._id, acceptedParentIds);
-      return synced || existing;
+    if (!conversation) {
+      throw new AppError('Conversation not found', 404, 'CONVERSATION_NOT_FOUND');
     }
 
-    // 3. Create new group conversation with all accepted parents
-    const unreadMap = {};
-    acceptedParentIds.forEach((id) => {
-      unreadMap[id] = 0;
-    });
-
-    const conversation = await chatRepository.createConversation({
-      type: CONVERSATION_TYPES.PLAYDATE,
-      playdateId: playdate._id,
-      participants: acceptedParentIds,
-      unreadCounts: unreadMap,
-      isActive: true,
-    });
-
-    // Link playdate back to conversation
-    await playdateService.updateChatConversationId(playdate._id, conversation._id || conversation.id);
-
+    await this._assertConversationAccess(conversation, parent._id);
     return conversation;
+  }
+
+  /**
+   * Get or create a Playdate group conversation.
+   * Only the host and parents with 'accepted' status can open it.
+   * @param {Object|string} parentOrUserId
+   * @param {string} playdateId
+   */
+  async getOrCreatePlaydateConversation(parentOrUserId, playdateId) {
+    const parent = await this._resolveParent(parentOrUserId);
+    const playdate = await playdateService.verifyPlaydateParticipant(playdateId, parent._id);
+    return this._upsertPlaydateConversation(playdate);
+  }
+
+  /**
+   * Create or refresh the group chat of a playdate without a caller check.
+   * For the playdate flow: call it when a playdate is created and whenever a participant
+   * accepts or declines, so the chat exists from creation and its members stay in sync.
+   * @param {string} playdateId
+   */
+  async syncPlaydateConversation(playdateId) {
+    const playdate = await playdateService.getPlaydateById(playdateId);
+    return this._upsertPlaydateConversation(playdate);
   }
 
   /**
    * Get or create a 1-on-1 direct conversation with another parent
    */
-  async getOrCreateDirectConversation(userIdOrParentId, targetParentId) {
-    const currentParent = await this._resolveParent(userIdOrParentId);
+  async getOrCreateDirectConversation(parentOrUserId, targetParentId) {
+    const currentParent = await this._resolveParent(parentOrUserId);
 
     if (currentParent._id.toString() === targetParentId.toString()) {
       throw new AppError('Cannot create conversation with yourself', 400, 'SELF_CHAT_NOT_ALLOWED');
@@ -181,35 +195,24 @@ class ChatService {
   /**
    * Get messages for a conversation
    */
-  async getMessages(userIdOrParentId, conversationId, options = {}) {
+  async getMessages(parentOrUserId, conversationId, options = {}) {
     // Ensure parent has access to conversation
-    await this.getConversationById(userIdOrParentId, conversationId);
+    await this.getConversationById(parentOrUserId, conversationId, { withPlaydateDetails: false });
     return chatRepository.findMessages(conversationId, options);
   }
 
   /**
    * Send a new message into a conversation
    */
-  async sendMessage(userIdOrParentId, conversationId, { content, type, mediaUrl }) {
-    const parent = await this._resolveParent(userIdOrParentId);
+  async sendMessage(parentOrUserId, conversationId, { content, type, mediaUrl }) {
+    const parent = await this._resolveParent(parentOrUserId);
     const conversation = await chatRepository.findConversationDocById(conversationId);
 
     if (!conversation) {
       throw new AppError('Conversation not found', 404, 'CONVERSATION_NOT_FOUND');
     }
 
-    const isParticipant = conversation.participants.some(
-      (p) => p.toString() === parent._id.toString()
-    );
-
-    if (!isParticipant) {
-      throw new AppError('You do not have access to this conversation', 403, 'FORBIDDEN_CONVERSATION_ACCESS');
-    }
-
-    // TASK-BE-11: Enforce accepted status for playdate group chat
-    if (conversation.type === CONVERSATION_TYPES.PLAYDATE && conversation.playdateId) {
-      await playdateService.verifyPlaydateParticipant(conversation.playdateId, parent._id);
-    }
+    await this._assertConversationAccess(conversation, parent._id);
 
     // Determine recipient IDs
     const recipientIds = conversation.participants
@@ -286,11 +289,11 @@ class ChatService {
   /**
    * Mark messages as read by a parent and reset unread counter
    */
-  async markAsRead(userIdOrParentId, conversationId) {
-    const parent = await this._resolveParent(userIdOrParentId);
+  async markAsRead(parentOrUserId, conversationId) {
+    const parent = await this._resolveParent(parentOrUserId);
 
     // Verify access
-    await this.getConversationById(parent._id, conversationId);
+    await this.getConversationById(parent, conversationId, { withPlaydateDetails: false });
 
     await chatRepository.markMessagesAsRead(conversationId, parent._id);
     await chatRepository.resetUnreadCount(conversationId, parent._id);

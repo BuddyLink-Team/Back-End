@@ -34,7 +34,7 @@ class PlaydateService {
   }
 
   /**
-   * TASK-BE-11: Verify that a parent is an accepted participant (or host) in the Playdate.
+   * Verify that a parent is an accepted participant (or host) in the Playdate.
    * Only parents with 'accepted' status or the host are authorized to join the group chat.
    * @param {string} playdateId
    * @param {string} parentId
@@ -58,7 +58,7 @@ class PlaydateService {
 
     if (!participant) {
       throw new AppError(
-        'Bạn không thuộc danh sách tham gia cuộc hẹn Playdate này',
+        'You are not a participant of this playdate',
         403,
         'FORBIDDEN_NOT_IN_PLAYDATE'
       );
@@ -66,7 +66,7 @@ class PlaydateService {
 
     if (participant.status !== PARTICIPANT_STATUS.ACCEPTED) {
       throw new AppError(
-        'Chỉ phụ huynh có trạng thái đã chấp nhận (accepted) trong cuộc hẹn mới được tham gia trò chuyện nhóm',
+        'Only the host and accepted participants can join the playdate group chat',
         403,
         'FORBIDDEN_PLAYDATE_CHAT_ACCESS'
       );
