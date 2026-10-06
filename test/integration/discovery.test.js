@@ -5,6 +5,7 @@ import app from '../../src/app.js';
 import Parent from '../../src/modules/parent/parent.model.js';
 import Child from '../../src/modules/child/child.model.js';
 import Connection from '../../src/modules/connection/connection.model.js';
+import discoveryService from '../../src/modules/discovery/discovery.service.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { QUOTA_PERIOD_TYPES } from '../../src/modules/subscription/subscription.constants.js';
@@ -636,5 +637,167 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(res.body.data.connection.isMatched).toBe(false);
       expect(res.body.data.connection.status).toBe('pending');
     });
+  });
+});
+
+// ============================================
+// Radius accuracy (known distances)
+// ============================================
+
+describe('Discovery radius accuracy', () => {
+  const password = 'Password123!';
+  // 1 degree of latitude ≈ 111.3 km on MongoDB's sphere, so +0.09° ≈ 10 km and +0.27° ≈ 30 km
+  const SEARCHER = [105.0, 20.0];
+  const NEAR = [105.0, 20.09];
+  const FAR = [105.0, 20.27];
+
+  let searcherToken = '';
+  let nearChildId = '';
+  let farChildId = '';
+
+  const createParentAt = async (label, coordinates) => {
+    const reg = await request(app).post('/api/v1/auth/register').send({
+      fullName: `Radius ${label}`,
+      email: `radius-${label}-${Date.now()}-${Math.random()}@example.com`,
+      password,
+    });
+    const token = reg.body.data.tokens.accessToken;
+    const me = await request(app).get('/api/v1/parent/me').set('Authorization', `Bearer ${token}`);
+    const parentId = me.body.data.id || me.body.data._id;
+    await Parent.findByIdAndUpdate(parentId, {
+      $set: { 'location.coordinates': { type: 'Point', coordinates } },
+    });
+    const child = await request(app)
+      .post('/api/v1/children')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ displayName: `Radius ${label} Child`, dateOfBirth: '2020-01-01', gender: 'boy' });
+    return { token, childId: child.body.data.id || child.body.data._id };
+  };
+
+  const discover = (maxDistanceKm) =>
+    request(app)
+      .get(`/api/v1/discovery?maxDistanceKm=${maxDistanceKm}`)
+      .set('Authorization', `Bearer ${searcherToken}`);
+
+  const findChild = (res, childId) => res.body.data.profiles.find((p) => p.childId.toString() === childId);
+
+  beforeAll(async () => {
+    searcherToken = (await createParentAt('searcher', SEARCHER)).token;
+    nearChildId = (await createParentAt('near', NEAR)).childId;
+    farChildId = (await createParentAt('far', FAR)).childId;
+  });
+
+  it('excludes a parent just outside the radius (10 km away, radius 9 km)', async () => {
+    const res = await discover(9);
+    expect(res.status).toBe(200);
+    expect(findChild(res, nearChildId)).toBeUndefined();
+    expect(findChild(res, farChildId)).toBeUndefined();
+  });
+
+  it('includes a parent just inside the radius and reports ~10 km', async () => {
+    const res = await discover(11);
+    expect(findChild(res, nearChildId)?.distanceKm).toBe(10);
+    expect(findChild(res, farChildId)).toBeUndefined();
+  });
+
+  it('scores distance against the searched radius, not only the saved preference', async () => {
+    // Searcher preference is the default 15 km; the far child is ~30 km away
+    const narrow = findChild(await discover(31), farChildId);
+    const wide = findChild(await discover(50), farChildId);
+    expect(wide.matchScore).toBeGreaterThan(narrow.matchScore);
+
+    expect(discoveryService._calcDistanceScore(30, 50)).toBe(8);
+    expect(discoveryService._calcDistanceScore(30, 31)).toBe(1);
+    expect(discoveryService._calcDistanceScore(30, undefined)).toBe(0);
+  });
+
+  it('reports ~30 km for the far parent when the radius covers it', async () => {
+    const res = await discover(31);
+    expect(findChild(res, nearChildId)?.distanceKm).toBe(10);
+    expect(findChild(res, farChildId)?.distanceKm).toBe(30);
+  });
+});
+
+// ============================================
+// Candidate pool & selected child
+// ============================================
+
+describe('Discovery candidate pool and selected child', () => {
+  const password = 'Password123!';
+  const BASE = [104.0, 19.0];
+
+  const createParentAt = async (label, coordinates, children = []) => {
+    const reg = await request(app).post('/api/v1/auth/register').send({
+      fullName: `Pool ${label}`,
+      email: `pool-${label}-${Date.now()}-${Math.random()}@example.com`,
+      password,
+    });
+    const token = reg.body.data.tokens.accessToken;
+    const me = await request(app).get('/api/v1/parent/me').set('Authorization', `Bearer ${token}`);
+    const parentId = me.body.data.id || me.body.data._id;
+    await Parent.findByIdAndUpdate(parentId, {
+      $set: { 'location.coordinates': { type: 'Point', coordinates } },
+    });
+    const childIds = [];
+    for (const child of children) {
+      const created = await Child.create({ parentId, dateOfBirth: new Date('2020-01-01'), gender: 'girl', ...child });
+      childIds.push(created._id.toString());
+    }
+    return { token, parentId, childIds };
+  };
+
+  const findChild = (res, childId) => res.body.data.profiles.find((p) => p.childId.toString() === childId);
+
+  it('still shows farther parents once the nearest candidates are all swiped', async () => {
+    const searcher = await createParentAt('searcher', BASE);
+    const near = await createParentAt('near', [104.0, 19.01], [{ displayName: 'Near Kid' }]);
+    const far = await createParentAt('far', [104.0, 19.05], [{ displayName: 'Far Kid' }]);
+
+    const originalPoolSize = discoveryService.candidatePoolSize;
+    discoveryService.candidatePoolSize = 1;
+    try {
+      const first = await request(app).get('/api/v1/discovery').set('Authorization', `Bearer ${searcher.token}`);
+      expect(findChild(first, near.childIds[0])).toBeDefined();
+      expect(findChild(first, far.childIds[0])).toBeUndefined();
+
+      await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${searcher.token}`)
+        .send({ targetChildId: near.childIds[0], isLike: false });
+
+      const second = await request(app).get('/api/v1/discovery').set('Authorization', `Bearer ${searcher.token}`);
+      expect(findChild(second, far.childIds[0])).toBeDefined();
+    } finally {
+      discoveryService.candidatePoolSize = originalPoolSize;
+    }
+  });
+
+  it('matches interests against the selected child only', async () => {
+    const searcher = await createParentAt('multi', [103.0, 18.0], [
+      { displayName: 'Lego Kid', interests: ['Lego'] },
+      { displayName: 'Music Kid', interests: ['Âm nhạc'] },
+    ]);
+    const target = await createParentAt('target', [103.0, 18.01], [{ displayName: 'Lego Friend', interests: ['Lego'] }]);
+    const [legoKidId, musicKidId] = searcher.childIds;
+
+    const discoverFor = (childId) =>
+      request(app).get(`/api/v1/discovery?childId=${childId}`).set('Authorization', `Bearer ${searcher.token}`);
+
+    const forLegoKid = await discoverFor(legoKidId);
+    expect(findChild(forLegoKid, target.childIds[0]).matchedInterestsCount).toBe(1);
+
+    const forMusicKid = await discoverFor(musicKidId);
+    expect(findChild(forMusicKid, target.childIds[0]).matchedInterestsCount).toBe(0);
+  });
+
+  it('rejects a childId that does not belong to the parent', async () => {
+    const searcher = await createParentAt('owner-check', [102.0, 17.0], [{ displayName: 'Own Kid' }]);
+    const other = await createParentAt('other', [102.0, 17.01], [{ displayName: 'Other Kid' }]);
+
+    const res = await request(app)
+      .get(`/api/v1/discovery?childId=${other.childIds[0]}`)
+      .set('Authorization', `Bearer ${searcher.token}`);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('CHILD_NOT_FOUND');
   });
 });

@@ -3,7 +3,7 @@ import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
-import { ChildResponseDTO } from './child.dto.js';
+import { ChildResponseDTO, ChildPublicProfileDTO } from './child.dto.js';
 import { CHILD_EDITABLE_FIELDS } from './child.constants.js';
 
 /**
@@ -114,6 +114,15 @@ class ChildService {
   }
 
   /**
+   * Active children of nearby parents for discovery (excludes swiped, applies age/interest filters)
+   * @param {Object} criteria - { parentIds, excludeChildIds, ageMin, ageMax, interests }
+   */
+  async getDiscoverableChildren(criteria) {
+    if (!criteria.parentIds || criteria.parentIds.length === 0) return [];
+    return childRepository.findDiscoverable(criteria);
+  }
+
+  /**
    * Get all active children belonging to a parent
    * @param {string|mongoose.Types.ObjectId} parentId
    */
@@ -146,29 +155,7 @@ class ChildService {
       }
     }
 
-    // Calculate age in years
-    const ageYears = child.dateOfBirth
-      ? Math.floor((Date.now() - new Date(child.dateOfBirth)) / (365.25 * 24 * 3600 * 1000))
-      : null;
-
-    return {
-      childId: child._id,
-      displayName: child.displayName,
-      age: ageYears,
-      gender: child.gender,
-      interests: child.interests || [],
-      favoriteActivities: child.favoriteActivities || [],
-      personality: child.personality || [],
-      parent: {
-        fullName: parent.fullName,
-        avatarUrl: parent.avatarUrl || null,
-        bio: parent.bio || null,
-        area: parent.location?.area || parent.location?.city || null,
-        isVerifiedParent: parent.verification?.isVerifiedParent || false,
-        verifiedPhone: parent.verification?.isPhoneVerified || false,
-        verifiedEmail: parent.verification?.isEmailVerified || false,
-      },
-    };
+    return ChildPublicProfileDTO.toResponse(child);
   }
 }
 

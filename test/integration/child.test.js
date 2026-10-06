@@ -119,6 +119,13 @@ describe('Child public profile visibility', () => {
     expect(res.body.data.displayName).toBe(validChild.displayName);
     expect(res.body.data).not.toHaveProperty('avatarUrl');
     expect(res.body.data).not.toHaveProperty('schoolLevel');
+    expect(res.body.data.parent).toHaveProperty('isEmailVerified');
+    expect(res.body.data.parent).toHaveProperty('isPhoneVerified');
+    expect(Object.keys(res.body.data.parent.preferences).sort()).toEqual([
+      'preferredLocations',
+      'preferredPlaydateDays',
+      'preferredTimeSlots',
+    ]);
   });
 
   it('should hide the profile of a hidden parent from others but not from the owner', async () => {
