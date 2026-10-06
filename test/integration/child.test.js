@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
 import Child from '../../src/modules/child/child.model.js';
+import Parent from '../../src/modules/parent/parent.model.js';
 
 const registerParent = async (label) => {
   const res = await request(app).post('/api/v1/auth/register').send({
@@ -90,5 +91,58 @@ describe('Child profile security & validation', () => {
       .set('Authorization', `Bearer ${parentB.token}`);
     expect(otherRes.status).toBe(404);
     expect(otherRes.body.error.code).toBe('CHILD_NOT_FOUND');
+  });
+});
+
+describe('Child public profile visibility', () => {
+  let owner;
+  let viewer;
+  let childId;
+
+  const getPublicProfile = (token) =>
+    request(app).get(`/api/v1/children/${childId}/public-profile`).set('Authorization', `Bearer ${token}`);
+
+  beforeAll(async () => {
+    owner = await registerParent('public-owner');
+    viewer = await registerParent('public-viewer');
+    const res = await request(app)
+      .post('/api/v1/children')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send(validChild);
+    childId = res.body.data.id;
+  });
+
+  it('should return the public profile without legacy child fields', async () => {
+    const res = await getPublicProfile(viewer.token);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.displayName).toBe(validChild.displayName);
+    expect(res.body.data).not.toHaveProperty('avatarUrl');
+    expect(res.body.data).not.toHaveProperty('schoolLevel');
+  });
+
+  it('should hide the profile of a hidden parent from others but not from the owner', async () => {
+    await Parent.findByIdAndUpdate(owner.parentId, { $set: { 'privacySettings.isProfileHidden': true } });
+
+    const viewerRes = await getPublicProfile(viewer.token);
+    expect(viewerRes.status).toBe(404);
+    expect(viewerRes.body.error.code).toBe('CHILD_NOT_FOUND');
+
+    const ownerRes = await getPublicProfile(owner.token);
+    expect(ownerRes.status).toBe(200);
+
+    await Parent.findByIdAndUpdate(owner.parentId, { $set: { 'privacySettings.isProfileHidden': false } });
+  });
+
+  it('should hide the profile when the owner has blocked the viewer', async () => {
+    const blockRes = await request(app)
+      .post('/api/v1/safety/block')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ blockedId: viewer.parentId, reason: 'test' });
+    expect(blockRes.status).toBeLessThan(300);
+
+    const res = await getPublicProfile(viewer.token);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('CHILD_NOT_FOUND');
   });
 });

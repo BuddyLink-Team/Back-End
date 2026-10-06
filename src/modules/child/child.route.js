@@ -18,6 +18,7 @@ router.use(authorizeRoles(USER_ROLES.PARENT));
 
 router.get('/', childController.getMyChildren);
 router.post('/', validate(createChildValidation), childController.createChild);
+router.get('/:id/public-profile', validate(childIdParamValidation), childController.getPublicProfile);
 router.get('/:id', validate(childIdParamValidation), childController.getChildById);
 router.put('/:id', validate(updateChildValidation), childController.updateChild);
 router.delete('/:id', validate(childIdParamValidation), childController.deleteChild);

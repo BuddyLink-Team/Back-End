@@ -1,7 +1,43 @@
-import Block from './block.model.js';
-import Report from './report.model.js';
+import Block from "./block.model.js";
+import Report from "./report.model.js";
 
 class SafetyRepository {
+  /**
+   * Get all parentIds that the given parent has blocked or been blocked by.
+   * Returns a deduplicated array of ObjectId strings excluding the caller.
+   * @param {string|mongoose.Types.ObjectId} parentId
+   * @returns {Promise<string[]>}
+   */
+  async getBlockedParentIds(parentId) {
+    const blocks = await Block.find({
+      $or: [{ blockerId: parentId }, { blockedId: parentId }],
+    }).select("blockerId blockedId");
+
+    const ids = new Set();
+    blocks.forEach((b) => {
+      ids.add(b.blockerId.toString());
+      ids.add(b.blockedId.toString());
+    });
+    ids.delete(parentId.toString());
+    return [...ids];
+  }
+
+  /**
+   * Check if a block relationship exists between two parents (either direction)
+   * @param {string|mongoose.Types.ObjectId} parentIdA
+   * @param {string|mongoose.Types.ObjectId} parentIdB
+   * @returns {Promise<boolean>}
+   */
+  async isBlocked(parentIdA, parentIdB) {
+    const block = await Block.findOne({
+      $or: [
+        { blockerId: parentIdA, blockedId: parentIdB },
+        { blockerId: parentIdB, blockedId: parentIdA },
+      ],
+    });
+    return !!block;
+  }
+
   /**
    * Create or update the block from one parent to another
    * @param {string|ObjectId} blockerId
@@ -13,7 +49,7 @@ class SafetyRepository {
     return Block.findOneAndUpdate(
       { blockerId, blockedId },
       { $set: { reason } },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { upsert: true, new: true, setDefaultsOnInsert: true },
     );
   }
 
@@ -76,6 +112,7 @@ class SafetyRepository {
   async createReport(data) {
     return Report.create(data);
   }
+
 }
 
 export const safetyRepository = new SafetyRepository();

@@ -46,6 +46,19 @@ class ChildController {
       return next(error);
     }
   }
+
+  /**
+   * GET /api/v1/children/:id/public-profile
+   * Returns the public profile of a child
+   */
+  async getPublicProfile(req, res, next) {
+    try {
+      const profile = await childService.getPublicProfile(req.userId, req.params.id);
+      return successResponse(res, profile, 'Public profile retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
 
 export default new ChildController();
