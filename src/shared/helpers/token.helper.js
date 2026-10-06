@@ -84,42 +84,13 @@ export const createRefreshTokenValue = (user) => {
   );
 };
 
-export const setAuthCookies = (res, accessToken, refreshToken) => {
-  const isProduction = env.NODE_ENV === "production" || process.env.NODE_ENV === "production";
-
-  if (accessToken) {
-    res.cookie(AUTH_COOKIE_NAMES.ACCESS_TOKEN, accessToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: isProduction,
-      maxAge: getAccessTokenMaxAge(),
-    });
-  }
-
-  if (refreshToken) {
-    res.cookie(AUTH_COOKIE_NAMES.REFRESH_TOKEN, refreshToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: isProduction,
-      maxAge: getRefreshTokenMaxAge(),
-    });
-  }
-};
-
+/**
+ * Clear auth cookies set by earlier versions (tokens are now returned in the JSON body).
+ */
 export const clearAuthCookies = (res) => {
-  const isProduction = env.NODE_ENV === "production" || process.env.NODE_ENV === "production";
-
-  res.clearCookie(AUTH_COOKIE_NAMES.ACCESS_TOKEN, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isProduction,
-  });
-
-  res.clearCookie(AUTH_COOKIE_NAMES.REFRESH_TOKEN, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isProduction,
-  });
+  res.clearCookie(AUTH_COOKIE_NAMES.REFRESH_TOKEN, { path: "/api/v1/auth" });
+  res.clearCookie(AUTH_COOKIE_NAMES.REFRESH_TOKEN, { path: "/" });
+  res.clearCookie(AUTH_COOKIE_NAMES.ACCESS_TOKEN, { path: "/" });
 };
 
 export const getBearerToken = (req) => {
@@ -132,10 +103,9 @@ export const getBearerToken = (req) => {
   return authorization.split(" ")[1];
 };
 
-export const getAccessTokenFromRequest = (req) => {
-  return getBearerToken(req) || req.cookies?.[AUTH_COOKIE_NAMES.ACCESS_TOKEN] || null;
-};
+// Access tokens are accepted only from the Authorization header
+export const getAccessTokenFromRequest = (req) => getBearerToken(req);
 
 export const getRefreshTokenFromRequest = (req) => {
-  return req.cookies?.[AUTH_COOKIE_NAMES.REFRESH_TOKEN] || null;
+  return req.body?.refreshToken || null;
 };

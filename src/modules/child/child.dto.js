@@ -1,12 +1,11 @@
 export class ChildPublicProfileDTO {
   /**
    * Shape a child document (with populated parentId) into a safe public-facing response.
-   * Fields are masked according to the child's privacySettings.
+   * Visibility (hidden / blocked parents) is enforced by ChildService before shaping.
    * @param {Object} child - Mongoose lean document with parentId populated
    * @returns {Object}
    */
   static toResponse(child) {
-    const priv = child.privacySettings || {};
     const parent = child.parentId || {};
 
     const ageYears = child.dateOfBirth
@@ -15,14 +14,12 @@ export class ChildPublicProfileDTO {
 
     return {
       childId: child._id,
-      displayName: priv.showFullName !== false ? child.displayName : (child.displayName?.split(' ').pop() || child.displayName),
-      age: priv.showAge !== false ? ageYears : null,
-      gender: priv.showGender !== false ? child.gender : null,
-      avatarUrl: priv.showRealPhoto === true ? (child.avatarUrl || null) : null,
-      schoolLevel: priv.showSchool === true ? (child.schoolLevel || null) : null,
-      interests: priv.showInterests !== false ? (child.interests || []) : [],
-      favoriteActivities: priv.showInterests !== false ? (child.favoriteActivities || []) : [],
-      personality: priv.showPersonality !== false ? (child.personality || []) : [],
+      displayName: child.displayName,
+      age: ageYears,
+      gender: child.gender,
+      interests: child.interests || [],
+      favoriteActivities: child.favoriteActivities || [],
+      personality: child.personality || [],
       parent: {
         fullName: parent.fullName || null,
         avatarUrl: parent.avatarUrl || null,

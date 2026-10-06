@@ -28,6 +28,15 @@ import {
   VerificationStatusDTO,
 } from './auth.dto.js';
 
+/**
+ * Constant-time comparison of two hex SHA-256 digests
+ */
+const isSameHash = (hashA, hashB) => {
+  const bufferA = Buffer.from(String(hashA), 'hex');
+  const bufferB = Buffer.from(String(hashB), 'hex');
+  return bufferA.length === bufferB.length && crypto.timingSafeEqual(bufferA, bufferB);
+};
+
 class AuthService {
   /**
    * Helper to generate pairs of accessToken and refreshToken
@@ -63,6 +72,123 @@ class AuthService {
   }
 
   /**
+   * Issue a new one-time code for a target/type. Previously issued codes are invalidated,
+   * so only the latest code can be used.
+   * @returns {Promise<string>} The plain code to deliver to the user
+   */
+  async _issueOtp({ userId, target, type, expiresInMinutes }) {
+    const otp = this._generateOtp();
+
+    await authRepository.invalidateActiveAuthTokens({ target, type });
+    await authRepository.createAuthToken({
+      userId,
+      target,
+      tokenHash: hashToken(otp),
+      type,
+      expiresAt: new Date(Date.now() + expiresInMinutes * 60 * 1000),
+    });
+
+    return otp;
+  }
+
+  /**
+   * Verify and consume the latest code of a target/type.
+   * Each wrong code counts as an attempt; after OTP_CONFIG.MAX_ATTEMPTS the code is invalidated,
+   * which turns brute forcing the 6-digit space into requesting a new code every few guesses.
+   */
+  async _consumeOtp({ userId, target, type, code, errorMessage, errorCode }) {
+    const token = await authRepository.findLatestActiveAuthToken({ target, type, userId });
+    if (!token) {
+      throw new AppError(errorMessage, 400, errorCode);
+    }
+
+    if (!isSameHash(token.tokenHash, hashToken(String(code)))) {
+      const attempts = (token.attempts || 0) + 1;
+      await authRepository.recordFailedAttempt(token._id, {
+        invalidate: attempts >= OTP_CONFIG.MAX_ATTEMPTS,
+      });
+      throw new AppError(errorMessage, 400, errorCode);
+    }
+
+    await authRepository.markAuthTokenUsed(token._id);
+    return token;
+  }
+
+  /**
+   * Create user + parent profile + free subscription.
+   * MongoDB transactions need a replica set (not available in the test server), so a failure
+   * after the user is created is compensated by deleting what was already written.
+   */
+  async _createParentAccount({ userData, parentData }) {
+    let user = null;
+    let parent = null;
+
+    try {
+      user = await userService.createUser({
+        ...userData,
+        role: USER_ROLES.PARENT,
+        isActive: true,
+      });
+
+      parent = await parentService.createParentProfile({
+        ...parentData,
+        userId: user._id,
+      });
+
+      await subscriptionService.createFreeSubscription(parent._id);
+
+      return { user, parent };
+    } catch (error) {
+      if (parent) {
+        await parentService.deleteParentByUserId(user._id).catch(() => {});
+      }
+      if (user) {
+        await userService.deleteUserById(user._id).catch(() => {});
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Validate email/password credentials and return the active user
+   */
+  async _authenticateWithPassword({ email, password }) {
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await userService.getUserByEmail(normalizedEmail);
+
+    if (!user || !user.passwordHash) {
+      throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
+    }
+
+    if (!user.isActive) {
+      throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
+    }
+
+    return user;
+  }
+
+  /**
+   * Issue a session for an authenticated user and build the login response
+   */
+  async _buildLoginResult(user) {
+    const parent = user.role === USER_ROLES.PARENT
+      ? await parentService.getParentByUserId(user._id)
+      : null;
+
+    const tokens = await this._generateTokenPair(user);
+
+    return {
+      dto: AuthResponseDTO.toResponse({ user, parent, tokens }),
+      tokens,
+    };
+  }
+
+  /**
    * Register standard parent account
    */
   async register({ fullName, email, password, phone }) {
@@ -83,21 +209,19 @@ class AuthService {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    const user = await userService.createUser({
-      email: normalizedEmail,
-      phone: trimmedPhone || undefined,
-      passwordHash,
-      role: USER_ROLES.PARENT,
-      isActive: true,
-    });
-
-    const parent = await parentService.createParentProfile({
-      userId: user._id,
-      fullName: fullName.trim(),
-      verification: {
-        isEmailVerified: false,
-        isPhoneVerified: false,
-        isVerifiedParent: false,
+    const { user, parent } = await this._createParentAccount({
+      userData: {
+        email: normalizedEmail,
+        phone: trimmedPhone || undefined,
+        passwordHash,
+      },
+      parentData: {
+        fullName: fullName.trim(),
+        verification: {
+          isEmailVerified: false,
+          isPhoneVerified: false,
+          isVerifiedParent: false,
+        },
       },
     });
 
@@ -117,47 +241,56 @@ class AuthService {
    */
   async loginWithGoogle({ idToken }) {
     const googleUser = await googleAuthAdapter.verifyIdToken(idToken);
+
+    // Only a Google-verified email proves ownership of the address we link or create
+    if (!googleUser.isEmailVerified) {
+      throw new AppError('Google account email is not verified', 401, 'GOOGLE_EMAIL_NOT_VERIFIED');
+    }
+
     const normalizedEmail = googleUser.email.toLowerCase().trim();
 
     let user = await userService.getUserByEmail(normalizedEmail);
     let parent = null;
 
     if (!user) {
-      // Create new user & parent
-      user = await userService.createUser({
-        email: normalizedEmail,
-        googleId: googleUser.googleId,
-        passwordHash: null,
-        role: USER_ROLES.PARENT,
-        isActive: true,
-      });
-
-      parent = await parentService.createParentProfile({
-        userId: user._id,
-        fullName: googleUser.fullName,
-        avatarUrl: googleUser.avatarUrl,
-        verification: {
-          isEmailVerified: true, // Google email is already verified
-          isPhoneVerified: false,
-          isVerifiedParent: false,
+      ({ user, parent } = await this._createParentAccount({
+        userData: {
+          email: normalizedEmail,
+          googleId: googleUser.googleId,
+          passwordHash: null,
         },
-      });
-
-      // Automatically create a Free subscription for the registered parent
-      await subscriptionService.createFreeSubscription(parent._id);
+        parentData: {
+          fullName: googleUser.fullName,
+          avatarUrl: googleUser.avatarUrl,
+          verification: {
+            isEmailVerified: true, // Google email is already verified
+            isPhoneVerified: false,
+            isVerifiedParent: false,
+          },
+        },
+      }));
     } else {
       if (!user.isActive) {
         throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
       }
 
-      // Update googleId if not linked yet
-      if (!user.googleId) {
-        user = await userService.getUserById(user._id);
-        user.googleId = googleUser.googleId;
-        await user.save();
-      }
-
       parent = await parentService.getParentByUserId(user._id);
+
+      // Link Google to an existing local account
+      if (!user.googleId) {
+        const linkUpdate = { googleId: googleUser.googleId };
+
+        // If the local account never verified its email, its password may have been set by
+        // someone else who registered this address first (account pre-hijacking).
+        // Google proves ownership now, so drop that password and its sessions.
+        const isLocalEmailUnverified = parent && !parent.verification?.isEmailVerified;
+        if (isLocalEmailUnverified && user.passwordHash) {
+          linkUpdate.passwordHash = null;
+          await authRepository.revokeAllUserRefreshTokens(user._id);
+        }
+
+        user = await userService.updateById(user._id, linkUpdate);
+      }
 
       // Auto-verify email if not verified
       if (parent && !parent.verification?.isEmailVerified) {
@@ -177,61 +310,35 @@ class AuthService {
    * Universal Login (Email + Password) for both Parent and Admin
    */
   async login({ email, password }) {
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await userService.getUserByEmail(normalizedEmail);
-
-    if (!user || !user.passwordHash) {
-      throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
-    }
-
-    if (!user.isActive) {
-      throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
-    }
-
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
-    }
-
-    // If user is parent, get parent profile; if admin, parent is null
-    const parent = user.role === USER_ROLES.PARENT || user.role === 'parent'
-      ? await parentService.getParentByUserId(user._id)
-      : null;
-
-    const tokens = await this._generateTokenPair(user);
-
-    return {
-      dto: AuthResponseDTO.toResponse({ user, parent, tokens }),
-      tokens,
-    };
+    const user = await this._authenticateWithPassword({ email, password });
+    return this._buildLoginResult(user);
   }
 
   /**
-   * Admin Login alias delegating to universal login for backward-compatibility
+   * Admin Login: the role is checked before any session is created
    */
   async loginAdmin({ email, password }) {
-    const result = await this.login({ email, password });
-    const role = (result.dto?.user?.role || '').toUpperCase();
-    if (role !== USER_ROLES.ADMIN && role !== 'ADMIN') {
+    const user = await this._authenticateWithPassword({ email, password });
+    if (user.role !== USER_ROLES.ADMIN) {
       throw new AppError('Access denied: Admin privileges required', 403, 'FORBIDDEN');
     }
-    return result;
+    return this._buildLoginResult(user);
   }
 
   /**
    * Send Phone OTP
    */
   async sendPhoneOtp(userId, phone) {
-    const otp = this._generateOtp();
-    const tokenHash = hashToken(otp);
-    const expiresAt = new Date(Date.now() + OTP_CONFIG.EXPIRES_IN_MINUTES * 60 * 1000);
+    const existingUser = await userService.getUserByPhone(phone);
+    if (existingUser && existingUser._id.toString() !== userId.toString()) {
+      throw new AppError('Phone number is already associated with another account', 409, 'PHONE_IN_USE');
+    }
 
-    await authRepository.createAuthToken({
+    const otp = await this._issueOtp({
       userId,
       target: phone,
-      tokenHash,
       type: TOKEN_TYPES.PHONE_OTP,
-      expiresAt,
+      expiresInMinutes: OTP_CONFIG.EXPIRES_IN_MINUTES,
     });
 
     await smsAdapter.sendPhoneOtp({
@@ -244,28 +351,26 @@ class AuthService {
   }
 
   /**
-   * Verify Phone OTP
+   * Verify Phone OTP (the code must have been issued to this user)
    */
   async verifyPhoneOtp(userId, phone, otp) {
-    const tokenHash = hashToken(otp);
-
-    const validToken = await authRepository.findValidAuthToken({
+    await this._consumeOtp({
+      userId,
       target: phone,
-      tokenHash,
       type: TOKEN_TYPES.PHONE_OTP,
+      code: otp,
+      errorMessage: 'Invalid or expired OTP code',
+      errorCode: 'INVALID_OTP',
     });
-
-    if (!validToken) {
-      throw new AppError('Invalid or expired OTP code', 400, 'INVALID_OTP');
-    }
-
-    await authRepository.markAuthTokenUsed(validToken._id);
 
     // Update phone on User
     await userService.updatePhone(userId, phone);
 
     // Update verification on Parent
     const parent = await parentService.updateVerification(userId, { isPhoneVerified: true });
+    if (!parent) {
+      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+    }
 
     return VerificationStatusDTO.toResponse(parent.verification);
   }
@@ -295,6 +400,9 @@ class AuthService {
 
     // Update verification on Parent
     const parent = await parentService.updateVerification(userId, { isPhoneVerified: true });
+    if (!parent) {
+      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+    }
 
     return {
       phone: verifiedPhone,
@@ -309,48 +417,46 @@ class AuthService {
     const user = await userService.getUserById(userId);
     const parent = await parentService.getParentByUserId(userId);
 
-    const otp = this._generateOtp();
-    const tokenHash = hashToken(otp);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    await authRepository.createAuthToken({
+    const otp = await this._issueOtp({
       userId,
       target: user.email,
-      tokenHash,
       type: TOKEN_TYPES.EMAIL_VERIFY,
-      expiresAt,
+      expiresInMinutes: OTP_CONFIG.EMAIL_EXPIRES_IN_MINUTES,
     });
 
-    await mailAdapter.sendEmailOtp({
+    const mailResult = await mailAdapter.sendEmailOtp({
       to: user.email,
       otp,
       fullName: parent?.fullName || 'Parent',
-      minutes: 10,
+      minutes: OTP_CONFIG.EMAIL_EXPIRES_IN_MINUTES,
     });
+
+    if (!mailResult?.success) {
+      throw new AppError('Unable to send the verification email. Please try again later.', 502, 'EMAIL_SEND_FAILED');
+    }
 
     return { message: 'Email verification code sent successfully' };
   }
 
   /**
-   * Verify Email OTP
+   * Verify Email OTP (the code must have been issued to this user)
    */
   async verifyEmailOtp(userId, otp) {
     const user = await userService.getUserById(userId);
-    const tokenHash = hashToken(otp);
 
-    const validToken = await authRepository.findValidAuthToken({
+    await this._consumeOtp({
+      userId,
       target: user.email,
-      tokenHash,
       type: TOKEN_TYPES.EMAIL_VERIFY,
+      code: otp,
+      errorMessage: 'Invalid or expired verification code',
+      errorCode: 'INVALID_OTP',
     });
 
-    if (!validToken) {
-      throw new AppError('Invalid or expired verification code', 400, 'INVALID_OTP');
-    }
-
-    await authRepository.markAuthTokenUsed(validToken._id);
-
     const parent = await parentService.updateVerification(userId, { isEmailVerified: true });
+    if (!parent) {
+      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+    }
 
     return VerificationStatusDTO.toResponse(parent.verification);
   }
@@ -367,16 +473,11 @@ class AuthService {
       return { message: 'If that email is registered, a password reset code has been sent' };
     }
 
-    const resetOtp = this._generateOtp();
-    const tokenHash = hashToken(resetOtp);
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
-
-    await authRepository.createAuthToken({
+    const resetOtp = await this._issueOtp({
       userId: user._id,
       target: normalizedEmail,
-      tokenHash,
       type: TOKEN_TYPES.PASSWORD_RESET,
-      expiresAt,
+      expiresInMinutes: OTP_CONFIG.PASSWORD_RESET_EXPIRES_IN_MINUTES,
     });
 
     const parent = await parentService.getParentByUserId(user._id);
@@ -385,7 +486,7 @@ class AuthService {
       to: normalizedEmail,
       token: resetOtp,
       fullName: parent?.fullName || 'User',
-      minutes: 15,
+      minutes: OTP_CONFIG.PASSWORD_RESET_EXPIRES_IN_MINUTES,
     });
 
     return { message: 'If that email is registered, a password reset code has been sent' };
@@ -401,18 +502,14 @@ class AuthService {
       throw new AppError('Invalid or expired reset token', 400, 'INVALID_RESET_TOKEN');
     }
 
-    const tokenHash = hashToken(token);
-    const validToken = await authRepository.findValidAuthToken({
+    await this._consumeOtp({
+      userId: user._id,
       target: normalizedEmail,
-      tokenHash,
       type: TOKEN_TYPES.PASSWORD_RESET,
+      code: token,
+      errorMessage: 'Invalid or expired reset token',
+      errorCode: 'INVALID_RESET_TOKEN',
     });
-
-    if (!validToken) {
-      throw new AppError('Invalid or expired reset token', 400, 'INVALID_RESET_TOKEN');
-    }
-
-    await authRepository.markAuthTokenUsed(validToken._id);
 
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(newPassword, salt);
@@ -422,6 +519,16 @@ class AuthService {
     await authRepository.revokeAllUserRefreshTokens(user._id);
 
     return { message: 'Password has been successfully reset' };
+  }
+
+  /**
+   * Revoke every session of a user (e.g. after a password change) and issue a fresh pair
+   * so the device that made the change stays signed in.
+   */
+  async rotateAllSessions(userId) {
+    const user = await userService.getUserById(userId);
+    await authRepository.revokeAllUserRefreshTokens(user._id);
+    return this._generateTokenPair(user);
   }
 
   /**

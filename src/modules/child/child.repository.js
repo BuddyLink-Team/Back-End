@@ -5,7 +5,11 @@ class ChildRepository {
     return Child.create(childData);
   }
 
-  async findById(id) {
+  async findByIdAndParentId(id, parentId) {
+    return Child.findOne({ _id: id, parentId, isArchived: false });
+  }
+
+  async findActiveById(id) {
     return Child.findOne({ _id: id, isArchived: false });
   }
 
@@ -17,7 +21,7 @@ class ChildRepository {
     return Child.findOneAndUpdate(
       { _id: id, parentId, isArchived: false },
       { $set: updateData },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -40,7 +44,7 @@ class ChildRepository {
     return Child.findOne({ _id: childId, isArchived: false })
       .populate({
         path: 'parentId',
-        select: 'fullName avatarUrl bio location verification preferences',
+        select: 'fullName avatarUrl bio location.area location.city verification preferences privacySettings.isProfileHidden',
       })
       .lean();
   }
