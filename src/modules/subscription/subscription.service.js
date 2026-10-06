@@ -272,7 +272,8 @@ class SubscriptionService {
       new AppError(
         `Quota exceeded (${limit}/${limit}) for this feature on the current plan. Upgrade to Premium for unlimited usage.`,
         403,
-        'QUOTA_EXCEEDED'
+        'QUOTA_EXCEEDED',
+        [{ field: 'actionType', message: actionType }]
       );
 
     // -1 signifies unlimited (Premium plan); usage is still recorded for statistics

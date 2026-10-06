@@ -1,11 +1,13 @@
 import discoveryRepository from './discovery.repository.js';
 import parentService from '../parent/parent.service.js';
-import childRepository from '../child/child.repository.js';
+import childService from '../child/child.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
+import connectionService from '../connection/connection.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { DiscoveryProfileDTO } from './discovery.dto.js';
 import { MATCHING_WEIGHTS, DISCOVERY_DEFAULTS } from './discovery.constants.js';
+import { SUBSCRIPTION_PLAN_CODES } from '../subscription/subscription.constants.js';
 
 class DiscoveryService {
   /**
@@ -44,28 +46,7 @@ class DiscoveryService {
       : parent.preferences?.maxDistanceKm || DISCOVERY_DEFAULTS.DEFAULT_MAX_DISTANCE_KM;
     const maxDistanceMeters = maxDistanceKm * 1000;
 
-    // Step 3: Get quota info (do not consume here, just check remaining)
-    const planFeatures = await subscriptionService.getParentPlanFeatures(parent._id);
-    const quotaSummary = await subscriptionService.getQuotaSummary(parent._id);
-    const remainingViews =
-      planFeatures.discoveryViewLimitPerDay === -1
-        ? -1
-        : Math.max(
-            0,
-            planFeatures.discoveryViewLimitPerDay -
-              (quotaSummary.usage.discoveryViewsToday || 0)
-          );
-    const isPremium = planFeatures.planCode !== 'free';
-
-    // Step 4: Get current parent's children (for interest matching)
-    const currentChildren = await childRepository.findByParentId(parent._id);
-
-    // Step 5: Build exclusion lists
-    const blockedParentIds = await safetyService.getBlockedParentIds(parent._id);
-    const swipedChildIds = await discoveryRepository.getSwipedChildIds(parent._id);
-    const excludeParentIds = [parent._id.toString(), ...blockedParentIds];
-
-    // Step 6: Parse filters
+    // Step 3: Parse filters
     const filters = {};
     if (queryFilters.ageMin !== undefined) {
       filters.ageMin = parseInt(queryFilters.ageMin, 10);
@@ -74,17 +55,36 @@ class DiscoveryService {
       filters.ageMax = parseInt(queryFilters.ageMax, 10);
     }
     if (queryFilters.interests) {
-      filters.interests = queryFilters.interests.split(',').map((s) => s.trim());
+      filters.interests = queryFilters.interests
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     }
 
-    // Step 7: Query nearby profiles via repository
+    // Step 4: Load quota info (do not consume here), current children and exclusion lists
+    const [quotaSummary, currentChildren, blockedParentIds, swipedChildIds] = await Promise.all([
+      subscriptionService.getQuotaSummary(parent._id),
+      childService.getActiveChildrenByParentId(parent._id),
+      safetyService.getBlockedParentIds(parent._id),
+      discoveryRepository.getSwipedChildIds(parent._id),
+    ]);
+
+    const viewLimit = quotaSummary.limits.discoveryViewsPerDay;
+    const remainingViews =
+      viewLimit === -1
+        ? -1
+        : Math.max(0, viewLimit - (quotaSummary.usage.discoveryViewsToday || 0));
+    const isPremium = quotaSummary.planCode !== SUBSCRIPTION_PLAN_CODES.FREE;
+    const excludeParentIds = [parent._id.toString(), ...blockedParentIds];
+
+    // Step 5: Query nearby candidates via repository
     const rawProfiles = await discoveryRepository.findNearbyProfiles(
       [lng, lat],
       maxDistanceMeters,
       excludeParentIds,
       swipedChildIds,
       filters,
-      DISCOVERY_DEFAULTS.MAX_RESULTS_PER_REQUEST
+      DISCOVERY_DEFAULTS.CANDIDATE_POOL_SIZE
     );
 
     // Calculate current parent's children interests set once
@@ -94,7 +94,7 @@ class DiscoveryService {
       (child.favoriteActivities || []).forEach((a) => currentSet.add(a.toLowerCase()));
     });
 
-    // Step 8: Calculate match scores and sort
+    // Step 6: Calculate match scores and sort
     const scoredProfiles = rawProfiles.map((profile) => {
       const matchScore = this._calculateMatchScore(
         parent,
@@ -122,11 +122,12 @@ class DiscoveryService {
       };
     });
 
-    // Sort by matchScore descending
+    // Sort by matchScore descending, then keep the best matches only
     scoredProfiles.sort((a, b) => b.matchScore - a.matchScore);
+    const topProfiles = scoredProfiles.slice(0, DISCOVERY_DEFAULTS.MAX_RESULTS_PER_REQUEST);
 
-    // Step 9: Shape response via DTO
-    const profiles = DiscoveryProfileDTO.toResponseList(scoredProfiles);
+    // Step 7: Shape response via DTO
+    const profiles = DiscoveryProfileDTO.toResponseList(topProfiles);
 
     return {
       profiles,
@@ -141,6 +142,7 @@ class DiscoveryService {
 
   /**
    * Record a swipe action (Like or Pass) and consume a discovery quota unit.
+   * A Like also sends a connection request to the target child's parent.
    *
    * @param {string} userId - Authenticated user's ID (from JWT)
    * @param {string} targetChildId - The child profile being swiped
@@ -154,15 +156,8 @@ class DiscoveryService {
       throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
 
-    // Step 2: Check and consume discovery quota
-    const quotaResult = await subscriptionService.checkAndConsumeQuota(
-      parent._id,
-      'discovery',
-      true
-    );
-
-    // Step 3: Validate target child exists and belongs to a different parent
-    const targetChild = await childRepository.findById(targetChildId);
+    // Step 2: Validate target child exists and belongs to a different parent
+    const targetChild = await childService.getActiveChildById(targetChildId);
     if (!targetChild) {
       throw new AppError('Target child profile not found', 404, 'CHILD_NOT_FOUND');
     }
@@ -174,7 +169,7 @@ class DiscoveryService {
       );
     }
 
-    // Step 4: Check if already swiped
+    // Step 3: Check if already swiped
     const existingSwipe = await discoveryRepository.findExistingSwipe(
       parent._id,
       targetChildId
@@ -187,7 +182,7 @@ class DiscoveryService {
       );
     }
 
-    // Step 5: Check if target parent is blocked
+    // Step 4: Check if target parent is blocked
     const isBlocked = await safetyService.isBlocked(
       parent._id,
       targetChild.parentId
@@ -200,7 +195,19 @@ class DiscoveryService {
       );
     }
 
-    // Step 6: Create swipe record
+    // Step 5: A Like sends a connection request — make sure it can be sent before spending quota
+    if (isLike) {
+      await connectionService.validateConnectionRequest(parent._id, targetChild.parentId);
+    }
+
+    // Step 6: Consume discovery quota only once the swipe is known to be valid
+    const quotaResult = await subscriptionService.checkAndConsumeQuota(
+      parent._id,
+      'discovery',
+      true
+    );
+
+    // Step 7: Create swipe record
     const swipe = await discoveryRepository.createSwipe(
       parent._id,
       targetChildId,
@@ -208,10 +215,23 @@ class DiscoveryService {
       isLike
     );
 
+    // Step 8: Like = send connection request (consumes the monthly connection request quota)
+    let connection = null;
+    if (isLike) {
+      const result = await connectionService.sendConnectionRequest(parent._id, targetChild.parentId);
+      connection = {
+        connectionId: result.connection._id,
+        status: result.connection.status,
+        isNew: result.isNew,
+        isMatched: result.isMatched,
+      };
+    }
+
     return {
       swipeId: swipe._id,
       isLike: swipe.isLike,
       remainingViews: quotaResult.remaining,
+      connection,
     };
   }
 

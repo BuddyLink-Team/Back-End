@@ -155,7 +155,6 @@ erDiagram
         string displayName
         date dateOfBirth "Tính tuổi chính xác"
         string gender "boy | girl | other"
-        string avatarUrl
         string[] interests "Lego, vẽ tranh, khủng long..."
         string[] favoriteActivities "Đạp xe, bơi lội, công viên..."
         string[] personality "Năng động, hòa đồng, sáng tạo..."
@@ -665,7 +664,6 @@ interface IChild {
   displayName: string; // Tên hoặc biệt danh
   dateOfBirth: Date; // Ngày sinh để tính tuổi chính xác
   gender: "boy" | "girl" | "other";
-  avatarUrl?: string; // Ảnh của bé
 
   interests: string[]; // ['Lego', 'Vẽ tranh', 'Khủng long', 'Âm nhạc']
   favoriteActivities: string[]; // ['Đạp xe', 'Bơi lội', 'Đi công viên', 'Đọc sách']

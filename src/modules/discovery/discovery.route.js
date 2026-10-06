@@ -13,7 +13,7 @@ const router = Router();
 
 // All discovery routes require authenticated parent
 router.use(authenticate);
-router.use(authorizeRoles(USER_ROLES.PARENT, 'PARENT', 'parent'));
+router.use(authorizeRoles(USER_ROLES.PARENT));
 
 // GET /api/v1/discovery — Retrieve discovery profiles with Smart Matching
 router.get('/', validate(discoveryQueryValidation), discoveryController.getDiscoveryProfiles);

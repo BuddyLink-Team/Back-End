@@ -1,6 +1,7 @@
 import childRepository from './child.repository.js';
 import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
+import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { ChildResponseDTO } from './child.dto.js';
 import { CHILD_EDITABLE_FIELDS } from './child.constants.js';
@@ -104,17 +105,46 @@ class ChildService {
   }
 
   /**
-   * Get public profile of a child, masking data per privacySettings
+   * Get an active (non-archived) child profile by ID, regardless of owner.
+   * Used by other modules (e.g. discovery) that act on another parent's child.
+   * @param {string|mongoose.Types.ObjectId} childId
+   */
+  async getActiveChildById(childId) {
+    return childRepository.findActiveById(childId);
+  }
+
+  /**
+   * Get all active children belonging to a parent
+   * @param {string|mongoose.Types.ObjectId} parentId
+   */
+  async getActiveChildrenByParentId(parentId) {
+    return childRepository.findByParentId(parentId);
+  }
+
+  /**
+   * Get public profile of a child as seen by the authenticated parent.
+   * Children of hidden parents, or of parents in a block relationship with the viewer,
+   * are reported as not found so their existence is not leaked.
+   * @param {string} userId - Authenticated viewer's user ID
    * @param {string} childId
    */
-  async getPublicProfile(childId) {
+  async getPublicProfile(userId, childId) {
+    const viewerParentId = await this._getParentId(userId);
     const child = await childRepository.findByIdWithParent(childId);
     if (!child) {
       throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
     }
 
-    const priv = child.privacySettings || {};
     const parent = child.parentId || {};
+    const isOwnChild = parent._id?.toString() === viewerParentId.toString();
+
+    if (!isOwnChild) {
+      const isHidden = parent.privacySettings?.isProfileHidden === true;
+      const isBlocked = isHidden ? false : await safetyService.isBlocked(viewerParentId, parent._id);
+      if (isHidden || isBlocked) {
+        throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
+      }
+    }
 
     // Calculate age in years
     const ageYears = child.dateOfBirth
@@ -123,22 +153,20 @@ class ChildService {
 
     return {
       childId: child._id,
-      displayName: priv.showFullName !== false ? child.displayName : child.displayName?.split(' ').pop(),
-      age:         priv.showAge     !== false ? ageYears : null,
-      gender:      priv.showGender  !== false ? child.gender : null,
-      avatarUrl:   priv.showRealPhoto === true ? child.avatarUrl : null,
-      schoolLevel: priv.showSchool  === true  ? child.schoolLevel : null,
-      interests:   priv.showInterests   !== false ? (child.interests || [])         : [],
-      favoriteActivities: priv.showInterests !== false ? (child.favoriteActivities || []) : [],
-      personality: priv.showPersonality !== false ? (child.personality || [])       : [],
+      displayName: child.displayName,
+      age: ageYears,
+      gender: child.gender,
+      interests: child.interests || [],
+      favoriteActivities: child.favoriteActivities || [],
+      personality: child.personality || [],
       parent: {
-        fullName:        parent.fullName,
-        avatarUrl:       parent.avatarUrl || null,
-        bio:             parent.bio       || null,
-        area:            parent.area      || parent.city || null,
-        isVerifiedParent: parent.isVerifiedParent || false,
-        verifiedPhone:   parent.verifiedPhone || false,
-        verifiedEmail:   parent.verifiedEmail || false,
+        fullName: parent.fullName,
+        avatarUrl: parent.avatarUrl || null,
+        bio: parent.bio || null,
+        area: parent.location?.area || parent.location?.city || null,
+        isVerifiedParent: parent.verification?.isVerifiedParent || false,
+        verifiedPhone: parent.verification?.isPhoneVerified || false,
+        verifiedEmail: parent.verification?.isEmailVerified || false,
       },
     };
   }

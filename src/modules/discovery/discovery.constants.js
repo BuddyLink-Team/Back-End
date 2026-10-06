@@ -26,5 +26,7 @@ export const MATCHING_WEIGHTS = Object.freeze({
 export const DISCOVERY_DEFAULTS = Object.freeze({
   DEFAULT_MAX_DISTANCE_KM: 15,
   MAX_RESULTS_PER_REQUEST: 20,
+  // Nearby candidates fetched before scoring, so the best matches are not cut off by distance
+  CANDIDATE_POOL_SIZE: 100,
   EARTH_RADIUS_KM: 6371,
 });

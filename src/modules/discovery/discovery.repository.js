@@ -1,12 +1,15 @@
 import Parent from '../parent/parent.model.js';
-import Child from '../child/child.model.js';
 import Swipe from './discovery.model.js';
 import mongoose from 'mongoose';
+import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class DiscoveryRepository {
   /**
    * Find nearby parent profiles using $geoNear aggregation, then lookup their children.
-   * Excludes hidden profiles, specific parent IDs, and already-swiped children.
+   * Excludes hidden profiles, parents who accept no connections, disabled accounts,
+   * specific parent IDs, and already-swiped children.
    * Applies optional age and interest filters on children.
    *
    * @param {[number, number]} coordinates - [longitude, latitude]
@@ -14,7 +17,7 @@ class DiscoveryRepository {
    * @param {string[]} excludeParentIds - Parent IDs to exclude (self, blocked)
    * @param {string[]} excludeChildIds - Child IDs already swiped
    * @param {Object} filters - Optional filters { ageMin, ageMax, interests }
-   * @param {number} limit - Max number of results
+   * @param {number} limit - Max number of candidates
    * @returns {Promise<Array<{parent, child, distanceKm}>>}
    */
   async findNearbyProfiles(
@@ -34,42 +37,49 @@ class DiscoveryRepository {
 
     // Build child match conditions
     const childMatchConditions = {
-      isArchived: false,
+      'children._id': { $nin: excludeChildObjectIds },
+      'children.isArchived': false,
     };
 
     // Age filter: convert age range to dateOfBirth range
     if (filters.ageMin !== undefined || filters.ageMax !== undefined) {
       const now = new Date();
-      childMatchConditions.dateOfBirth = {};
+      const dateOfBirth = {};
 
       if (filters.ageMax !== undefined) {
         // ageMax → child must be born AFTER this date (younger bound)
-        const minBirthDate = new Date(
+        dateOfBirth.$gt = new Date(
           now.getFullYear() - filters.ageMax - 1,
           now.getMonth(),
           now.getDate()
         );
-        childMatchConditions.dateOfBirth.$gte = minBirthDate;
       }
 
       if (filters.ageMin !== undefined) {
-        // ageMin → child must be born BEFORE this date (older bound)
-        const maxBirthDate = new Date(
+        // ageMin → child must be born ON or BEFORE this date (older bound)
+        dateOfBirth.$lte = new Date(
           now.getFullYear() - filters.ageMin,
           now.getMonth(),
           now.getDate()
         );
-        childMatchConditions.dateOfBirth.$lte = maxBirthDate;
       }
+
+      childMatchConditions['children.dateOfBirth'] = dateOfBirth;
     }
 
-    // Interest filter
+    // Interest filter: case-insensitive, matches either interests or favorite activities
     if (filters.interests && filters.interests.length > 0) {
-      childMatchConditions.interests = { $in: filters.interests };
+      const interestPatterns = filters.interests.map(
+        (interest) => new RegExp(`^${escapeRegExp(interest)}$`, 'i')
+      );
+      childMatchConditions.$or = [
+        { 'children.interests': { $in: interestPatterns } },
+        { 'children.favoriteActivities': { $in: interestPatterns } },
+      ];
     }
 
     const pipeline = [
-      // Stage 1: GeoNear — find parents within radius
+      // Stage 1: GeoNear — find visible parents within radius
       {
         $geoNear: {
           near: {
@@ -82,11 +92,23 @@ class DiscoveryRepository {
           query: {
             _id: { $nin: excludeParentObjectIds },
             'privacySettings.isProfileHidden': { $ne: true },
+            'privacySettings.connectionPrivacy': { $ne: CONNECTION_PRIVACY.NOBODY },
           },
         },
       },
 
-      // Stage 2: Lookup children belonging to each nearby parent
+      // Stage 2: Exclude parents whose user account is disabled
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user',
+        },
+      },
+      { $match: { 'user.isActive': true } },
+
+      // Stage 3: Lookup children belonging to each nearby parent
       {
         $lookup: {
           from: 'children',
@@ -96,24 +118,13 @@ class DiscoveryRepository {
         },
       },
 
-      // Stage 3: Unwind children (one document per child)
+      // Stage 4: Unwind children (one document per child)
       { $unwind: '$children' },
 
-      // Stage 4: Filter children (exclude swiped, archived, apply age/interest filters)
-      {
-        $match: {
-          'children._id': { $nin: excludeChildObjectIds },
-          'children.isArchived': false,
-          ...(childMatchConditions.dateOfBirth
-            ? { 'children.dateOfBirth': childMatchConditions.dateOfBirth }
-            : {}),
-          ...(childMatchConditions.interests
-            ? { 'children.interests': childMatchConditions.interests }
-            : {}),
-        },
-      },
+      // Stage 5: Filter children (exclude swiped, archived, apply age/interest filters)
+      { $match: childMatchConditions },
 
-      // Stage 5: Project the fields we need
+      // Stage 6: Project the fields we need
       {
         $project: {
           parent: {
@@ -131,7 +142,7 @@ class DiscoveryRepository {
         },
       },
 
-      // Stage 6: Limit results
+      // Stage 7: Limit candidate pool (scoring and final cut happen in the service)
       { $limit: limit },
     ];
 

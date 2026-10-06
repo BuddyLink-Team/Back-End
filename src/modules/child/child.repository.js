@@ -9,6 +9,10 @@ class ChildRepository {
     return Child.findOne({ _id: id, parentId, isArchived: false });
   }
 
+  async findActiveById(id) {
+    return Child.findOne({ _id: id, isArchived: false });
+  }
+
   async findByParentId(parentId) {
     return Child.find({ parentId, isArchived: false }).sort({ createdAt: -1 });
   }
@@ -40,7 +44,7 @@ class ChildRepository {
     return Child.findOne({ _id: childId, isArchived: false })
       .populate({
         path: 'parentId',
-        select: 'fullName avatarUrl bio area city isVerifiedParent verifiedPhone verifiedEmail',
+        select: 'fullName avatarUrl bio location.area location.city verification privacySettings.isProfileHidden',
       })
       .lean();
   }

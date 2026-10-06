@@ -7,11 +7,17 @@ export const discoveryQueryValidation = [
   query('lat')
     .optional()
     .isFloat({ min: -90, max: 90 })
-    .withMessage('Latitude must be between -90 and 90'),
+    .withMessage('Latitude must be between -90 and 90')
+    .bail()
+    .custom((_value, { req }) => req.query.lng !== undefined)
+    .withMessage('Latitude and longitude must be provided together'),
   query('lng')
     .optional()
     .isFloat({ min: -180, max: 180 })
-    .withMessage('Longitude must be between -180 and 180'),
+    .withMessage('Longitude must be between -180 and 180')
+    .bail()
+    .custom((_value, { req }) => req.query.lat !== undefined)
+    .withMessage('Latitude and longitude must be provided together'),
   query('maxDistanceKm')
     .optional()
     .isInt({ min: 1, max: 100 })
@@ -23,7 +29,12 @@ export const discoveryQueryValidation = [
   query('ageMax')
     .optional()
     .isInt({ min: 0, max: 18 })
-    .withMessage('Maximum age must be between 0 and 18'),
+    .withMessage('Maximum age must be between 0 and 18')
+    .bail()
+    .custom((value, { req }) =>
+      req.query.ageMin === undefined || parseInt(req.query.ageMin, 10) <= parseInt(value, 10)
+    )
+    .withMessage('Maximum age must be greater than or equal to minimum age'),
   query('interests')
     .optional()
     .isString()

@@ -15,16 +15,6 @@ class SafetyService {
   }
 
   /**
-   * Check if a block relationship exists between two parents (either direction).
-   * @param {string|mongoose.Types.ObjectId} parentIdA
-   * @param {string|mongoose.Types.ObjectId} parentIdB
-   * @returns {Promise<boolean>}
-   */
-  async isBlocked(parentIdA, parentIdB) {
-    return safetyRepository.isBlocked(parentIdA, parentIdB);
-  }
-
-  /**
    * Resolve parent profile from userId or parentId
    * @private
    */

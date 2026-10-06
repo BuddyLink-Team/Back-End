@@ -49,11 +49,11 @@ class ChildController {
 
   /**
    * GET /api/v1/children/:id/public-profile
-   * Returns masked public profile based on child's privacySettings
+   * Returns the public profile of a child
    */
   async getPublicProfile(req, res, next) {
     try {
-      const profile = await childService.getPublicProfile(req.params.id);
+      const profile = await childService.getPublicProfile(req.userId, req.params.id);
       return successResponse(res, profile, 'Public profile retrieved successfully', 200);
     } catch (error) {
       return next(error);

@@ -16,6 +16,16 @@ export class DiscoveryProfileDTO {
   }
 
   /**
+   * Round distance to whole kilometers (minimum 1) so a family's exact location
+   * cannot be triangulated from repeated queries.
+   * @param {number} distanceKm
+   * @returns {number}
+   */
+  static toApproximateDistance(distanceKm) {
+    return Math.max(1, Math.round(distanceKm || 0));
+  }
+
+  /**
    * Transform a single discovery profile into API response shape
    * @param {Object} child - Child document
    * @param {Object} parent - Parent document
@@ -31,7 +41,6 @@ export class DiscoveryProfileDTO {
       displayName: child.displayName,
       age: DiscoveryProfileDTO.calculateAge(child.dateOfBirth),
       gender: child.gender,
-      avatarUrl: child.avatarUrl || '',
       interests: child.interests || [],
       favoriteActivities: child.favoriteActivities || [],
       personality: child.personality || [],
@@ -42,10 +51,15 @@ export class DiscoveryProfileDTO {
         area: parent.location?.area || '',
         city: parent.location?.city || '',
         isVerifiedParent: parent.verification?.isVerifiedParent || false,
-        preferences: parent.preferences || {},
+        // Only the scheduling preferences shown on the card; never expose private notes
+        preferences: {
+          preferredPlaydateDays: parent.preferences?.preferredPlaydateDays || [],
+          preferredTimeSlots: parent.preferences?.preferredTimeSlots || [],
+          preferredLocations: parent.preferences?.preferredLocations || [],
+        },
       },
       matchScore,
-      distanceKm: Math.round(distanceKm * 10) / 10,
+      distanceKm: DiscoveryProfileDTO.toApproximateDistance(distanceKm),
       matchedInterestsCount,
     };
   }
