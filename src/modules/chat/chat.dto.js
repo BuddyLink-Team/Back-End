@@ -14,11 +14,59 @@ export class ChatDTO {
     };
   }
 
+  static formatPlaydate(playdate) {
+    if (!playdate) return null;
+    if (typeof playdate === 'string' || !playdate._id) {
+      return { id: playdate.toString ? playdate.toString() : playdate };
+    }
+
+    const hostParent = this.formatParticipant(playdate.hostParentId);
+    const hostChild = playdate.hostChildId && typeof playdate.hostChildId === 'object'
+      ? {
+          id: playdate.hostChildId._id?.toString() || playdate.hostChildId.id,
+          displayName: playdate.hostChildId.displayName || '',
+          dateOfBirth: playdate.hostChildId.dateOfBirth,
+          gender: playdate.hostChildId.gender,
+          interests: playdate.hostChildId.interests || [],
+        }
+      : null;
+
+    const participants = (playdate.participants || []).map((p) => ({
+      parent: this.formatParticipant(p.parentId),
+      child: p.childId && typeof p.childId === 'object'
+        ? {
+            id: p.childId._id?.toString() || p.childId.id,
+            displayName: p.childId.displayName || '',
+            dateOfBirth: p.childId.dateOfBirth,
+            gender: p.childId.gender,
+            interests: p.childId.interests || [],
+          }
+        : null,
+      status: p.status,
+      invitedAt: p.invitedAt,
+      respondedAt: p.respondedAt,
+    }));
+
+    return {
+      id: playdate._id?.toString() || playdate.id,
+      title: playdate.activity || playdate.title || 'Cuộc hẹn chơi',
+      activity: playdate.activity || '',
+      scheduledDate: playdate.scheduledDate,
+      time: playdate.time || '',
+      location: playdate.location || {},
+      note: playdate.note || '',
+      status: playdate.status || 'upcoming',
+      host: hostParent,
+      hostChild,
+      participants,
+    };
+  }
+
   static toConversationResponse(conversation, currentParentId) {
     if (!conversation) return null;
 
     const currentParentIdStr = currentParentId?.toString();
-    const participants = (conversation.participants || []).map(this.formatParticipant);
+    const participants = (conversation.participants || []).map((p) => this.formatParticipant(p));
 
     // Identify the other participant in direct conversations
     const partner = participants.find((p) => p.id !== currentParentIdStr) || participants[0] || null;
@@ -38,7 +86,7 @@ export class ChatDTO {
       type: conversation.type,
       participants,
       partner,
-      playdate: conversation.playdateId || null,
+      playdate: this.formatPlaydate(conversation.playdateId),
       lastMessage: conversation.lastMessage
         ? {
             messageId: conversation.lastMessage.messageId?.toString() || null,

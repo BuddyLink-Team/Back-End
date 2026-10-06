@@ -1,5 +1,4 @@
-import Block from './block.model.js';
-import Report from './report.model.js';
+import safetyRepository from './safety.repository.js';
 import parentService from '../parent/parent.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
@@ -39,20 +38,7 @@ class SafetyService {
       throw new AppError('Cannot block yourself', 400, 'SELF_BLOCK_NOT_ALLOWED');
     }
 
-    const block = await Block.findOneAndUpdate(
-      {
-        blockerId: currentParent._id,
-        blockedId: targetParent._id,
-      },
-      {
-        $set: {
-          reason: reason || 'Blocked by user',
-        },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    return block;
+    return safetyRepository.upsertBlock(currentParent._id, targetParent._id, reason || 'Blocked by user');
   }
 
   /**
@@ -60,10 +46,7 @@ class SafetyService {
    */
   async unblockUser(userIdOrParentId, targetParentId) {
     const currentParent = await this._resolveParent(userIdOrParentId);
-    await Block.findOneAndDelete({
-      blockerId: currentParent._id,
-      blockedId: targetParentId,
-    });
+    await safetyRepository.deleteBlock(currentParent._id, targetParentId);
     return { success: true };
   }
 
@@ -72,12 +55,7 @@ class SafetyService {
    */
   async isBlocked(parentAId, parentBId) {
     if (!parentAId || !parentBId) return false;
-    const block = await Block.findOne({
-      $or: [
-        { blockerId: parentAId, blockedId: parentBId },
-        { blockerId: parentBId, blockedId: parentAId },
-      ],
-    });
+    const block = await safetyRepository.findBlockBetween(parentAId, [parentBId]);
     return Boolean(block);
   }
 
@@ -89,12 +67,7 @@ class SafetyService {
    */
   async isBlockedWithAny(parentId, otherParentIds = []) {
     if (!parentId || otherParentIds.length === 0) return false;
-    const block = await Block.findOne({
-      $or: [
-        { blockerId: parentId, blockedId: { $in: otherParentIds } },
-        { blockerId: { $in: otherParentIds }, blockedId: parentId },
-      ],
-    });
+    const block = await safetyRepository.findBlockBetween(parentId, otherParentIds);
     return Boolean(block);
   }
 
@@ -103,9 +76,7 @@ class SafetyService {
    */
   async getBlockedUserIds(parentId) {
     if (!parentId) return [];
-    const blocks = await Block.find({
-      $or: [{ blockerId: parentId }, { blockedId: parentId }],
-    }).lean();
+    const blocks = await safetyRepository.findBlocksInvolving(parentId);
 
     const blockedIds = new Set();
     blocks.forEach((b) => {
@@ -158,11 +129,11 @@ class SafetyService {
     }
 
     // Prevent flooding moderators with repeated reports against the same parent
-    const recentReport = await Report.exists({
-      reporterId: reporter._id,
-      reportedUserId: reportedParent._id,
-      createdAt: { $gte: new Date(Date.now() - REPORT_LIMITS.DUPLICATE_WINDOW_MS) },
-    });
+    const recentReport = await safetyRepository.hasRecentReport(
+      reporter._id,
+      reportedParent._id,
+      new Date(Date.now() - REPORT_LIMITS.DUPLICATE_WINDOW_MS)
+    );
     if (recentReport) {
       throw new AppError(
         'You have already reported this user recently. Our team is reviewing it.',
@@ -171,7 +142,7 @@ class SafetyService {
       );
     }
 
-    const report = await Report.create({
+    const report = await safetyRepository.createReport({
       reporterId: reporter._id,
       reportedUserId: reportedParent._id,
       targetType,

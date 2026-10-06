@@ -225,6 +225,9 @@ class AuthService {
       },
     });
 
+    // Automatically create a Free subscription for the registered parent
+    await subscriptionService.createFreeSubscription(parent._id);
+
     const tokens = await this._generateTokenPair(user);
 
     return {

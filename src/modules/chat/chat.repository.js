@@ -4,6 +4,31 @@ import '../parent/parent.model.js';
 import '../playdate/playdate.model.js';
 import { CONVERSATION_TYPES } from './chat.constants.js';
 
+const PARENT_FIELDS = 'fullName avatarUrl verification location';
+const CHILD_FIELDS = 'displayName dateOfBirth gender interests';
+const PLAYDATE_SUMMARY_FIELDS = 'activity scheduledDate time status location';
+
+const CONVERSATION_BASE_POPULATE = [
+  { path: 'participants', select: PARENT_FIELDS },
+  { path: 'lastMessage.senderId', select: 'fullName avatarUrl' },
+];
+
+// Lightweight playdate info for conversation lists, headers and socket payloads
+const PLAYDATE_SUMMARY_POPULATE = { path: 'playdateId', select: PLAYDATE_SUMMARY_FIELDS };
+
+// Full playdate info (host + participants) for the playdate group chat detail view.
+// hostParentId, hostChildId and participants must stay selected for the nested populate to work.
+const PLAYDATE_DETAIL_POPULATE = {
+  path: 'playdateId',
+  select: `${PLAYDATE_SUMMARY_FIELDS} hostParentId hostChildId participants`,
+  populate: [
+    { path: 'hostParentId', select: PARENT_FIELDS },
+    { path: 'hostChildId', select: CHILD_FIELDS },
+    { path: 'participants.parentId', select: PARENT_FIELDS },
+    { path: 'participants.childId', select: CHILD_FIELDS },
+  ],
+};
+
 class ChatRepository {
   /**
    * Find all conversations that a parent participates in
@@ -22,9 +47,8 @@ class ChatRepository {
     }
 
     return Conversation.find(query)
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'activity scheduledDate time status location')
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_SUMMARY_POPULATE)
       .sort({ updatedAt: -1 })
       .lean();
   }
@@ -32,14 +56,39 @@ class ChatRepository {
   /**
    * Find conversation by ID with populated participants
    * @param {string|ObjectId} conversationId
+   * @param {Object} [options]
+   * @param {boolean} [options.withPlaydateDetails=false] - Populate playdate host & participants
+   *   (needed by the playdate group chat detail view, too heavy for per-message broadcasts)
    * @returns {Promise<Object|null>}
    */
-  async findConversationById(conversationId) {
+  async findConversationById(conversationId, { withPlaydateDetails = false } = {}) {
     return Conversation.findOne({ _id: conversationId, isActive: true })
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'activity scheduledDate time status location')
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(withPlaydateDetails ? PLAYDATE_DETAIL_POPULATE : PLAYDATE_SUMMARY_POPULATE)
       .lean();
+  }
+
+  /**
+   * Create the group conversation of a playdate, or replace its participants with the given list.
+   * A single atomic upsert so concurrent calls for the same playdate do not create duplicates.
+   * @param {string|ObjectId} playdateId
+   * @param {Array<string|ObjectId>} participantIds - Host and accepted parents
+   * @returns {Promise<Object>} Conversation with playdate details populated
+   */
+  async upsertPlaydateConversation(playdateId, participantIds) {
+    const conversation = await Conversation.findOneAndUpdate(
+      { playdateId, type: CONVERSATION_TYPES.PLAYDATE, isActive: true },
+      {
+        $set: { participants: participantIds },
+        $setOnInsert: {
+          playdateId,
+          type: CONVERSATION_TYPES.PLAYDATE,
+          isActive: true,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return this.findConversationById(conversation._id, { withPlaydateDetails: true });
   }
 
   /**
@@ -69,9 +118,8 @@ class ChatRepository {
         },
       ],
     })
-      .populate('participants', 'fullName avatarUrl verification location')
-      .populate('lastMessage.senderId', 'fullName avatarUrl')
-      .populate('playdateId', 'activity scheduledDate time status location')
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_SUMMARY_POPULATE)
       .lean();
   }
 

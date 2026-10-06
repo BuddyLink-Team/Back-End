@@ -1,18 +1,13 @@
 import chatService from './chat.service.js';
 import ChatDTO from './chat.dto.js';
 import { successResponse } from '../../shared/response/index.js';
-import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
 import { getIO } from '../../config/socket.js';
 import { broadcastNewMessage, broadcastReadStatus } from '../../sockets/chat.broadcast.js';
 
 class ChatController {
   async getConversations(req, res, next) {
     try {
-      const parent = await parentService.getParentByUserId(req.userId);
-      if (!parent) {
-        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
-      }
+      const parent = await chatService.getCallerParent(req.userId);
       const conversations = await chatService.getUserConversations(parent, req.query);
       const data = ChatDTO.toConversationListResponse(conversations, parent._id);
 
@@ -24,10 +19,7 @@ class ChatController {
 
   async getConversation(req, res, next) {
     try {
-      const parent = await parentService.getParentByUserId(req.userId);
-      if (!parent) {
-        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
-      }
+      const parent = await chatService.getCallerParent(req.userId);
       const conversation = await chatService.getConversationById(parent, req.params.conversationId);
       const data = ChatDTO.toConversationResponse(conversation, parent._id);
 
@@ -39,12 +31,8 @@ class ChatController {
 
   async getOrCreateDirectConversation(req, res, next) {
     try {
-      const { targetParentId } = req.body;
-      const parent = await parentService.getParentByUserId(req.userId);
-      if (!parent) {
-        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
-      }
-      const conversation = await chatService.getOrCreateDirectConversation(parent, targetParentId);
+      const parent = await chatService.getCallerParent(req.userId);
+      const conversation = await chatService.getOrCreateDirectConversation(parent, req.body.targetParentId);
       const data = ChatDTO.toConversationResponse(conversation, parent._id);
 
       return successResponse(res, data, 'Direct conversation ready', 200);
@@ -53,12 +41,21 @@ class ChatController {
     }
   }
 
+  async getOrCreatePlaydateConversation(req, res, next) {
+    try {
+      const parent = await chatService.getCallerParent(req.userId);
+      const conversation = await chatService.getOrCreatePlaydateConversation(parent, req.params.playdateId);
+      const data = ChatDTO.toConversationResponse(conversation, parent._id);
+
+      return successResponse(res, data, 'Playdate conversation ready', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async getMessages(req, res, next) {
     try {
-      const parent = await parentService.getParentByUserId(req.userId);
-      if (!parent) {
-        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
-      }
+      const parent = await chatService.getCallerParent(req.userId);
       const messages = await chatService.getMessages(parent, req.params.conversationId, req.query);
       const data = ChatDTO.toMessageListResponse(messages, parent._id);
 
@@ -70,10 +67,7 @@ class ChatController {
 
   async sendMessage(req, res, next) {
     try {
-      const parent = await parentService.getParentByUserId(req.userId);
-      if (!parent) {
-        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
-      }
+      const parent = await chatService.getCallerParent(req.userId);
       const { content, type, mediaUrl } = req.body;
       const result = await chatService.sendMessage(parent, req.params.conversationId, {
         content,
@@ -96,11 +90,7 @@ class ChatController {
 
   async markAsRead(req, res, next) {
     try {
-      const parent = await parentService.getParentByUserId(req.userId);
-      if (!parent) {
-        throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
-      }
-      const result = await chatService.markAsRead(parent, req.params.conversationId);
+      const result = await chatService.markAsRead(req.userId, req.params.conversationId);
 
       // Broadcast read status via socket
       const io = getIO();
@@ -113,7 +103,6 @@ class ChatController {
       return next(error);
     }
   }
-
 
   async uploadAttachment(req, res, next) {
     try {
