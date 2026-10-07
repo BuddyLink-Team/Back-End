@@ -40,7 +40,7 @@ export class DiscoveryProfileDTO {
         area: parent.location?.area || '',
         city: parent.location?.city || '',
         isVerifiedParent: parent.verification?.isVerifiedParent || false,
-        // Only the scheduling preferences shown on the card; never expose private notes
+        // Only the scheduling preferences shown on the card
         preferences: {
           preferredPlaydateDays: parent.preferences?.preferredPlaydateDays || [],
           preferredTimeSlots: parent.preferences?.preferredTimeSlots || [],

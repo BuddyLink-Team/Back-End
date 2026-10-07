@@ -78,8 +78,6 @@ async function seedChatData() {
         preferredTimeSlots: ['afternoon'],
         preferredLocations: ['park'],
         maxDistanceKm: 10,
-        languages: ['Vietnamese'],
-        additionalNotes: '',
       },
       privacySettings: {
         isProfileHidden: false,

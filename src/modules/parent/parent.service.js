@@ -93,7 +93,7 @@ class ParentService {
    * @param {Object} existingLocation
    * @param {Object} locationUpdate
    * @param {{ geocodeWhenMissing: boolean }} options - Onboarding always resolves coordinates;
-   *   profile updates only geocode when the address actually changes
+   *   profile updates only geocode when area/city/address changed or coordinates were never resolved
    */
   async _buildLocation(existingLocation, locationUpdate, { geocodeWhenMissing }) {
     const area = locationUpdate.area !== undefined ? locationUpdate.area : existingLocation.area;
@@ -106,14 +106,22 @@ class ParentService {
 
     assertValidCoordinates(locationUpdate.coordinates);
     let coordinates = locationUpdate.coordinates;
-    const isMissingOrZero = !coordinates || (coordinates[0] === 0 && coordinates[1] === 0);
-    const hasNewAddress = Boolean(locationUpdate.address || locationUpdate.area || locationUpdate.city);
+    const isZeroPoint = (point) => !point || (point[0] === 0 && point[1] === 0);
+    const existingCoordinates = existingLocation.coordinates?.coordinates;
 
-    if (isMissingOrZero && (geocodeWhenMissing || hasNewAddress)) {
+    // Re-geocode only when the place really changed (or was never resolved), not on every save
+    const normalize = (value) => (value || "").trim().toLowerCase();
+    const isPlaceChanged =
+      normalize(area) !== normalize(existingLocation.area) ||
+      normalize(city) !== normalize(existingLocation.city) ||
+      normalize(address) !== normalize(existingLocation.address);
+    const needsGeocoding = geocodeWhenMissing || isPlaceChanged || isZeroPoint(existingCoordinates);
+
+    if (isZeroPoint(coordinates) && needsGeocoding) {
       coordinates = await geocodingAdapter.getCoordinatesByAddress(area || address, city);
     }
 
-    const nextCoordinates = coordinates || existingLocation.coordinates?.coordinates || [0, 0];
+    const nextCoordinates = coordinates || existingCoordinates || [0, 0];
 
     return {
       address,

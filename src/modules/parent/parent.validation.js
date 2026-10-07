@@ -49,10 +49,6 @@ export const onboardingPreferencesValidation = [
     .isInt({ min: PREFERENCE_LIMITS.MIN_CHILD_AGE, max: PREFERENCE_LIMITS.MAX_CHILD_AGE })
     .withMessage(`preferredAgeRange.max must be an integer between ${PREFERENCE_LIMITS.MIN_CHILD_AGE} and ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`)
     .toInt(),
-  body('preferences.languages')
-    .optional()
-    .isArray()
-    .withMessage('languages must be an array of strings'),
 ];
 
 export const updateParentProfileValidation = [
@@ -108,10 +104,6 @@ export const updateParentProfileValidation = [
     .isInt({ min: PREFERENCE_LIMITS.MIN_CHILD_AGE, max: PREFERENCE_LIMITS.MAX_CHILD_AGE })
     .withMessage(`preferredAgeRange.max must be an integer between ${PREFERENCE_LIMITS.MIN_CHILD_AGE} and ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`)
     .toInt(),
-  body('preferences.languages')
-    .optional()
-    .isArray()
-    .withMessage('languages must be an array of strings'),
   body('privacySettings').optional().isObject().withMessage('privacySettings must be an object'),
   body('privacySettings.isProfileHidden').optional().isBoolean().withMessage('isProfileHidden must be a boolean'),
   body('privacySettings.connectionPrivacy').optional().isIn(['everyone', 'nobody']).withMessage('connectionPrivacy must be either everyone or nobody'),

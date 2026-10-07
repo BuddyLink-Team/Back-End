@@ -141,7 +141,7 @@ erDiagram
         string avatarUrl
         string bio
         object location "address, area, city, coordinates (2dsphere)"
-        object preferences "preferredDays, timeSlots, locations, maxDistanceKm, ageRange, languages"
+        object preferences "preferredDays, timeSlots, locations, maxDistanceKm, ageRange"
         object privacySettings "isProfileHidden, connectionPrivacy, messagePrivacy"
         object verification "isEmailVerified, isPhoneVerified, isVerifiedParent"
         object streak "currentWeeklyStreak, longestStreak, lastCompletedPlaydateWeek"
@@ -540,8 +540,6 @@ interface IParentPreferences {
   preferredLocations?: ("indoor" | "outdoor" | "park" | "kids_cafe" | "home")[]; // Địa điểm ưa thích
   maxDistanceKm?: number; // Bán kính tìm kiếm bạn chơi tối đa (km)
   preferredAgeRange?: { min: number; max: number }; // Khoảng tuổi bạn chơi mong muốn
-  languages?: string[]; // Ngôn ngữ giao tiếp: ['Vietnamese', 'English']
-  additionalNotes?: string; // Ghi chú phong cách nuôi dạy hoặc lưu ý riêng
 }
 
 interface IParent {

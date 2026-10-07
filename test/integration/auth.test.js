@@ -185,7 +185,6 @@ describe("Authentication & Onboarding Integration Flow", () => {
           preferredLocations: ["park", "kids_cafe"],
           maxDistanceKm: 10,
           preferredAgeRange: { min: 3, max: 7 },
-          languages: ["Vietnamese", "English"],
         },
       });
 

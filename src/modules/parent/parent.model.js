@@ -53,8 +53,6 @@ const parentSchema = new mongoose.Schema(
         min: { type: Number, default: 1 },
         max: { type: Number, default: 12 },
       },
-      languages: [{ type: String, default: 'Vietnamese' }],
-      additionalNotes: { type: String, default: '' },
     },
     privacySettings: {
       isProfileHidden: { type: Boolean, default: false },
