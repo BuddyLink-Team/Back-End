@@ -12,6 +12,24 @@ class SubscriptionRepository {
     }).sort({ createdAt: -1 });
   }
 
+  /**
+   * Paid subscriptions still marked active whose end date has passed
+   */
+  async findDueForExpiry(now = new Date()) {
+    return Subscription.find({
+      status: 'active',
+      endDate: { $ne: null, $lte: now },
+    });
+  }
+
+  async markExpired(id) {
+    return Subscription.findOneAndUpdate(
+      { _id: id, status: 'active' },
+      { $set: { status: 'expired' } },
+      { new: true }
+    );
+  }
+
   async create(subscriptionData) {
     return Subscription.create(subscriptionData);
   }

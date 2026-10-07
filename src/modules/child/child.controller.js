@@ -22,7 +22,7 @@ class ChildController {
 
   async getChildById(req, res, next) {
     try {
-      const child = await childService.getChildById(req.params.id);
+      const child = await childService.getChildById(req.userId, req.params.id);
       return successResponse(res, child, 'Child profile details retrieved successfully', 200);
     } catch (error) {
       return next(error);
@@ -42,6 +42,19 @@ class ChildController {
     try {
       const result = await childService.deleteChild(req.userId, req.params.id);
       return successResponse(res, result, 'Child profile deleted successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/children/:id/public-profile
+   * Returns the public profile of a child
+   */
+  async getPublicProfile(req, res, next) {
+    try {
+      const profile = await childService.getPublicProfile(req.userId, req.params.id);
+      return successResponse(res, profile, 'Public profile retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }

@@ -1,11 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
-import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 
 describe('Subscription & Quota Integration Flow', () => {
   let parentToken = '';
-  let parentId = '';
   const testEmail = `sub-test-${Date.now()}@example.com`;
   const testPassword = 'Password123!';
 
@@ -18,11 +16,6 @@ describe('Subscription & Quota Integration Flow', () => {
     });
     parentToken = res.body.data.tokens.accessToken;
 
-    // Get parentId
-    const profileRes = await request(app)
-      .get('/api/v1/parent/me')
-      .set('Authorization', `Bearer ${parentToken}`);
-    parentId = profileRes.body.data.id || profileRes.body.data._id;
   });
 
   describe('GET /api/v1/subscriptions/plans', () => {

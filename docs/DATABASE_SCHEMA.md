@@ -141,7 +141,7 @@ erDiagram
         string avatarUrl
         string bio
         object location "address, area, city, coordinates (2dsphere)"
-        object preferences "preferredDays, timeSlots, locations, maxDistanceKm, ageRange, languages"
+        object preferences "preferredDays, timeSlots, locations, maxDistanceKm, ageRange"
         object privacySettings "isProfileHidden, connectionPrivacy, messagePrivacy"
         object verification "isEmailVerified, isPhoneVerified, isVerifiedParent"
         object streak "currentWeeklyStreak, longestStreak, lastCompletedPlaydateWeek"
@@ -155,7 +155,6 @@ erDiagram
         string displayName
         date dateOfBirth "Tính tuổi chính xác"
         string gender "boy | girl | other"
-        string avatarUrl
         string[] interests "Lego, vẽ tranh, khủng long..."
         string[] favoriteActivities "Đạp xe, bơi lội, công viên..."
         string[] personality "Năng động, hòa đồng, sáng tạo..."
@@ -172,6 +171,7 @@ erDiagram
         string type "phone_otp | password_reset | email_verify"
         date expiresAt "TTL Index: tự hủy khi hết hạn"
         boolean isUsed
+        int attempts "Số lần nhập sai, vô hiệu sau 5 lần"
         date createdAt
     }
 
@@ -214,6 +214,7 @@ erDiagram
     CONNECTIONS {
         ObjectId _id PK
         ObjectId[] parents "Sorted [minId, maxId] triệt tiêu trùng 2 chiều"
+        string pairKey "minId_maxId, unique khi pending/accepted"
         ObjectId requesterId FK "Ref: parents._id"
         ObjectId recipientId FK "Ref: parents._id"
         string status "pending | accepted | declined | removed"
@@ -539,8 +540,6 @@ interface IParentPreferences {
   preferredLocations?: ("indoor" | "outdoor" | "park" | "kids_cafe" | "home")[]; // Địa điểm ưa thích
   maxDistanceKm?: number; // Bán kính tìm kiếm bạn chơi tối đa (km)
   preferredAgeRange?: { min: number; max: number }; // Khoảng tuổi bạn chơi mong muốn
-  languages?: string[]; // Ngôn ngữ giao tiếp: ['Vietnamese', 'English']
-  additionalNotes?: string; // Ghi chú phong cách nuôi dạy hoặc lưu ý riêng
 }
 
 interface IParent {
@@ -612,6 +611,7 @@ interface IAuthToken {
   tokenHash: string; // Hash của mã OTP hoặc token ngẫu nhiên (SHA-256 / bcrypt)
   type: "phone_otp" | "password_reset" | "email_verify"; // Mục đích xác thực
   isUsed: boolean; // Trạng thái: true nếu đã xác thực thành công (Default: false)
+  attempts: number; // Số lần nhập sai mã (Default: 0). Đạt OTP_CONFIG.MAX_ATTEMPTS (5) thì mã bị vô hiệu
   expiresAt: Date; // Thời điểm hết hạn (OTP: 3-5 phút, Reset token: 15-30 phút)
   createdAt: Date;
 }
@@ -662,7 +662,6 @@ interface IChild {
   displayName: string; // Tên hoặc biệt danh
   dateOfBirth: Date; // Ngày sinh để tính tuổi chính xác
   gender: "boy" | "girl" | "other";
-  avatarUrl?: string; // Ảnh của bé
 
   interests: string[]; // ['Lego', 'Vẽ tranh', 'Khủng long', 'Âm nhạc']
   favoriteActivities: string[]; // ['Đạp xe', 'Bơi lội', 'Đi công viên', 'Đọc sách']
@@ -713,6 +712,7 @@ _Ánh xạ: Mục 4.3._
 interface IConnection {
   _id: ObjectId;
   parents: [ObjectId, ObjectId]; // Mảng 2 phần tử luôn được sort [minId, maxId] để triệt tiêu bài toán đảo chiều (Reverse Duplicate)
+  pairKey: string; // `${minId}_${maxId}`, tự sinh từ parents trước khi validate; dùng làm khóa unique của cặp
   requesterId: ObjectId; // Tham chiếu parents._id gửi lời mời
   recipientId: ObjectId; // Tham chiếu parents._id nhận lời mời
   status: "pending" | "accepted" | "declined" | "removed";
@@ -726,7 +726,8 @@ interface IConnection {
 
 _Indexes:_
 
-- `{ parents: 1 }` (unique, `partialFilterExpression: { status: { $in: ["pending", "accepted"] } }` - Chống trùng 2 chiều khi đang chờ hoặc đã kết nối; cho phép gửi lại nếu bị `declined` hoặc `removed`)
+- `{ pairKey: 1 }` (unique, `partialFilterExpression: { status: { $in: ["pending", "accepted"] } }` - Chống trùng 2 chiều khi đang chờ hoặc đã kết nối; cho phép gửi lại nếu bị `declined` hoặc `removed`)
+  - ⚠️ Không đặt unique trên mảng `parents`: index trên mảng là multikey nên MongoDB kiểm tra trùng theo **từng phần tử**, khiến mỗi phụ huynh chỉ có được 1 kết nối pending/accepted.
 - `{ parents: 1, status: 1 }` (Tìm danh sách bạn bè / trạng thái quan hệ 2 chiều cực nhanh)
 - `{ recipientId: 1, status: 1 }` (Lấy danh sách lời mời kết nối đang chờ duyệt)
 - `{ requesterId: 1, createdAt: 1 }` (Kiểm tra quota gửi request trong tháng)

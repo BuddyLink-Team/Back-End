@@ -21,7 +21,7 @@ class PlaydateController {
    */
   async getPlaydateById(req, res, next) {
     try {
-      const playdate = await playdateService.getPlaydateById(req.userId, req.params.id);
+      const playdate = await playdateService.getPlaydateForParent(req.userId, req.params.id);
       return successResponse(res, playdate, 'Playdate details retrieved successfully', 200);
     } catch (error) {
       return next(error);

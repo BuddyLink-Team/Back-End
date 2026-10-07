@@ -2,8 +2,8 @@ import axios from 'axios';
 import logger from '../../shared/logger/index.js';
 
 /**
- * Tọa độ tâm dự phòng của các tỉnh/thành phố lớn tại Việt Nam [lng, lat]
- * Chuẩn định dạng GeoJSON: [longitude, latitude]
+ * Fallback center coordinates of major Vietnamese provinces/cities.
+ * GeoJSON order: [longitude, latitude]. Keys are lower-case Vietnamese names matched against user input.
  */
 const DEFAULT_CITY_COORDINATES = {
   'hồ chí minh': [106.6297, 10.8231],
@@ -27,11 +27,11 @@ const DEFAULT_CITY_COORDINATES = {
 
 class GeocodingAdapter {
   /**
-   * Lấy tọa độ [lng, lat] từ tên Phường/Xã và Tỉnh/Thành phố
-   * Sử dụng OpenStreetMap Nominatim API (Hoàn toàn miễn phí, không yêu cầu thẻ tín dụng/API Key)
+   * Resolve [lng, lat] from a ward/district and a province/city name.
+   * Uses the OpenStreetMap Nominatim API (free, no API key or billing required).
    *
-   * @param {string} area - Phường/Xã
-   * @param {string} city - Tỉnh/Thành phố
+   * @param {string} area - Ward / district
+   * @param {string} city - Province / city
    * @returns {Promise<[number, number]>} [longitude, latitude]
    */
   async getCoordinatesByAddress(area, city) {
@@ -44,7 +44,7 @@ class GeocodingAdapter {
     }
 
     try {
-      logger.info(`[Geocoding] Đang truy vấn tọa độ cho: "${query}" qua OpenStreetMap Nominatim...`);
+      logger.info(`[Geocoding] Querying OpenStreetMap Nominatim for "${query}"`);
 
       const response = await axios.get('https://nominatim.openstreetmap.org/search', {
         params: {
@@ -67,29 +67,29 @@ class GeocodingAdapter {
 
         if (!isNaN(lat) && !isNaN(lon)) {
           logger.info(
-            `[Geocoding Success] "${query}" -> [lng: ${lon}, lat: ${lat}] (Địa chỉ nhận diện: ${item.display_name})`
+            `[Geocoding Success] "${query}" -> [lng: ${lon}, lat: ${lat}] (matched: ${item.display_name})`
           );
           return [lon, lat];
         }
       }
 
-      logger.warn(`[Geocoding Warn] Không tìm thấy kết quả từ OSM cho "${query}", sử dụng fallback.`);
+      logger.warn(`[Geocoding Warn] No OSM result for "${query}", using fallback coordinates`);
     } catch (error) {
       logger.warn(
-        `[Geocoding Warn] Lỗi khi gọi OpenStreetMap API: ${error.message}. Chuyển sang dùng tọa độ dự phòng.`
+        `[Geocoding Warn] OpenStreetMap request failed: ${error.message}. Using fallback coordinates`
       );
     }
 
-    // Fallback: Tìm theo tên Tỉnh/Thành phố trong danh sách tọa độ có sẵn
+    // Fallback: match by city/province name in the predefined coordinates map
     const normalizedCity = cleanCity.toLowerCase();
     for (const [key, coords] of Object.entries(DEFAULT_CITY_COORDINATES)) {
       if (normalizedCity.includes(key)) {
-        logger.info(`[Geocoding Fallback] Gán tọa độ trung tâm thành phố "${cleanCity}": [${coords}]`);
+        logger.info(`[Geocoding Fallback] Using fallback coordinates for "${cleanCity}": [${coords}]`);
         return coords;
       }
     }
 
-    // Mặc định trung tâm TP.HCM nếu không khớp
+    // Default to Ho Chi Minh City coordinates if no match is found
     return [106.6297, 10.8231];
   }
 }

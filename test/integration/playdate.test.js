@@ -1,8 +1,6 @@
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
-import User from '../../src/modules/user/user.model.js';
-import Parent from '../../src/modules/parent/parent.model.js';
 import Child from '../../src/modules/child/child.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
@@ -234,8 +232,9 @@ describe('Playdate Management Integration Flow', () => {
     expect(conversation).toBeDefined();
     expect(conversation.type).toBe('playdate');
     expect(conversation.playdateId.toString()).toBe(res.body.data.id);
+    // Group chat members are the host and accepted participants: the invitee joins after accepting
     expect(conversation.participants.map((p) => p.toString())).toContain(hostParentId);
-    expect(conversation.participants.map((p) => p.toString())).toContain(guestParentId);
+    expect(conversation.participants.map((p) => p.toString())).not.toContain(guestParentId);
   });
 
   it('10. POST /api/v1/playdates: should enforce 3 playdates/month quota for Free tier', async () => {
@@ -291,6 +290,11 @@ describe('Playdate Management Integration Flow', () => {
     );
     expect(guestParticipant).toBeDefined();
     expect(guestParticipant.status).toBe('accepted');
+
+    // Accepting adds the guest to the playdate group chat
+    const Conversation = (await import('../../src/modules/chat/conversation.model.js')).default;
+    const conversation = await Conversation.findById(res.body.data.chatConversationId);
+    expect(conversation.participants.map((p) => p.toString())).toContain(guestParentId);
   });
 
   it('12. POST /api/v1/playdates/:id/reschedule: should create pending reschedule request requiring participant consensus', async () => {

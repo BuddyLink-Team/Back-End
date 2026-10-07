@@ -1,24 +1,144 @@
-import bcrypt from 'bcryptjs';
-import parentRepository from './parent.repository.js';
-import userService from '../user/user.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
-import { ParentProfileDTO } from './parent.dto.js';
-import geocodingAdapter from '../../integrations/maps/geocoding.adapter.js';
-import cloudinaryAdapter from '../../integrations/storage/cloudinary.adapter.js';
+import parentRepository from "./parent.repository.js";
+import AppError from "../../shared/exceptions/AppError.js";
+import { ParentProfileDTO } from "./parent.dto.js";
+import { PREFERENCE_LIMITS } from "./parent.constants.js";
+import geocodingAdapter from "../../integrations/maps/geocoding.adapter.js";
+import storageAdapter from "../../integrations/storage/storage.adapter.js";
+
+/**
+ * Validate a GeoJSON [longitude, latitude] pair; invalid values would break the 2dsphere index.
+ */
+const assertValidCoordinates = (coordinates) => {
+  if (coordinates === undefined || coordinates === null) return;
+
+  const isValid =
+    Array.isArray(coordinates) &&
+    coordinates.length === 2 &&
+    coordinates.every((value) => typeof value === "number" && Number.isFinite(value)) &&
+    coordinates[0] >= -180 &&
+    coordinates[0] <= 180 &&
+    coordinates[1] >= -90 &&
+    coordinates[1] <= 90;
+
+  if (!isValid) {
+    throw new AppError(
+      "Coordinates must be [longitude (-180..180), latitude (-90..90)]",
+      400,
+      "INVALID_COORDINATES",
+    );
+  }
+};
+
+/**
+ * Validate business rules of the merged preferences (shared by onboarding and profile update).
+ */
+const assertValidPreferences = (preferences) => {
+  if (!preferences) return;
+
+  const { maxDistanceKm, preferredAgeRange } = preferences;
+
+  if (
+    maxDistanceKm !== undefined &&
+    (typeof maxDistanceKm !== "number" ||
+      maxDistanceKm < PREFERENCE_LIMITS.MIN_DISTANCE_KM ||
+      maxDistanceKm > PREFERENCE_LIMITS.MAX_DISTANCE_KM)
+  ) {
+    throw new AppError(
+      `maxDistanceKm must be between ${PREFERENCE_LIMITS.MIN_DISTANCE_KM} and ${PREFERENCE_LIMITS.MAX_DISTANCE_KM}`,
+      400,
+      "INVALID_PREFERENCES",
+    );
+  }
+
+  if (preferredAgeRange) {
+    const { min, max } = preferredAgeRange;
+    const inRange = (value) =>
+      typeof value === "number" &&
+      value >= PREFERENCE_LIMITS.MIN_CHILD_AGE &&
+      value <= PREFERENCE_LIMITS.MAX_CHILD_AGE;
+
+    if (!inRange(min) || !inRange(max) || min > max) {
+      throw new AppError(
+        `preferredAgeRange must satisfy ${PREFERENCE_LIMITS.MIN_CHILD_AGE} <= min <= max <= ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`,
+        400,
+        "INVALID_PREFERENCES",
+      );
+    }
+  }
+};
 
 class ParentService {
   async getParentByUserId(userId) {
     return parentRepository.findByUserId(userId);
   }
 
-  async getMyProfile(userId) {
-    const [parent, user] = await Promise.all([
-      parentRepository.findByUserId(userId),
-      userService.getUserById(userId),
-    ]);
+  async getParentById(id) {
+    return parentRepository.findById(id);
+  }
 
+  /**
+   * Parents visible in discovery near a point, nearest first
+   * @param {[number, number]} coordinates - [longitude, latitude]
+   * @param {number} maxDistanceMeters
+   * @param {Array<string|ObjectId>} excludeParentIds - Self and blocked parents
+   * @param {number} limit
+   */
+  async findNearbyVisibleParents(coordinates, maxDistanceMeters, excludeParentIds, limit) {
+    return parentRepository.findNearbyVisible(coordinates, maxDistanceMeters, excludeParentIds, limit);
+  }
+  
+  /**
+   * Build the next location from a partial client update, geocoding when coordinates are absent.
+   * Only address/area/city/coordinates are accepted from the client.
+   * @param {Object} existingLocation
+   * @param {Object} locationUpdate
+   * @param {{ geocodeWhenMissing: boolean }} options - Onboarding always resolves coordinates;
+   *   profile updates only geocode when area/city/address changed or coordinates were never resolved
+   */
+  async _buildLocation(existingLocation, locationUpdate, { geocodeWhenMissing }) {
+    const area = locationUpdate.area !== undefined ? locationUpdate.area : existingLocation.area;
+    const city = locationUpdate.city !== undefined ? locationUpdate.city : existingLocation.city;
+
+    // Automatically construct address by joining area and city if not explicitly provided
+    const address = locationUpdate.address?.trim()
+      ? locationUpdate.address.trim()
+      : [area, city].filter(Boolean).join(", ");
+
+    assertValidCoordinates(locationUpdate.coordinates);
+    let coordinates = locationUpdate.coordinates;
+    const isZeroPoint = (point) => !point || (point[0] === 0 && point[1] === 0);
+    const existingCoordinates = existingLocation.coordinates?.coordinates;
+
+    // Re-geocode only when the place really changed (or was never resolved), not on every save
+    const normalize = (value) => (value || "").trim().toLowerCase();
+    const isPlaceChanged =
+      normalize(area) !== normalize(existingLocation.area) ||
+      normalize(city) !== normalize(existingLocation.city) ||
+      normalize(address) !== normalize(existingLocation.address);
+    const needsGeocoding = geocodeWhenMissing || isPlaceChanged || isZeroPoint(existingCoordinates);
+
+    if (isZeroPoint(coordinates) && needsGeocoding) {
+      coordinates = await geocodingAdapter.getCoordinatesByAddress(area || address, city);
+    }
+
+    const nextCoordinates = coordinates || existingCoordinates || [0, 0];
+
+    return {
+      address,
+      area: area || "",
+      city: city || "",
+      coordinates: { type: "Point", coordinates: nextCoordinates },
+    };
+  }
+
+  /**
+   * Get the parent profile of a user
+   * @param {Object} user - Authenticated user document (provides email/phone for the DTO)
+   */
+  async getMyProfile(user) {
+    const parent = await parentRepository.findByUserId(user._id);
     if (!parent) {
-      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+      throw new AppError("Parent profile not found", 404, "PARENT_NOT_FOUND");
     }
 
     return ParentProfileDTO.toResponse(parent, user);
@@ -28,64 +148,55 @@ class ParentService {
     return parentRepository.create(data);
   }
 
+  /**
+   * Hard delete a parent profile (used to roll back a failed registration)
+   */
+  async deleteParentByUserId(userId) {
+    return parentRepository.deleteByUserId(userId);
+  }
+
   async updateVerification(userId, verificationUpdates) {
     return parentRepository.updateVerification(userId, verificationUpdates);
   }
 
-  async updateOnboardingPreferences(userId, { location, preferences }) {
-    const parent = await parentRepository.findByUserId(userId);
+  /**
+   * @param {Object} user - Authenticated user document
+   * @param {{ location?: Object, preferences?: Object }} data
+   */
+  async updateOnboardingPreferences(user, { location, preferences }) {
+    const parent = await parentRepository.findByUserId(user._id);
     if (!parent) {
-      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+      throw new AppError("Parent profile not found", 404, "PARENT_NOT_FOUND");
     }
 
     const updatePayload = {};
     if (location) {
-      const existingLoc = parent.location?.toObject?.() || parent.location || {};
-      const area = location.area !== undefined ? location.area : existingLoc.area;
-      const city = location.city !== undefined ? location.city : existingLoc.city;
-
-      // Automatically construct address by joining area and city if not explicitly provided
-      const resolvedAddress = location.address?.trim()
-        ? location.address.trim()
-        : [area, city].filter(Boolean).join(', ');
-
-      let coordinates = location.coordinates;
-
-      // Automatically geocode coordinates if missing or defaulted to [0, 0]
-      if (!coordinates || (coordinates[0] === 0 && coordinates[1] === 0)) {
-        coordinates = await geocodingAdapter.getCoordinatesByAddress(
-          area || resolvedAddress,
-          city
-        );
-      }
-
-      updatePayload.location = {
-        ...existingLoc,
-        ...location,
-        address: resolvedAddress,
-        coordinates: {
-          type: 'Point',
-          coordinates: coordinates || existingLoc.coordinates?.coordinates || [0, 0],
-        },
-      };
+      const existingLocation = parent.location?.toObject?.() || parent.location || {};
+      updatePayload.location = await this._buildLocation(existingLocation, location, {
+        geocodeWhenMissing: true,
+      });
     }
 
     if (preferences) {
       updatePayload.preferences = {
-        ...parent.preferences?.toObject?.() || parent.preferences,
+        ...(parent.preferences?.toObject?.() || parent.preferences),
         ...preferences,
       };
+      assertValidPreferences(updatePayload.preferences);
     }
 
-    const updatedParent = await parentRepository.updateByUserId(userId, updatePayload);
-    const user = await userService.getUserById(userId);
+    const updatedParent = await parentRepository.updateByUserId(user._id, updatePayload);
     return ParentProfileDTO.toResponse(updatedParent, user);
   }
 
-  async updateProfile(userId, updateData) {
-    const parent = await parentRepository.findByUserId(userId);
+  /**
+   * @param {Object} user - Authenticated user document
+   * @param {Object} updateData
+   */
+  async updateProfile(user, updateData) {
+    const parent = await parentRepository.findByUserId(user._id);
     if (!parent) {
-      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+      throw new AppError("Parent profile not found", 404, "PARENT_NOT_FOUND");
     }
 
     const updatePayload = {};
@@ -99,32 +210,10 @@ class ParentService {
     }
 
     if (updateData.location) {
-      const existingLoc = parent.location?.toObject?.() || parent.location || {};
-      const area = updateData.location.area !== undefined ? updateData.location.area : existingLoc.area;
-      const city = updateData.location.city !== undefined ? updateData.location.city : existingLoc.city;
-
-      // Automatically construct address by joining area and city if not explicitly provided
-      const resolvedAddress = updateData.location.address?.trim()
-        ? updateData.location.address.trim()
-        : [area, city].filter(Boolean).join(', ');
-
-      let coordinates = updateData.location.coordinates;
-
-      // Geocode when new address, area or city provided and coordinates are missing/zeroed
-      const hasNewAddress = updateData.location.address || updateData.location.area || updateData.location.city;
-      if (!coordinates && hasNewAddress) {
-        coordinates = await geocodingAdapter.getCoordinatesByAddress(
-          area || resolvedAddress,
-          city
-        );
-      }
-
-      updatePayload.location = {
-        ...existingLoc,
-        ...updateData.location,
-        address: resolvedAddress,
-        ...(coordinates ? { coordinates: { type: 'Point', coordinates } } : {}),
-      };
+      const existingLocation = parent.location?.toObject?.() || parent.location || {};
+      updatePayload.location = await this._buildLocation(existingLocation, updateData.location, {
+        geocodeWhenMissing: false,
+      });
     }
 
     if (updateData.preferences) {
@@ -132,6 +221,7 @@ class ParentService {
         ...(parent.preferences?.toObject?.() || parent.preferences),
         ...updateData.preferences,
       };
+      assertValidPreferences(updatePayload.preferences);
     }
 
     if (updateData.privacySettings) {
@@ -141,32 +231,44 @@ class ParentService {
       };
     }
 
-    const updatedParent = await parentRepository.updateByUserId(userId, updatePayload);
-    const user = await userService.getUserById(userId);
+    const updatedParent = await parentRepository.updateByUserId(user._id, updatePayload);
     return ParentProfileDTO.toResponse(updatedParent, user);
   }
 
-  async updateAvatar(userId, fileBuffer) {
+  async updateAvatar(userId, fileBuffer, mimetype) {
     const parent = await parentRepository.findByUserId(userId);
     if (!parent) {
-      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+      throw new AppError("Parent profile not found", 404, "PARENT_NOT_FOUND");
     }
 
     if (!fileBuffer) {
-      throw new AppError('Avatar image file is required', 400, 'AVATAR_FILE_REQUIRED');
+      throw new AppError(
+        "Avatar image file is required",
+        400,
+        "AVATAR_FILE_REQUIRED",
+      );
     }
 
-    const uploadResult = await cloudinaryAdapter.uploadImage(fileBuffer, {
-      folder: 'buddylink/parents/avatars',
+    const previousAvatarUrl = parent.avatarUrl;
+
+    const uploadResult = await storageAdapter.uploadImage(fileBuffer, {
+      folder: "buddylink/parents/avatars",
       transformation: [
-        { width: 400, height: 400, crop: 'fill', gravity: 'face' },
-        { quality: 'auto', fetch_format: 'auto' },
+        { width: 400, height: 400, crop: "fill", gravity: "face" },
+        { quality: "auto", fetch_format: "auto" },
       ],
+      mimetype,
     });
 
     const updatedParent = await parentRepository.updateByUserId(userId, {
       avatarUrl: uploadResult.url,
     });
+
+    // Remove the replaced image from Cloud Storage (best effort, never blocks the update)
+    const previousPublicId = storageAdapter.getPublicIdFromUrl(previousAvatarUrl);
+    if (previousPublicId && previousPublicId !== uploadResult.publicId) {
+      await storageAdapter.deleteImage(previousPublicId);
+    }
 
     return {
       avatarUrl: updatedParent.avatarUrl,

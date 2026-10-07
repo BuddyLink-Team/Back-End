@@ -1,8 +1,54 @@
+import mongoose from 'mongoose';
 import Parent from './parent.model.js';
+import { CONNECTION_PRIVACY } from './parent.constants.js';
 
 class ParentRepository {
   async findByUserId(userId) {
     return Parent.findOne({ userId });
+  }
+
+  async findById(id) {
+    return Parent.findById(id);
+  }
+
+  /**
+   * Find parents near a point, nearest first, excluding hidden profiles and parents
+   * that accept no connection requests.
+   * @param {[number, number]} coordinates - [longitude, latitude]
+   * @param {number} maxDistanceMeters
+   * @param {Array<string|ObjectId>} excludeParentIds
+   * @param {number} limit
+   * @returns {Promise<Array<Object>>} Parents with a `distanceKm` field
+   */
+  async findNearbyVisible(coordinates, maxDistanceMeters, excludeParentIds, limit) {
+    return Parent.aggregate([
+      {
+        $geoNear: {
+          near: { type: 'Point', coordinates },
+          distanceField: 'distanceMeters',
+          maxDistance: maxDistanceMeters,
+          spherical: true,
+          query: {
+            _id: { $nin: excludeParentIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            'privacySettings.isProfileHidden': { $ne: true },
+            'privacySettings.connectionPrivacy': { $ne: CONNECTION_PRIVACY.NOBODY },
+          },
+        },
+      },
+      { $limit: limit },
+      {
+        $project: {
+          userId: 1,
+          fullName: 1,
+          avatarUrl: 1,
+          bio: 1,
+          location: 1,
+          preferences: 1,
+          verification: 1,
+          distanceKm: { $divide: ['$distanceMeters', 1000] },
+        },
+      },
+    ]);
   }
 
   async create(parentData) {
@@ -15,6 +61,10 @@ class ParentRepository {
       { $set: updateData },
       { new: true, runValidators: true }
     );
+  }
+
+  async deleteByUserId(userId) {
+    return Parent.deleteOne({ userId });
   }
 
   async updateVerification(userId, verificationUpdates) {

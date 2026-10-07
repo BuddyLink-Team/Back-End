@@ -1,5 +1,8 @@
 import mongoose from 'mongoose';
 import Playdate from './playdate.model.js';
+// Register referenced models so populate() works regardless of import order
+import '../parent/parent.model.js';
+import '../child/child.model.js';
 import { PLAYDATE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
 
 class PlaydateRepository {
@@ -23,6 +26,42 @@ class PlaydateRepository {
       .populate('hostChildId', 'displayName dateOfBirth gender interests favoriteActivities personality')
       .populate('participants.parentId', 'fullName avatarUrl userId verification location')
       .populate('participants.childId', 'displayName dateOfBirth gender interests favoriteActivities personality');
+  }
+
+  /**
+   * Find playdate document by ID without populated references (for updates)
+   * @param {string|ObjectId} id
+   * @returns {Promise<Document|null>}
+   */
+  async findDocById(id) {
+    return Playdate.findById(id);
+  }
+
+  /**
+   * Find playdate with full details (populated host & participants), as a plain object
+   * @param {string|ObjectId} id
+   * @returns {Promise<Object|null>}
+   */
+  async findWithDetails(id) {
+    return Playdate.findById(id)
+      .populate('hostParentId', 'fullName avatarUrl verification location')
+      .populate('hostChildId', 'displayName dateOfBirth gender interests')
+      .populate('participants.parentId', 'fullName avatarUrl verification location')
+      .populate('participants.childId', 'displayName dateOfBirth gender interests')
+      .lean();
+  }
+
+  /**
+   * Update chatConversationId on a playdate
+   * @param {string|ObjectId} playdateId
+   * @param {string|ObjectId} conversationId
+   */
+  async updateChatConversationId(playdateId, conversationId) {
+    return Playdate.findByIdAndUpdate(
+      playdateId,
+      { $set: { chatConversationId: conversationId } },
+      { new: true }
+    );
   }
 
   /**
@@ -251,4 +290,5 @@ class PlaydateRepository {
   }
 }
 
-export default new PlaydateRepository();
+export const playdateRepository = new PlaydateRepository();
+export default playdateRepository;

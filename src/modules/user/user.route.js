@@ -16,7 +16,7 @@ router.use(authenticate);
 // Profile endpoints
 router.get('/me', userController.getMe);
 router.put('/me', validate(updateUserProfileValidation), userController.updateMe);
-router.patch('/me/avatar', uploadAvatar.single('avatar'), userController.updateAvatar);
+router.patch('/me/avatar', uploadAvatar, userController.updateAvatar);
 
 // Password endpoint
 router.put('/me/password', validate(changeUserPasswordValidation), userController.changePassword);

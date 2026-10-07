@@ -1,4 +1,3 @@
-import axios from 'axios';
 import logger from '../../shared/logger/index.js';
 import { DEFAULT_CURATED_PLACES } from '../../modules/discovery/places.seed.js';
 
@@ -23,6 +22,7 @@ class PlacesProvider {
    * @param {string} options.keyword
    * @returns {Promise<Array<Object>>}
    */
+  // eslint-disable-next-line no-unused-vars -- keyword is part of the provider contract, used once a real API is wired
   async fetchExternalPlaces({ lat, lng, radius = 5000, type, keyword } = {}) {
     try {
       // In production, integration with Google Places or OpenStreetMap Overpass API
