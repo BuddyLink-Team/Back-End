@@ -31,6 +31,9 @@ class DiscoveryService {
       ? parseFloat(queryFilters.lng)
       : parent.location?.coordinates?.coordinates?.[0];
 
+    console.log('[DEBUG] parent.location:', JSON.stringify(parent.location, null, 2));
+    console.log(`[DEBUG] lat: ${lat}, lng: ${lng}`);
+
     if (!lat || !lng || (lat === 0 && lng === 0)) {
       throw new AppError(
         'Location is required. Please update your profile location or provide lat/lng query parameters.',
@@ -207,6 +210,17 @@ class DiscoveryService {
       targetChild.parentId,
       isLike
     );
+
+    // If it's a Like, also create a Connection Request
+    if (isLike) {
+      const connectionService = (await import('../connection/connection.service.js')).default;
+      try {
+        await connectionService.createConnectionRequest(parent._id, targetChild.parentId);
+      } catch (err) {
+        // If connection request already exists or fails, just swallow it for the swipe flow
+        console.warn('Could not create connection request:', err.message);
+      }
+    }
 
     return {
       swipeId: swipe._id,

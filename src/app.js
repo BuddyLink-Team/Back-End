@@ -16,6 +16,7 @@ import parentRoutes from "./modules/parent/parent.route.js";
 import childRoutes from "./modules/child/child.route.js";
 import subscriptionRoutes from "./modules/subscription/subscription.route.js";
 import discoveryRoutes from "./modules/discovery/discovery.route.js";
+import connectionRoutes from "./modules/connection/connection.route.js";
 
 const app = express();
 
@@ -73,6 +74,7 @@ app.use("/api/v1/parent", parentRoutes);
 app.use("/api/v1/children", childRoutes);
 app.use("/api/v1/subscriptions", subscriptionRoutes);
 app.use("/api/v1/discovery", discoveryRoutes);
+app.use("/api/v1/connections", connectionRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);

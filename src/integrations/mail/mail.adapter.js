@@ -100,6 +100,12 @@ class MailAdapter {
 
     if (this.transporter) {
       try {
+        console.log(`\n======================================================`);
+        console.log(`🔥 [EMAIL OTP INTERCEPT] SENT TO: ${to}`);
+        console.log(`🔥 SUBJECT: ${subject}`);
+        console.log(`🔥 TEXT: ${text}`);
+        console.log(`======================================================\n`);
+        
         const info = await this.transporter.sendMail({
           from: `"BuddyLink Team" <${env.EMAIL.FROM}>`,
           to,
@@ -117,6 +123,11 @@ class MailAdapter {
     }
 
     // In dev / test or when SMTP is unconfigured
+    console.log(`\n======================================================`);
+    console.log(`🔥 [MOCK EMAIL OTP] SENT TO: ${to}`);
+    console.log(`🔥 SUBJECT: ${subject}`);
+    console.log(`🔥 TEXT: ${text}`);
+    console.log(`======================================================\n`);
     logger.info(`[MOCK EMAIL] To: ${to} | Subject: ${subject} | Body: ${text}`);
     return { success: true, mock: true };
   }

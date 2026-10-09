@@ -45,17 +45,17 @@ const connectionSchema = new mongoose.Schema(
   }
 );
 
-// Prevent duplicate two-way connections when status is pending or accepted
-connectionSchema.index(
-  { parents: 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      status: { $in: [CONNECTION_STATUS.PENDING, CONNECTION_STATUS.ACCEPTED] },
-    },
-  }
-);
-connectionSchema.index({ parents: 1, status: 1 });
+// Prevent duplicate two-way connections manually in service instead of using array unique index
+// connectionSchema.index(
+//   { parents: 1 },
+//   {
+//     unique: true,
+//     partialFilterExpression: {
+//       status: { $in: [CONNECTION_STATUS.PENDING, CONNECTION_STATUS.ACCEPTED] },
+//     },
+//   }
+// );
+connectionSchema.index({ parents: 1 });
 connectionSchema.index({ recipientId: 1, status: 1 });
 connectionSchema.index({ requesterId: 1, createdAt: 1 });
 
