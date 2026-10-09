@@ -131,6 +131,26 @@ class ChildService {
   }
 
   /**
+   * Get all active children of a parent, shaped for API responses (playdate invite list)
+   * @param {string|mongoose.Types.ObjectId} parentId
+   */
+  async getChildrenByParentId(parentId) {
+    const children = await childRepository.findByParentId(parentId);
+    return ChildResponseDTO.toResponseList(children);
+  }
+
+  /**
+   * Check if an active child belongs to a specific parent
+   * @param {string|mongoose.Types.ObjectId} childId
+   * @param {string|mongoose.Types.ObjectId} parentId
+   */
+  async isChildOwnedByParent(childId, parentId) {
+    const child = await childRepository.findActiveById(childId);
+    if (!child) return false;
+    return child.parentId?.toString() === parentId.toString();
+  }
+
+  /**
    * Get public profile of a child as seen by the authenticated parent.
    * Children of hidden parents, or of parents in a block relationship with the viewer,
    * are reported as not found so their existence is not leaked.

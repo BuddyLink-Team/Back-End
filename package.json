@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "dev:memory": "node scripts/dev-memory.js",
+    "places:sync": "node scripts/sync-places.js",
     "seed:chat": "node scripts/seed-chat.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch --verbose",

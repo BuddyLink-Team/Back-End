@@ -28,6 +28,7 @@ src/
 │   ├── parent/         # Parent profile management
 │   ├── child/          # Child profile management
 │   ├── discovery/      # Search, filter, and matching
+│   ├── places/         # Places cache & nearby place suggestions for playdates
 │   ├── connection/     # Friend requests and connections
 │   ├── chat/           # 1-on-1 and playdate group chat (Socket.IO)
 │   ├── playdate/       # Playdates, invites, rescheduling, cancellations
@@ -90,6 +91,7 @@ module/
 2. **External Integrations (`integrations/`):**
    - External providers (AI, PayOS, OpenStreetMap / Geocoding, S3/Cloudinary, Email) must be wrapped inside adapters in `integrations/`. Services only talk to adapters.
    - Example: `src/integrations/maps/geocoding.adapter.js` uses OpenStreetMap Nominatim API (with local coordinate cache) to convert parent addresses into GeoJSON coordinates (`[longitude, latitude]`) without requiring paid Google Maps enterprise billing.
+   - Example: `src/integrations/maps/overpass.adapter.js` queries the OpenStreetMap Overpass API for kid-friendly places. Public instances are slow and often busy, so users never wait for them: `GET /places/nearby` reads `places_cache` only (nearest first around the parent's location), and the cache is filled per city by `npm run places:sync -- --area da-nang` (area split into cells, retries on 429/504; `npm run dev:memory -- --sync-places` does it on the in-memory DB). `GET /places/:id` refreshes a place older than 30 days and resolves a missing address with Nominatim reverse geocoding. Configured by `OVERPASS_API_URLS` (instances tried in order) and `OVERPASS_ENABLED`.
 3. **AI Assistant Tools (`ai-assistant/`):**
    - AI tools (Function Calling) **must always call Services**, never bypass them to query Repositories directly.
 4. **Sockets & Real-time:**

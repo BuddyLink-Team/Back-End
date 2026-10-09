@@ -6,7 +6,9 @@ import { initSocket } from './config/socket.js';
 import logger from './shared/logger/index.js';
 import subscriptionService from './modules/subscription/subscription.service.js';
 import userService from './modules/user/user.service.js';
+import placesService from './modules/places/places.service.js';
 import { startSubscriptionExpiryJob } from './jobs/subscription-expiry.job.js';
+import { startPlaydateAutoCloseJob, runPlaydateAutoClose } from './jobs/playdate-auto-close.job.js';
 import mailAdapter from './integrations/mail/mail.adapter.js';
 
 const server = http.createServer(app);
@@ -22,12 +24,19 @@ const startServer = async () => {
     // 2. Seed Default Subscription Plans if not present
     await subscriptionService.seedSubscriptionPlans();
 
+    // 2b. Places cache indexes (legacy googlePlaceId index is dropped)
+    await placesService.ensureIndexes();
+
     // 3. Migrate legacy upper-case roles ("PARENT"/"ADMIN") to the lower-case values in the schema
     await userService.normalizeLegacyRoles();
 
     // 4. Expire past-due paid plans now, then keep doing it on a schedule
     await subscriptionService.expireDueSubscriptions();
     startSubscriptionExpiryJob();
+
+    // Close the playdates of past days now (in case the server was down at midnight), then daily at 00:00
+    await runPlaydateAutoClose();
+    startPlaydateAutoCloseJob();
 
     // Not awaited: only reports SMTP problems in the logs, never blocks startup
     mailAdapter.verifyConnection();

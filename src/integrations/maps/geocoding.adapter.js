@@ -92,6 +92,62 @@ class GeocodingAdapter {
     // Default to Ho Chi Minh City coordinates if no match is found
     return [106.6297, 10.8231];
   }
+
+  /**
+   * Readable address of a point with OpenStreetMap Nominatim reverse geocoding.
+   * Used once per place (the result is cached), so the 1 request/second policy is respected.
+   *
+   * @param {number} lng
+   * @param {number} lat
+   * @returns {Promise<string>} '' when nothing is found or the request fails
+   */
+  async reverseGeocode(lng, lat) {
+    try {
+      const response = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+        params: { lat, lon: lng, format: 'json', zoom: 18, addressdetails: 1 },
+        headers: {
+          'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
+          'Accept-Language': 'vi',
+        },
+        timeout: 6000,
+      });
+      const address = response.data?.address || {};
+      const street = [address.house_number, address.road].filter(Boolean).join(' ');
+      const parts = [
+        street,
+        address.quarter || address.suburb || address.neighbourhood,
+        address.city_district,
+        address.city || address.town || address.state,
+      ].filter(Boolean);
+      return [...new Set(parts)].join(', ') || response.data?.display_name || '';
+    } catch (error) {
+      logger.warn(`[Geocoding Warn] Reverse geocoding failed for [${lng}, ${lat}]: ${error.message}`);
+      return '';
+    }
+  }
+
+  /**
+   * Bounding box of a place name in Vietnam with OpenStreetMap Nominatim (places sync --city)
+   *
+   * @param {string} name - city / district / province, e.g. "Huế", "Quận 7, TP. Hồ Chí Minh"
+   * @returns {Promise<{ label: string, bbox: [number, number, number, number] }|null>}
+   *   bbox is [south, west, north, east], null when nothing is found
+   */
+  async getBoundingBox(name) {
+    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { q: name, format: 'json', limit: 1, countrycodes: 'vn' },
+      headers: {
+        'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
+        'Accept-Language': 'vi',
+      },
+      timeout: 10000,
+    });
+    const item = response.data?.[0];
+    // Nominatim order: [south, north, west, east]
+    const [south, north, west, east] = (item?.boundingbox || []).map(Number);
+    if (![south, north, west, east].every(Number.isFinite)) return null;
+    return { label: item.display_name, bbox: [south, west, north, east] };
+  }
 }
 
 export default new GeocodingAdapter();

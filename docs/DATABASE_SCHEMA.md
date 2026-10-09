@@ -45,7 +45,8 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 | 20 | `usage_quotas`        | Kiểm soát giới hạn hạn mức Free vs Premium theo ngày/tháng            | Mục 14.1 (Feature Quota Limiting)                           |
 | 21 | `reports`             | Báo cáo vi phạm an toàn, người dùng, tin nhắn                         | Mục 12.1 (Safety), 15.4 (Admin Safety)                      |
 | 22 | `blocks`              | Danh sách phụ huynh bị chặn                                               | Mục 4.3 & 12.1 (Block User)                                 |
-| 23 | `places_cache`        | Cache thông tin địa điểm vui chơi từ Google Places API                 | Mục 7.2 (Nearby Places & Activity)                          |
+| 23 | `places_cache`        | Cache thông tin địa điểm vui chơi từ OpenStreetMap (Overpass API)      | Mục 7.2 (Nearby Places & Activity)                          |
+| 24 | `places_sync_tiles`   | Các ô lưới bản đồ đã nạp vào `places_cache` (sync tay & tự động)       | Mục 7.2 (Nearby Places & Activity)                          |
 
 ---
 ## 2. Mermaid Entity Relationship Diagrams (Phân tách theo từng Module)
@@ -77,6 +78,7 @@ flowchart TD
         PD --- RR["reschedule_requests"]
         PD --- RF["ratings_feedbacks"]
         PC["places_cache"]
+        PST["places_sync_tiles"] -.-> PC
     end
 
     subgraph M4["Module 4: Chat & AI Assistant"]
@@ -230,8 +232,8 @@ erDiagram
 
 ### 2.4 Module 3: Sự kiện Playdate, Đổi lịch, Đánh giá & Địa điểm (Playdates, Reschedule, Feedback & Places)
 
-> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`  
-> **Nghiệp vụ:** Tổ chức lịch gặp gỡ (không có activityCategory và endTime), quy trình đồng thuận đổi lịch (không có newEndTime), đánh giá sau buổi chơi, cache địa điểm Google Places.
+> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`, `places_sync_tiles`  
+> **Nghiệp vụ:** Tổ chức lịch gặp gỡ (không có activityCategory và endTime), quy trình đồng thuận đổi lịch (không có newEndTime), đánh giá sau buổi chơi, cache địa điểm OpenStreetMaps.
 
 ```mermaid
 erDiagram
@@ -287,14 +289,15 @@ erDiagram
 
     PLACES_CACHE {
         ObjectId _id PK
-        string googlePlaceId UK "Unique ID từ Google Places API"
+        string osmId UK "ID phần tử OpenStreetMap: osm-node-123 | osm-way-456 | osm-relation-789"
         string name "Tên khu vui chơi/công viên"
-        string address
+        string address "Có thể rỗng, bổ sung bằng reverse geocoding khi xem chi tiết"
         object coordinates "GeoJSON Point [lng, lat] (2dsphere)"
         string placeType "park | kids_cafe | playground | library | sports_center | workshop"
-        float rating "Điểm đánh giá Google"
-        int userRatingsTotal
-        date lastFetchedAt "Kiểm tra TTL làm mới cache"
+        string openingHours
+        string phone
+        string website
+        date lastFetchedAt "Kiểm tra TTL làm mới cache (30 ngày)"
     }
 ```
 
@@ -813,7 +816,7 @@ interface IPlaydate {
   location: {
     name: string; // "Công viên Gia Định", "TiNiWorld Landmark 81"
     address: string;
-    placeId?: string; // Google Place ID
+    placeId?: string; // places_cache.osmId (OpenStreetMap)
     coordinates?: {
       type: "Point";
       coordinates: [number, number]; // [lng, lat]
@@ -824,12 +827,12 @@ interface IPlaydate {
   status: "upcoming" | "completed" | "cancelled";
 
   cancellation?: {
-    cancelledBy: ObjectId;
+    cancelledBy: ObjectId | null; // null khi hệ thống tự hủy (job 0h: quá ngày mà không ai Accept)
     reason?: string;
     cancelledAt: Date;
   };
 
-  completedAt?: Date;
+  completedAt?: Date; // Host bấm hoàn thành khi đến giờ, hoặc job 0h tự hoàn thành buổi đã qua ngày có người Accept
   chatConversationId?: ObjectId; // Tham chiếu conversations._id (Chat riêng cho Playdate)
 
   createdAt: Date;
@@ -842,7 +845,7 @@ _Indexes:_
 - `{ hostParentId: 1, status: 1 }`
 - `{ "participants.parentId": 1, status: 1 }`
 - `{ scheduledDate: 1, status: 1 }`
-- `{ "location.coordinates": "2dsphere" }`
+- `{ "location.coordinates": "2dsphere" }` (sparse: địa điểm nhập tay có thể không có tọa độ, không gán mặc định `[0, 0]`)
 
 ---
 
@@ -1056,9 +1059,9 @@ _Indexes:_
 ```typescript
 interface IPlacesCache {
   _id: ObjectId;
-  googlePlaceId: string; // Unique ID từ Google Places API
-  name: string; // Tên địa điểm (ví dụ: "Khu vui chơi KizCiti")
-  address: string;
+  osmId: string; // ID phần tử OpenStreetMap: "osm-node-123" | "osm-way-456" | "osm-relation-789"
+  name: string; // Tên địa điểm (ví dụ: "Công viên APEC")
+  address: string; // Từ tag addr:* của OSM; rỗng thì bổ sung bằng Nominatim reverse khi xem chi tiết
   coordinates: {
     type: "Point";
     coordinates: [number, number]; // [longitude, latitude]
@@ -1070,16 +1073,47 @@ interface IPlacesCache {
     | "library"
     | "sports_center"
     | "workshop";
-  rating?: number;
-  userRatingsTotal?: number;
-  lastFetchedAt: Date; // Dùng để kiểm tra TTL làm mới cache (ví dụ sau 30 ngày)
+  openingHours?: string; // Tag opening_hours của OSM
+  phone?: string;
+  website?: string;
+  lastFetchedAt: Date; // Làm mới từ OpenStreetMap khi quá 30 ngày (PLACES_DEFAULTS.CACHE_TTL_DAYS)
 }
 ```
 
 _Indexes:_
 
-- `{ googlePlaceId: 1 }` (unique)
+- `{ osmId: 1 }` (unique)
 - `{ coordinates: "2dsphere" }` (Tìm kiếm địa điểm vui chơi xung quanh tọa độ phụ huynh)
+
+#### E. `places_sync_tiles` Collection (Mục 7.2)
+
+Bản đồ được chia thành lưới cố định gồm các ô `cellSizeDeg` độ (mặc định 0.1°, khoảng 11 km), căn theo bội số của kích thước ô. Mỗi ô đã nạp địa điểm từ OpenStreetMap vào `places_cache` có một bản ghi, do lệnh `npm run places:sync` (`--city`, `--area`, `--bbox`) hoặc do server tự sync quanh phụ huynh khi họ tìm địa điểm (`PLACES_AUTO_SYNC`).
+
+```typescript
+interface IPlacesSyncTile {
+  _id: ObjectId;
+  key: string; // "<cellSizeDeg>:<row>:<col>", row = floor(lat / size), col = floor(lng / size)
+  cellSizeDeg: number;
+  bbox: [number, number, number, number]; // [south, west, north, east]
+  status: "syncing" | "done" | "failed";
+  placesCount: number; // Số địa điểm nhận được ở lần sync gần nhất
+  startedAt?: Date; // Lúc một lần tự sync giữ khóa ô này
+  syncedAt?: Date; // Lần sync thành công gần nhất
+  lastError: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+_Quy tắc tự sync:_
+
+- Ô trong bán kính 5 km quanh vị trí tìm kiếm được sync khi chưa có bản ghi, `done` quá 30 ngày, `failed` quá 1 giờ, hoặc kẹt `syncing` quá 15 phút (server khởi động lại giữa chừng).
+- Khóa ô bằng một lệnh `findOneAndUpdate` upsert atomic: nhiều tìm kiếm cùng lúc chỉ sync ô đó một lần.
+- `GET /places/nearby` trả `meta.areaSyncing = true` khi có ô quanh vị trí đang được sync; app tự tải lại danh sách sau ít phút.
+
+_Indexes:_
+
+- `{ key: 1 }` (unique)
 
 ---
 

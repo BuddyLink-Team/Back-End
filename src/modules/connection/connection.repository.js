@@ -16,6 +16,17 @@ class ConnectionRepository {
   }
 
   /**
+   * All accepted connections of a parent, with both parents populated
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Array<Object>>}
+   */
+  async findAcceptedForParent(parentId) {
+    return Connection.find({ parents: parentId, status: CONNECTION_STATUS.ACCEPTED })
+      .populate('parents', 'fullName avatarUrl userId verification location')
+      .lean();
+  }
+
+  /**
    * Find the pending or accepted connection between two parents (direction-independent)
    * @param {string|ObjectId} parentIdA
    * @param {string|ObjectId} parentIdB

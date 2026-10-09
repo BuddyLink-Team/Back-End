@@ -41,8 +41,22 @@ const env = {
     CANCEL_URL: process.env.PAYOS_CANCEL_URL || 'http://localhost:5173/payment/cancel',
   },
 
-  GOOGLE_MAPS: {
-    API_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
+  // OpenStreetMap Overpass API for nearby kid-friendly places (free, no API key).
+  // Comma-separated instances, tried in order. Disabled in tests so they never call the public API.
+  OVERPASS: {
+    API_URLS: (process.env.OVERPASS_API_URLS || 'https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter')
+      .split(',')
+      .map((url) => url.trim())
+      .filter(Boolean),
+    ENABLED: process.env.OVERPASS_ENABLED
+      ? process.env.OVERPASS_ENABLED === 'true'
+      : process.env.NODE_ENV !== 'test',
+    TIMEOUT_MS: parseInt(process.env.OVERPASS_TIMEOUT_MS, 10) || 15000,
+  },
+
+  PLACES: {
+    // Fetch the places around a parent in the background when their area was never synced
+    AUTO_SYNC: process.env.PLACES_AUTO_SYNC !== 'false',
   },
 
   GOOGLE: {

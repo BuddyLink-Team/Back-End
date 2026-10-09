@@ -20,6 +20,25 @@ class ConnectionService {
   }
 
   /**
+   * Same as areConnected (name used by the playdate module)
+   * @param {string|ObjectId} parentIdA
+   * @param {string|ObjectId} parentIdB
+   * @returns {Promise<boolean>}
+   */
+  async areParentsConnected(parentIdA, parentIdB) {
+    return this.areConnected(parentIdA, parentIdB);
+  }
+
+  /**
+   * Get all accepted connections of a parent (both parents populated)
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Array<Object>>}
+   */
+  async getAcceptedConnections(parentId) {
+    return connectionRepository.findAcceptedForParent(parentId);
+  }
+
+  /**
    * Check that a connection request can be sent, without consuming any quota.
    * Lets callers (e.g. discovery Like) fail before spending their own quota.
    *
