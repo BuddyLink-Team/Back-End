@@ -18,7 +18,7 @@ const router = Router();
 
 // Routes require authenticated parent
 router.use(authenticate);
-router.use(authorizeRoles(USER_ROLES.PARENT, 'PARENT', 'parent'));
+router.use(authorizeRoles(USER_ROLES.PARENT));
 
 // GET /api/v1/playdates?status=...
 router.get('/', validate(getPlaydatesValidation), playdateController.getPlaydates);

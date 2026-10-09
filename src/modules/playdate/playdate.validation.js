@@ -1,7 +1,7 @@
 import { body, param, query } from 'express-validator';
 
-// 24-hour time format: 'HH:mm' or 'HH:mm - HH:mm'
-const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)(\s*-\s*([01]\d|2[0-3]):([0-5]\d))?$/;
+// A playdate starts at a single 24-hour time 'HH:mm' (no end time)
+const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 /**
  * Validation rules for GET /playdates
@@ -165,10 +165,14 @@ export const createRescheduleValidation = [
     .withMessage('New start time must be in 24-hour HH:mm format'),
   body('newLocation.name')
     .optional()
-    .trim(),
+    .trim()
+    .custom((value, { req }) => !value || Boolean(req.body.newLocation?.address?.trim()))
+    .withMessage('A new location needs both a name and an address'),
   body('newLocation.address')
     .optional()
-    .trim(),
+    .trim()
+    .custom((value, { req }) => !value || Boolean(req.body.newLocation?.name?.trim()))
+    .withMessage('A new location needs both a name and an address'),
   body('reason')
     .optional()
     .trim(),

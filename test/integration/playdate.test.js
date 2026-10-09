@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
 import Child from '../../src/modules/child/child.model.js';
+import Parent from '../../src/modules/parent/parent.model.js';
+import PlacesCache from '../../src/modules/places/places-cache.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 
@@ -65,7 +67,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId,
         scheduledDate,
-        time: '15:00 - 17:00',
+        time: '15:00',
         activity: 'Buổi chơi Lego & Công viên',
         location: {
           name: 'Công viên Cầu Ánh Sao',
@@ -160,7 +162,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId,
         scheduledDate: new Date(Date.now() + 86400000 * 2).toISOString(),
-        time: '09:00 - 11:00',
+        time: '09:00',
         activity: 'Vẽ tranh ngoài trời',
         location: {
           name: 'Công viên Tao Đàn',
@@ -209,7 +211,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId,
         scheduledDate: new Date(Date.now() + 86400000 * 3).toISOString(),
-        time: '14:00 - 16:30',
+        time: '14:00',
         activity: 'Giao lưu vẽ tranh nghệ thuật',
         location: {
           name: 'Bảo tàng Mỹ thuật',
@@ -246,7 +248,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId,
         scheduledDate: new Date(Date.now() + 86400000 * 4).toISOString(),
-        time: '16:00 - 18:00',
+        time: '16:00',
         activity: 'Chạy xe đạp công viên',
         location: {
           name: 'Công viên Sala',
@@ -263,7 +265,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId,
         scheduledDate: new Date(Date.now() + 86400000 * 5).toISOString(),
-        time: '08:00 - 10:00',
+        time: '08:00',
         activity: 'Dã ngoại cuối tuần',
         location: {
           name: 'Khu du lịch Văn Thánh',
@@ -304,7 +306,7 @@ describe('Playdate Management Integration Flow', () => {
       .set('Authorization', `Bearer ${hostToken}`)
       .send({
         newDate,
-        newStartTime: '15:30 - 17:30',
+        newStartTime: '15:30',
         newLocation: {
           name: 'Công viên Gia Định Mới',
           address: 'Gò Vấp, TP. Hồ Chí Minh',
@@ -328,11 +330,22 @@ describe('Playdate Management Integration Flow', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.rescheduleRequest.status).toBe('accepted');
-    expect(res.body.data.playdate.time).toBe('15:30 - 17:30');
+    expect(res.body.data.playdate.time).toBe('15:30');
     expect(res.body.data.playdate.location.name).toBe('Công viên Gia Định Mới');
   });
 
   it('14. GET /api/v1/places/nearby: should return nearby child-friendly places from adapter cache', async () => {
+    // Nearby search starts from the parent location
+    const center = [108.2208, 16.0678];
+    await Parent.updateOne({ _id: hostParentId }, { $set: { 'location.coordinates': { type: 'Point', coordinates: center } } });
+    await PlacesCache.create({
+      osmId: `osm-way-${Date.now()}`,
+      name: 'Công viên APEC',
+      address: 'Bạch Đằng, Đà Nẵng',
+      placeType: 'park',
+      coordinates: { type: 'Point', coordinates: [center[0] + 0.002, center[1]] },
+    });
+
     const res = await request(app)
       .get('/api/v1/places/nearby?type=park')
       .set('Authorization', `Bearer ${hostToken}`);
@@ -375,7 +388,7 @@ describe('Playdate Management Integration Flow', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
-    expect(res.body.error.code).toBe('FORBIDDEN');
+    expect(res.body.error.code).toBe('FORBIDDEN_VIEW_PLAYDATE');
   });
 
   it('17. PUT /api/v1/playdates/:id/respond: should reject second response with 400 ALREADY_RESPONDED', async () => {
@@ -410,7 +423,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId: child._id.toString(),
         scheduledDate: new Date(Date.now() + 86400000 * 2).toISOString(),
-        time: '10:00 - 12:00',
+        time: '10:00',
         activity: 'Chơi cát bãi biển',
         location: {
           name: 'Bãi cát Thảo Điền',
@@ -437,7 +450,7 @@ describe('Playdate Management Integration Flow', () => {
       .send({
         hostChildId,
         scheduledDate: new Date(Date.now() + 86400000 * 3).toISOString(),
-        time: '14:00 - 16:00',
+        time: '14:00',
         activity: 'Chơi bóng rổ',
         location: {
           name: 'Sân bóng thiếu nhi',
@@ -459,7 +472,7 @@ describe('Playdate Management Integration Flow', () => {
       .set('Authorization', `Bearer ${guestToken}`)
       .send({
         newDate: new Date(Date.now() + 86400000 * 10).toISOString(),
-        newStartTime: '09:00 - 11:00',
+        newStartTime: '09:00',
         reason: 'Guest wants to change time',
       });
 
@@ -484,7 +497,7 @@ describe('Playdate Management Integration Flow', () => {
       hostParentId,
       hostChildId,
       scheduledDate: new Date(Date.now() + 86400000 * 4),
-      time: '15:00 - 17:00',
+      time: '15:00',
       activity: 'Đá cầu',
       location: { name: 'Công viên', address: 'Quận 1' },
       participants: [

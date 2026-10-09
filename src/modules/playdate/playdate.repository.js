@@ -272,6 +272,66 @@ class PlaydateRepository {
   }
 
   /**
+   * Delete a playdate (rollback when a step after creation fails)
+   * @param {string|ObjectId} id
+   */
+  async deleteById(id) {
+    return Playdate.deleteOne({ _id: id });
+  }
+
+  /**
+   * Atomically set the RSVP of a participant who has not answered yet
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   * @param {string} status - accepted | declined
+   * @returns {Promise<Object|null>} null when the participant was not pending anymore
+   */
+  async updatePendingParticipantStatus(id, parentId, status) {
+    return Playdate.findOneAndUpdate(
+      { _id: id, participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.PENDING } } },
+      { $set: { 'participants.$.status': status, 'participants.$.respondedAt': new Date() } },
+      { new: true },
+    ).lean();
+  }
+
+  /**
+   * Revert a participant's RSVP back to pending (rollback when quota consumption fails)
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   */
+  async resetParticipantToPending(id, parentId) {
+    return Playdate.updateOne(
+      { _id: id, 'participants.parentId': parentId },
+      { $set: { 'participants.$.status': PARTICIPANT_STATUS.PENDING, 'participants.$.respondedAt': null } },
+    );
+  }
+
+  /**
+   * Upcoming playdates whose scheduled date is before a cutoff
+   * @param {Date} cutoff
+   * @returns {Promise<Array<Object>>}
+   */
+  async findUpcomingBefore(cutoff) {
+    return Playdate.find({ status: PLAYDATE_STATUS.UPCOMING, scheduledDate: { $lt: cutoff } })
+      .select('_id participants scheduledDate')
+      .lean();
+  }
+
+  /**
+   * Update a playdate only while it is still upcoming (no race with host actions)
+   * @param {string|ObjectId} id
+   * @param {Object} updateData
+   * @returns {Promise<Object|null>}
+   */
+  async updateIfUpcoming(id, updateData) {
+    return Playdate.findOneAndUpdate(
+      { _id: id, status: PLAYDATE_STATUS.UPCOMING },
+      { $set: updateData },
+      { new: true },
+    ).lean();
+  }
+
+  /**
    * Update playdate by ID
    * @param {string|ObjectId} id
    * @param {Object} updateData

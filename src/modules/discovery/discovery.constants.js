@@ -1,16 +1,4 @@
 /**
- * Place types supported for nearby recommendations and discovery filters
- */
-export const PLACE_TYPES = Object.freeze({
-  PARK: 'park',
-  KIDS_CAFE: 'kids_cafe',
-  PLAYGROUND: 'playground',
-  LIBRARY: 'library',
-  SPORTS_CENTER: 'sports_center',
-  WORKSHOP: 'workshop',
-});
-
-/**
  * Smart Matching weight configuration (total = 100)
  */
 export const MATCHING_WEIGHTS = Object.freeze({

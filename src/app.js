@@ -13,13 +13,14 @@ import {
 import authRoutes from "./modules/auth/auth.route.js";
 import userRoutes from "./modules/user/user.route.js";
 import playdateRoutes from "./modules/playdate/playdate.route.js";
-import placesRoutes from "./modules/discovery/places.route.js";
+import placesRoutes from "./modules/places/places.route.js";
 import parentRoutes from "./modules/parent/parent.route.js";
 import childRoutes from "./modules/child/child.route.js";
 import chatRoutes from "./modules/chat/chat.route.js";
 import subscriptionRoutes from "./modules/subscription/subscription.route.js";
 import discoveryRoutes from "./modules/discovery/discovery.route.js";
 import safetyRoutes from "./modules/safety/safety.route.js";
+import { registerChatEventListeners } from "./modules/chat/chat.events.js";
 
 const app = express();
 
@@ -82,6 +83,9 @@ app.get("/api/v1", (req, res) => {
     message: "BuddyLink API v1 is active",
   });
 });
+
+// Cross-module event listeners (e.g. playdate members -> playdate group chat)
+registerChatEventListeners();
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/user", userRoutes);

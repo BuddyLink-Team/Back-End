@@ -53,7 +53,11 @@ export class PlaydateResponseDTO {
           fullName: playdate.hostParentId.fullName,
           avatarUrl: playdate.hostParentId.avatarUrl || '',
           isVerified: Boolean(playdate.hostParentId.verification?.isVerifiedParent),
-          location: playdate.hostParentId.location || null,
+          // Only the area: never expose the host family's exact address or coordinates
+          location: {
+            area: playdate.hostParentId.location?.area || '',
+            city: playdate.hostParentId.location?.city || '',
+          },
         }
       : { id: playdate.hostParentId?.toString() };
 
@@ -117,8 +121,13 @@ export class PlaydateResponseDTO {
  * Reschedule Request Data Transfer Object
  */
 export class RescheduleResponseDTO {
-  static toResponse(request) {
+  /**
+   * @param {Object} request
+   * @param {string|ObjectId} [currentParentId] - Adds the caller's own vote (myVote) and isRequester
+   */
+  static toResponse(request, currentParentId = null) {
     if (!request) return null;
+    const currentIdStr = currentParentId ? currentParentId.toString() : null;
 
     const requestedBy = request.requestedBy && typeof request.requestedBy === 'object'
       ? {
@@ -149,10 +158,17 @@ export class RescheduleResponseDTO {
       };
     });
 
+    const myResponse = currentIdStr
+      ? responses.find((r) => r.parentId?.id === currentIdStr)
+      : null;
+
     return {
       id: request._id?.toString() || request.id,
       playdateId: request.playdateId?.toString(),
       requestedBy,
+      isRequester: Boolean(currentIdStr && requestedBy.id === currentIdStr),
+      // Caller's vote: 'pending' | 'accepted' | 'declined', or null when not a voter
+      myVote: myResponse ? myResponse.status : null,
       newDate: request.newDate,
       newStartTime: request.newStartTime,
       newLocation: request.newLocation || null,

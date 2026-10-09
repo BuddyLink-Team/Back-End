@@ -1,5 +1,5 @@
-import { query } from 'express-validator';
-import { PLACE_TYPES } from './discovery.constants.js';
+import { param, query } from 'express-validator';
+import { PLACE_TYPES } from './places.constants.js';
 
 /**
  * Validation rules for GET /api/v1/places/nearby
@@ -51,3 +51,8 @@ export const getNearbyPlacesValidation = [
     .isInt({ min: 1, max: 50 })
     .withMessage('Limit must be an integer between 1 and 50'),
 ];
+
+/**
+ * Validation rules for GET /api/v1/places/:id
+ */
+export const getPlaceByIdValidation = [param('id').isMongoId().withMessage('Invalid place id')];

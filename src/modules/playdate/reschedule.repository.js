@@ -1,4 +1,5 @@
 import RescheduleRequest from './reschedule-request.model.js';
+import { RESCHEDULE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
 
 class RescheduleRepository {
   /**
@@ -52,6 +53,29 @@ class RescheduleRepository {
    */
   async findOneAndUpdate(filter, update, options = { new: true }) {
     return RescheduleRequest.findOneAndUpdate(filter, update, options);
+  }
+
+  /**
+   * Cancel every pending reschedule request of a playdate
+   * @param {string|ObjectId} playdateId
+   */
+  async cancelPendingByPlaydateId(playdateId) {
+    return RescheduleRequest.updateMany(
+      { playdateId, status: RESCHEDULE_STATUS.PENDING },
+      { $set: { status: RESCHEDULE_STATUS.CANCELLED, resolvedAt: new Date() } },
+    );
+  }
+
+  /**
+   * Add a voter to the pending reschedule request of a playdate (if not already a voter)
+   * @param {string|ObjectId} playdateId
+   * @param {string|ObjectId} parentId
+   */
+  async addVoterToPending(playdateId, parentId) {
+    return RescheduleRequest.updateOne(
+      { playdateId, status: RESCHEDULE_STATUS.PENDING, 'responses.parentId': { $ne: parentId } },
+      { $push: { responses: { parentId, status: PARTICIPANT_STATUS.PENDING, respondedAt: null } } },
+    );
   }
 
   /**
