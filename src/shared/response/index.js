@@ -1,8 +1,10 @@
-export const successResponse = (res, data = null, message = "Success", statusCode = 200) => {
+export const successResponse = (res, data = null, message = "Success", statusCode = 200, meta) => {
   return res.status(statusCode).json({
     success: true,
     message,
     data,
+    // Extra information about the result (only sent when given)
+    ...(meta ? { meta } : {}),
     error: null,
   });
 };

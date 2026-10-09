@@ -27,7 +27,8 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: [USER_ROLES.PARENT, USER_ROLES.ADMIN, 'parent', 'admin'],
+      enum: Object.values(USER_ROLES),
+      lowercase: true,
       default: USER_ROLES.PARENT,
     },
     isActive: {

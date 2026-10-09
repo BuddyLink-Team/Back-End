@@ -1,10 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
+import { describe, it, expect } from "@jest/globals";
 import request from "supertest";
-import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import app from "../../src/app.js";
 import User from "../../src/modules/user/user.model.js";
-import Parent from "../../src/modules/parent/parent.model.js";
 import Subscription from "../../src/modules/subscription/subscription.model.js";
 import SubscriptionPlan from "../../src/modules/subscription/subscription-plan.model.js";
 import subscriptionService from "../../src/modules/subscription/subscription.service.js";
@@ -14,7 +12,6 @@ import { hashToken } from "../../src/shared/helpers/token.helper.js";
 describe("Authentication & Onboarding Integration Flow", () => {
   let parentAccessToken = "";
   let parentRefreshToken = "";
-  let parentUserId = "";
   const testEmail = `parent-${Date.now()}@example.com`;
   const testPassword = "Password123!";
   const testFullName = "Nguyen Van Parent";
@@ -50,7 +47,6 @@ describe("Authentication & Onboarding Integration Flow", () => {
     if (res.body.data?.tokens) {
       parentAccessToken = res.body.data.tokens.accessToken;
       parentRefreshToken = res.body.data.tokens.refreshToken;
-      parentUserId = res.body.data.user?.id;
     }
 
     expect(res.body.data.user.email).toBe(testEmail.toLowerCase());
@@ -189,7 +185,6 @@ describe("Authentication & Onboarding Integration Flow", () => {
           preferredLocations: ["park", "kids_cafe"],
           maxDistanceKm: 10,
           preferredAgeRange: { min: 3, max: 7 },
-          languages: ["Vietnamese", "English"],
         },
       });
 
@@ -301,9 +296,8 @@ describe("Authentication & Onboarding Integration Flow", () => {
     expect(refreshRes.status).toBe(200);
     expect(refreshRes.body.success).toBe(true);
     expect(refreshRes.body.data.accessToken).toBeDefined();
-    expect(refreshRes.body.data.refreshToken).toBeDefined();
-
     const newRefreshToken = refreshRes.body.data.refreshToken;
+    expect(newRefreshToken).toBeDefined();
 
     // 9.2 Old refresh token should be rejected (Revoked via Token Rotation)
     const reuseRes = await request(app)

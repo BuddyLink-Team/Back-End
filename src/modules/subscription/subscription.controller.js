@@ -10,7 +10,7 @@ class SubscriptionController {
   async getActivePlans(req, res, next) {
     try {
       const plans = await subscriptionService.getActivePlans();
-      return successResponse(res, plans, 'Lấy danh sách gói cước thành công', 200);
+      return successResponse(res, plans, 'Subscription plans retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -24,7 +24,7 @@ class SubscriptionController {
     try {
       const parent = await parentService.getParentByUserId(req.userId);
       if (!parent) {
-        return successResponse(res, null, 'Chưa tìm thấy hồ sơ phụ huynh', 200);
+        return successResponse(res, null, 'Parent profile not found', 200);
       }
 
       const [subscription, quotaSummary] = await Promise.all([
@@ -38,7 +38,7 @@ class SubscriptionController {
           subscription,
           quota: quotaSummary,
         },
-        'Lấy thông tin gói cước và hạn mức thành công',
+        'Subscription and quota retrieved successfully',
         200
       );
     } catch (error) {

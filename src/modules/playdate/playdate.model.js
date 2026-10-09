@@ -66,11 +66,9 @@ const playdateSchema = new mongoose.Schema(
         type: {
           type: String,
           enum: ['Point'],
-          default: 'Point',
         },
         coordinates: {
           type: [Number], // [lng, lat]
-          default: [0, 0],
         },
       },
     },
@@ -108,7 +106,7 @@ const playdateSchema = new mongoose.Schema(
 playdateSchema.index({ hostParentId: 1, status: 1 });
 playdateSchema.index({ 'participants.parentId': 1, status: 1 });
 playdateSchema.index({ scheduledDate: 1, status: 1 });
-playdateSchema.index({ 'location.coordinates': '2dsphere' });
+playdateSchema.index({ 'location.coordinates': '2dsphere' }, { sparse: true });
 
 attachAchievementHooks(playdateSchema, 'playdate');
 
