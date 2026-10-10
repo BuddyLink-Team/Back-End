@@ -40,6 +40,7 @@ import Notification from '../src/modules/notification/notification.model.js';
 import Block from '../src/modules/safety/block.model.js';
 import Report from '../src/modules/safety/report.model.js';
 import Subscription from '../src/modules/subscription/subscription.model.js';
+import SubscriptionPlan from '../src/modules/subscription/subscription-plan.model.js';
 import Payment from '../src/modules/subscription/payment.model.js';
 import UsageQuota from '../src/modules/subscription/usage-quota.model.js';
 import { SUBSCRIPTION_PLAN_DEFAULTS } from '../src/modules/subscription/subscription.constants.js';
@@ -330,6 +331,47 @@ const GROUP_CHAT_LINES = [
   'Trời hôm nay đẹp quá, hẹn mọi người lát gặp nha!',
 ];
 
+// Usual opening hours per place type (OSM opening_hours format)
+const OPENING_HOURS = {
+  park: '05:00-22:00',
+  playground: '06:00-21:00',
+  kids_cafe: 'Mo-Su 08:00-21:30',
+  library: 'Tu-Su 07:30-17:00',
+  museum: 'Mo-Su 08:00-17:00',
+  sports_center: 'Mo-Su 06:00-21:00',
+  workshop: 'Tu-Su 08:30-17:30',
+};
+
+// Public sample image used for the image messages and report evidence of the demo data
+const SAMPLE_IMAGE_URL = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
+
+// AI assistant demo conversations: [role, content, toolCall?]
+const AI_SESSIONS = [
+  {
+    title: 'Gợi ý chỗ chơi cuối tuần',
+    messages: [
+      ['user', 'Cuối tuần này cho bé 5 tuổi đi chơi ở đâu gần Hải Châu?'],
+      ['assistant', 'Công viên APEC và Công viên Biển Đông đều gần Hải Châu, có sân chơi rộng và mát vào buổi sáng. Bạn muốn mình tạo lịch hẹn chơi luôn không?'],
+    ],
+  },
+  {
+    title: 'Trò chơi trong nhà ngày mưa',
+    messages: [
+      ['user', 'Trời mưa thì nên cho 2 bé chơi gì ở nhà?'],
+      ['assistant', 'Bạn có thể thử xếp hình Lego theo chủ đề, làm bánh quy đơn giản hoặc dựng "lều" bằng chăn gối để kể chuyện.'],
+    ],
+  },
+  {
+    title: 'Tìm khu vui chơi trong nhà',
+    messages: [
+      ['user', 'Tìm giúp mình khu vui chơi trong nhà gần nhất'],
+      ['assistant', '', { name: 'searchNearbyPlaces', arguments: '{"placeType":"kids_cafe","radiusKm":5}' }],
+      ['tool', '[{"name":"Khu vui chơi trẻ em Vincom Đà Nẵng","distanceKm":1.8}]'],
+      ['assistant', 'Gần bạn nhất là Khu vui chơi trẻ em Vincom Đà Nẵng, cách khoảng 1,8 km, mở cửa đến 21h30.'],
+    ],
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Seed
 // ---------------------------------------------------------------------------
@@ -338,6 +380,11 @@ export async function seedDatabase({ log = console.log } = {}) {
     await Model.deleteMany({});
   }
   log('Wiped collections (subscription_plans kept).');
+
+  // Plans are kept between seeds (admins may have changed prices): only create the missing ones
+  for (const plan of SUBSCRIPTION_PLAN_DEFAULTS) {
+    await SubscriptionPlan.updateOne({ planCode: plan.planCode }, { $setOnInsert: plan }, { upsert: true });
+  }
 
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, await bcrypt.genSalt(10));
 
@@ -356,8 +403,9 @@ export async function seedDatabase({ log = console.log } = {}) {
       phone: p.phone || undefined,
       passwordHash,
       role: 'parent',
-      // One account disabled by moderation
+      // One account disabled by moderation, one signed up with Google
       isActive: i !== 47,
+      googleId: i === 49 ? 'seed-google-sub-104857600049' : undefined,
       createdAt: p.createdAt,
     })),
   );
@@ -369,7 +417,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       bio: p.bio,
       location: p.location,
       preferences: p.preferences,
-      privacySettings: p.privacySettings,
+      // Two families do not accept connection requests (Connection Privacy: Nobody)
+      privacySettings: [46, 48].includes(i) ? { ...p.privacySettings, connectionPrivacy: 'nobody' } : p.privacySettings,
       verification: p.verification,
       createdAt: p.createdAt,
     })),
@@ -386,17 +435,34 @@ export async function seedDatabase({ log = console.log } = {}) {
     const { name, price, currency, durationMonths } = SUBSCRIPTION_PLAN_DEFAULTS.find((p) => p.planCode === planCode);
     return { planCode, name, price, currency, durationMonths };
   };
-  const payosPayment = (parent, planCode, status, createdAt) => ({
-    parentId: parent._id,
-    orderCode: nextOrderCode++,
-    planSnapshot: planSnapshot(planCode),
-    amount: planSnapshot(planCode).price,
-    paymentMethod: 'payos',
-    status,
-    createdAt,
-    // PayOS links stay payable for 15 minutes
-    expiresAt: new Date(createdAt.getTime() + 15 * 60 * 1000),
-  });
+  const payosPayment = (parent, planCode, status, createdAt) => {
+    const orderCode = nextOrderCode++;
+    const linkId = `seedpl${String(orderCode).padStart(26, '0')}`;
+    const description = `BL${orderCode}`;
+    const { price } = planSnapshot(planCode);
+    return {
+      parentId: parent._id,
+      orderCode,
+      // Idempotency-Key sent by the checkout page (one per plan and browser tab)
+      idempotencyKey: `seed-${parent._id}-${orderCode}`,
+      planSnapshot: planSnapshot(planCode),
+      amount: price,
+      paymentMethod: 'payos',
+      status,
+      createdAt,
+      // 'creating': PayOS has not answered yet, so there is no link
+      ...(status === 'creating'
+        ? {}
+        : {
+            paymentLinkId: linkId,
+            checkoutUrl: `https://pay.payos.vn/web/${linkId}`,
+            qrCode: `00020101021238570010A000000727012700069704220113VQRQSEED${orderCode}0208QRIBFTTA530370454${String(price).length.toString().padStart(2, '0')}${price}5802VN62${String(description.length + 4).padStart(2, '0')}08${String(description.length).padStart(2, '0')}${description}6304SEED`,
+            bankInfo: { bin: '970422', accountNumber: 'VQRQSEED0001', accountName: 'CONG TY BUDDYLINK', description },
+          }),
+      // PayOS links stay payable for 15 minutes
+      expiresAt: new Date(createdAt.getTime() + 15 * 60 * 1000),
+    };
+  };
   for (const parent of parents) {
     const isPremium = premiumParents.includes(parent);
     if (!isPremium) {
@@ -421,15 +487,26 @@ export async function seedDatabase({ log = console.log } = {}) {
       paidAt: startDate,
       fulfilledAt: startDate,
       transactionId: `PAYOS${startDate.getTime().toString().slice(-9)}${int(100, 999)}`,
+      lastReconciledAt: new Date(startDate.getTime() + 20 * 1000),
       grantResult: { effectiveStartDate: startDate, effectiveEndDate: endDate, monthsGranted: yearly ? 12 : 1 },
+      rawWebhookData: { code: '00', desc: 'success', amount: planSnapshot(planCode).price, currency: 'VND', transactionDateTime: startDate.toISOString() },
     });
   }
-  // A failed attempt and a checkout still waiting for payment, for realism
-  payments.push(payosPayment(parents[12], 'premium_monthly', 'failed', daysAgo(6, 21, 14)));
+  // Every other payment outcome, for realism
+  payments.push({ ...payosPayment(parents[12], 'premium_monthly', 'failed', daysAgo(6, 21, 14)), failureReason: 'Payment failed or cancelled via PayOS Webhook' });
+  payments.push({ ...payosPayment(parents[13], 'premium_yearly', 'cancelled', daysAgo(4, 20, 5)), failureReason: 'Payment cancelled on PayOS' });
+  payments.push({ ...payosPayment(parents[14], 'premium_monthly', 'expired', daysAgo(3, 9, 30)), failureReason: 'Payment link expired' });
   payments.push(payosPayment(parents[15], 'premium_monthly', 'pending', new Date(Date.now() - 5 * 60 * 1000)));
+  payments.push({ ...payosPayment(parents[16], 'premium_monthly', 'creating', new Date(Date.now() - 60 * 1000)), failureReason: 'PayOS call pending/timeout: timeout of 15000ms exceeded' });
   const insertedSubscriptions = await Subscription.insertMany(subscriptions);
   const subscriptionFor = (parentId) => insertedSubscriptions.find((s) => s.parentId.equals(parentId));
-  await Payment.insertMany(payments.map((p) => ({ ...p, subscriptionId: subscriptionFor(p.parentId)._id })));
+  const insertedPayments = await Payment.insertMany(payments.map((p) => ({ ...p, subscriptionId: subscriptionFor(p.parentId)._id })));
+  // Premium subscriptions point to the payment that granted them
+  await Promise.all(
+    insertedPayments
+      .filter((payment) => payment.status === 'success')
+      .map((payment) => Subscription.updateOne({ _id: payment.subscriptionId }, { $set: { lastPaymentId: payment._id } })),
+  );
 
   // ---- Children (Free plan: 1 child, Premium: 1-2) -----------------------------
   const childDocs = [];
@@ -439,6 +516,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       childDocs.push(buildChild(parent._id, new Date(parent.createdAt.getTime() + (c + 1) * DAY)));
     }
   }
+  // Gender is optional for parents: one family chose "other"
+  childDocs[childDocs.length - 1].gender = 'other';
   const children = await Child.insertMany(childDocs);
   const childrenOf = (parent) => children.filter((c) => c.parentId.equals(parent._id));
   const firstChildOf = (parent) => childrenOf(parent)[0];
@@ -453,6 +532,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       address: p.address,
       coordinates: { type: 'Point', coordinates: p.coordinates },
       placeType: p.placeType,
+      openingHours: OPENING_HOURS[p.placeType] || '',
       lastFetchedAt: daysAgo(int(1, 20)),
     })),
   );
@@ -478,6 +558,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     [6, 7, 'accepted'], [8, 9, 'accepted'], [10, 11, 'accepted'], [0, 3, 'accepted'], [5, 12, 'accepted'],
     [13, 14, 'pending'], [15, 16, 'pending'], [17, 18, 'pending'], [19, 2, 'pending'],
     [20, 21, 'declined'], [22, 23, 'declined'],
+    [26, 28, 'removed'],
   ];
   const connections = [];
   const swipes = [];
@@ -491,8 +572,10 @@ export async function seedDatabase({ log = console.log } = {}) {
       requesterId: requester._id,
       recipientId: recipient._id,
       status,
-      connectedAt: status === 'accepted' ? respondedAt : null,
+      connectedAt: ['accepted', 'removed'].includes(status) ? respondedAt : null,
       declinedAt: status === 'declined' ? respondedAt : null,
+      // A removed connection was accepted first, then ended a few days later
+      removedAt: status === 'removed' ? new Date(respondedAt.getTime() + 5 * DAY) : null,
       createdAt: requestedAt,
     });
     // Like = connection request
@@ -542,12 +625,23 @@ export async function seedDatabase({ log = console.log } = {}) {
       });
       sentAt = new Date(sentAt.getTime() + int(3, 90) * 60 * 1000);
     }
+    // Photo shared in the 2nd chat, emoji in the 3rd one (both stay the last message)
+    const extra = { 1: { type: 'image', content: '[Hình ảnh]', mediaUrl: SAMPLE_IMAGE_URL }, 2: { type: 'emoji', content: '🥰' } }[i];
+    if (extra) {
+      lastMessage = await Message.create({
+        conversationId: conversation._id,
+        senderId: other,
+        ...extra,
+        readBy: [{ parentId: starter, readAt: new Date(sentAt.getTime() + 2 * 60 * 1000) }],
+        createdAt: sentAt,
+      });
+    }
     const lastReceiver = lastMessage.senderId.equals(starter) ? other : starter;
     conversation.lastMessage = {
       messageId: lastMessage._id,
       senderId: lastMessage.senderId,
       content: lastMessage.content,
-      type: 'text',
+      type: lastMessage.type,
       sentAt: lastMessage.createdAt,
     };
     conversation.unreadCounts = { [lastReceiver.toString()]: lastMessage.readBy.length ? 0 : 1 };
@@ -624,6 +718,10 @@ export async function seedDatabase({ log = console.log } = {}) {
           createdAt: sentAt,
         });
       }
+      // System notice when the schedule changed (first group chat)
+      if (playdates.length === 0) {
+        last = await Message.create({ conversationId: conversation._id, senderId: host._id, type: 'system', content: 'Lịch hẹn đã được cập nhật', readBy: [], createdAt: new Date(sentAt.getTime() + 30 * 60 * 1000) });
+      }
       conversation.lastMessage = { messageId: last._id, senderId: last.senderId, content: last.content, type: last.type, sentAt: last.createdAt };
       conversation.unreadCounts = Object.fromEntries(members.map((m) => [m.toString(), 0]));
       await conversation.save();
@@ -640,6 +738,8 @@ export async function seedDatabase({ log = console.log } = {}) {
     { playdate: upcomingPlaydates[0], status: 'accepted', reason: 'Sáng thứ 7 nhà em có đám giỗ, mình dời sang chủ nhật được không ạ?', shiftDays: 1, time: '08:30' },
     { playdate: upcomingPlaydates[1], status: 'pending', reason: 'Chiều đó bé có lớp vẽ, mình lùi sang 16h được không anh?', shiftDays: 0, time: '16:00' },
     { playdate: upcomingPlaydates[2], status: 'declined', reason: 'Dự báo có mưa, đổi sang khu vui chơi trong nhà nhé?', shiftDays: 0, time: '16:30', place: 7 },
+    // Withdrawn by the requester before anyone answered
+    { playdate: upcomingPlaydates[upcomingPlaydates.length - 1], status: 'cancelled', reason: 'Em đặt nhầm giờ, để em gửi lại đề xuất khác ạ.', shiftDays: 0, time: '15:00' },
   ];
   await RescheduleRequest.insertMany(
     rescheduleSeeds.map((r) => {
@@ -656,7 +756,8 @@ export async function seedDatabase({ log = console.log } = {}) {
           : undefined,
         reason: r.reason,
         status: r.status,
-        responses: [{ parentId: r.playdate.hostParentId, status: r.status === 'pending' ? 'pending' : r.status, respondedAt: r.status === 'pending' ? null : new Date(createdAt.getTime() + 3 * 60 * 60 * 1000) }],
+        // A withdrawn request was never answered by the host
+        responses: [{ parentId: r.playdate.hostParentId, status: ['pending', 'cancelled'].includes(r.status) ? 'pending' : r.status, respondedAt: ['pending', 'cancelled'].includes(r.status) ? null : new Date(createdAt.getTime() + 3 * 60 * 60 * 1000) }],
         resolvedAt: r.status === 'pending' ? null : new Date(createdAt.getTime() + 3 * 60 * 60 * 1000),
         createdAt,
       };
@@ -739,7 +840,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     { reporterId: parents[33]._id, reportedUserId: parents[34]._id, targetType: 'user', reason: 'Thông tin hồ sơ không trung thực', description: 'Ảnh đại diện và độ tuổi của bé có vẻ không đúng thực tế.', status: 'reviewing', adminNotes: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.', createdAt: daysAgo(5) },
     { reporterId: cancelledPlaydate.hostParentId, reportedUserId: cancelledPlaydate.cancellation.cancelledBy, targetType: 'playdate', targetPlaydateId: cancelledPlaydate._id, reason: 'Không đến buổi hẹn', description: 'Hủy sát giờ mà không báo trước, cả nhà đã ra tới công viên.', status: 'dismissed', adminNotes: 'Lý do hủy hợp lệ (bé bị ốm), không vi phạm.', resolvedBy: admin._id, resolvedAt: daysAgo(2), createdAt: daysAgo(3) },
     { reporterId: messageReporter, reportedUserId: reportedMessage.senderId, targetType: 'message', targetMessageId: reportedMessage._id, reason: 'Báo cáo nhầm', description: 'Lỡ bấm báo cáo khi đang đọc tin nhắn, mong admin bỏ qua giúp.', status: 'dismissed', adminNotes: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.', resolvedBy: admin._id, resolvedAt: daysAgo(0, 9), createdAt: daysAgo(1, 21) },
-    { reporterId: parents[44]._id, reportedUserId: parents[45]._id, targetType: 'user', reason: 'Ngôn từ không phù hợp', description: 'Dùng từ ngữ thiếu lịch sự trong phần giới thiệu bản thân.', status: 'pending', createdAt: daysAgo(0, 7, 45) },
+    { reporterId: parents[44]._id, reportedUserId: parents[45]._id, targetType: 'user', reason: 'Ngôn từ không phù hợp', description: 'Dùng từ ngữ thiếu lịch sự trong phần giới thiệu bản thân.', evidenceUrls: [SAMPLE_IMAGE_URL], status: 'pending', createdAt: daysAgo(0, 7, 45) },
   ]);
 
   // ---- Notifications ---------------------------------------------------------------------------
@@ -790,6 +891,32 @@ export async function seedDatabase({ log = console.log } = {}) {
   refreshTokens.push({ userId: users[11]._id, tokenHash: sha256(crypto.randomUUID()), isRevoked: true, revokedAt: daysAgo(1, 22), expiresAt: daysAhead(5), createdAt: daysAgo(2) });
   await RefreshToken.insertMany(refreshTokens);
 
+  // ---- AI assistant sessions ----------------------------------------------------------------
+  await AIChatSession.insertMany(
+    AI_SESSIONS.map((session, index) => {
+      const startedAt = daysAgo(index + 1, 20, 15);
+      const messages = session.messages.map(([role, content, toolCall], m) => ({
+        role,
+        content,
+        ...(toolCall ? { toolCalls: [{ id: `call_seed_${index}_${m}`, type: 'function', function: toolCall }] } : {}),
+        ...(role === 'tool' ? { toolCallId: `call_seed_${index}_${m - 1}` } : {}),
+        timestamp: new Date(startedAt.getTime() + m * 40 * 1000),
+      }));
+      const promptTokens = 180 + messages.length * 60;
+      const completionTokens = 90 + messages.length * 35;
+      return {
+        parentId: parents[index]._id,
+        title: session.title,
+        messages,
+        tokenUsage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
+        // The oldest conversation was closed by the parent
+        isActive: index !== AI_SESSIONS.length - 1,
+        createdAt: startedAt,
+        updatedAt: messages[messages.length - 1].timestamp,
+      };
+    }),
+  );
+
   // OTP / reset tokens are short-lived (TTL index removes them after expiresAt)
   await AuthToken.insertMany(
     users.slice(45, 50).map((user, i) => ({
@@ -804,8 +931,19 @@ export async function seedDatabase({ log = console.log } = {}) {
     })),
   );
 
+  // Demo accounts of each plan (all use SEED_PASSWORD)
+  const PLAN_LABELS = { premium_yearly: 'Premium (năm)', premium_monthly: 'Premium (tháng)', free: 'Free' };
+  log('Demo accounts by plan:');
+  for (const [planCode, label] of Object.entries(PLAN_LABELS)) {
+    const emails = subscriptions
+      .filter((subscription) => subscription.planCode === planCode)
+      .map((subscription) => userOf(parents.find((p) => p._id.equals(subscription.parentId))).email);
+    log(`  - ${label} (${emails.length}): ${emails.slice(0, 3).join(', ')}`);
+  }
+
   const counts = {};
   for (const Model of MODELS_TO_WIPE) counts[Model.collection.collectionName] = await Model.countDocuments();
+  counts[SubscriptionPlan.collection.collectionName] = await SubscriptionPlan.countDocuments();
   return counts;
 }
 
