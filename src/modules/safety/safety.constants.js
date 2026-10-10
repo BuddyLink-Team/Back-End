@@ -10,3 +10,9 @@ export const REPORT_STATUS = Object.freeze({
   RESOLVED: 'resolved',
   DISMISSED: 'dismissed',
 });
+
+export const REPORT_LIMITS = Object.freeze({
+  MAX_EVIDENCE_URLS: 5,
+  // A reporter can report the same parent at most once per window
+  DUPLICATE_WINDOW_MS: 24 * 60 * 60 * 1000,
+});

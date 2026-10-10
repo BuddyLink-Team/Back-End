@@ -6,6 +6,13 @@ import AppError from '../../shared/exceptions/AppError.js';
 
 let payosInstance = null;
 
+/**
+ * Sandbox without PayOS keys: the test suite, or development with PAYMENT_MODE=mock.
+ * Never available in production, so payments there always go through (and are signed by) PayOS.
+ */
+const isSandboxAllowed = () =>
+  env.NODE_ENV !== 'production' && (env.NODE_ENV === 'test' || env.PAYMENT_MODE === 'mock');
+
 const isConfigured = Boolean(
   env.PAYOS?.CLIENT_ID &&
   !env.PAYOS.CLIENT_ID.startsWith('<') &&
@@ -76,21 +83,16 @@ class PayOSAdapter {
       } catch (error) {
         logger.error(`PayOS createPaymentLink error: ${error.message}`);
         throw new AppError(
-          error.message || 'Không thể tạo liên kết thanh toán từ cổng PayOS',
+          error.message || 'Could not create the PayOS payment link',
           502,
           'PAYMENT_GATEWAY_ERROR'
         );
       }
     }
 
-    const isMockExplicit =
-      process.env.PAYMENT_MODE === 'mock' ||
-      env.NODE_ENV === 'test' ||
-      env.PAYMENT_MODE === 'mock';
-
-    if (!isMockExplicit || env.NODE_ENV === 'production') {
+    if (!isSandboxAllowed()) {
       throw new AppError(
-        'Cổng thanh toán PayOS chưa được cấu hình. Cần cung cấp API keys hoặc bật PAYMENT_MODE=mock trong môi trường phát triển',
+        'PayOS is not configured: set the PayOS keys, or PAYMENT_MODE=mock in development',
         503,
         'PAYMENT_SERVICE_UNAVAILABLE'
       );
@@ -129,21 +131,16 @@ class PayOSAdapter {
           logger.error(`PayOS getPaymentLinkInformation error for order ${orderCode}: ${error.message}`);
         }
         throw new AppError(
-          error.message || 'Không thể truy vấn thông tin giao dịch từ PayOS',
+          error.message || 'Could not read the payment from PayOS',
           isNotFound ? 404 : 502,
           isNotFound ? 'PAYMENT_LINK_NOT_FOUND' : 'PAYMENT_GATEWAY_ERROR'
         );
       }
     }
 
-    const isMockExplicit =
-      process.env.PAYMENT_MODE === 'mock' ||
-      env.NODE_ENV === 'test' ||
-      env.PAYMENT_MODE === 'mock';
-
-    if (!isMockExplicit || env.NODE_ENV === 'production') {
+    if (!isSandboxAllowed()) {
       throw new AppError(
-        'Cổng thanh toán PayOS chưa được cấu hình trên máy chủ',
+        'PayOS is not configured on the server',
         503,
         'PAYMENT_SERVICE_UNAVAILABLE'
       );
@@ -169,7 +166,7 @@ class PayOSAdapter {
       } catch (error) {
         logger.error(`PayOS cancelPaymentLink error for order ${orderCode}: ${error.message}`);
         throw new AppError(
-          error.message || 'Không thể hủy liên kết thanh toán PayOS',
+          error.message || 'Could not cancel the PayOS payment link',
           502,
           'PAYMENT_GATEWAY_ERROR'
         );
@@ -177,7 +174,7 @@ class PayOSAdapter {
     }
 
     throw new AppError(
-      'Cổng thanh toán PayOS chưa được cấu hình trên máy chủ',
+      'PayOS is not configured on the server',
       503,
       'PAYMENT_SERVICE_UNAVAILABLE'
     );
@@ -194,7 +191,7 @@ class PayOSAdapter {
       } catch (error) {
         logger.error(`PayOS confirmWebhook error: ${error.message}`);
         throw new AppError(
-          error.message || 'Không thể xác nhận Webhook URL với PayOS',
+          error.message || 'Could not confirm the webhook URL with PayOS',
           502,
           'PAYMENT_GATEWAY_ERROR'
         );
@@ -202,7 +199,7 @@ class PayOSAdapter {
     }
 
     throw new AppError(
-      'Cổng thanh toán PayOS chưa được cấu hình trên máy chủ',
+      'PayOS is not configured on the server',
       503,
       'PAYMENT_SERVICE_UNAVAILABLE'
     );
@@ -217,7 +214,7 @@ class PayOSAdapter {
     if (this.isLive()) {
       if (!webhookBody?.signature) {
         throw new AppError(
-          'Dữ liệu webhook thiếu chữ ký xác thực (signature)',
+          'Webhook payload has no signature',
           400,
           'INVALID_WEBHOOK_SIGNATURE'
         );
@@ -228,22 +225,17 @@ class PayOSAdapter {
       } catch (error) {
         logger.warn(`PayOS webhook signature verification failed: ${error.message}`);
         throw new AppError(
-          'Chữ ký xác thực Webhook PayOS không hợp lệ',
+          'Invalid PayOS webhook signature',
           400,
           'INVALID_WEBHOOK_SIGNATURE'
         );
       }
     }
 
-    const isMockOrTest =
-      process.env.PAYMENT_MODE === 'mock' ||
-      env.NODE_ENV === 'test' ||
-      env.PAYMENT_MODE === 'mock';
-
-    if (isMockOrTest && env.PAYOS?.CHECKSUM_KEY) {
+    if (isSandboxAllowed() && env.PAYOS?.CHECKSUM_KEY) {
       if (!webhookBody?.signature) {
         throw new AppError(
-          'Dữ liệu webhook thiếu chữ ký xác thực (signature)',
+          'Webhook payload has no signature',
           400,
           'INVALID_WEBHOOK_SIGNATURE'
         );
@@ -294,7 +286,7 @@ class PayOSAdapter {
       } catch (error) {
         logger.warn(`PayOS webhook signature verification failed: ${error.message}`);
         throw new AppError(
-          'Chữ ký xác thực Webhook PayOS không hợp lệ',
+          'Invalid PayOS webhook signature',
           400,
           'INVALID_WEBHOOK_SIGNATURE'
         );
@@ -302,7 +294,7 @@ class PayOSAdapter {
     }
 
     throw new AppError(
-      'Cổng thanh toán PayOS chưa được cấu hình khóa xác thực webhook',
+      'PayOS webhook checksum key is not configured',
       503,
       'PAYMENT_SERVICE_UNAVAILABLE'
     );

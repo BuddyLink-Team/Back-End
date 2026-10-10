@@ -109,7 +109,23 @@ class PaymentRepository {
   /**
    * Find paginated payment history for a parent
    */
-  async findHistoryByParentId(parentId, { page = 1, limit = 10 } = {}) {
+  /**
+   * Unpaid orders whose payment link has expired (still 'creating' / 'pending' in the database)
+   * @param {{ parentId?: string|ObjectId, now?: Date, limit?: number }} [options] - All parents when no parentId
+   * @returns {Promise<Array<Object>>} Oldest first
+   */
+  async findStaleUnpaid({ parentId, now = new Date(), limit = 50 } = {}) {
+    return Payment.find({
+      ...(parentId ? { parentId } : {}),
+      status: { $in: ['creating', 'pending'] },
+      expiresAt: { $lte: now },
+    })
+      .sort({ expiresAt: 1 })
+      .limit(limit)
+      .lean();
+  }
+
+    async findHistoryByParentId(parentId, { page = 1, limit = 10 } = {}) {
     const parsedPage = Math.max(1, parseInt(page, 10) || 1);
     const parsedLimit = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
     const skip = (parsedPage - 1) * parsedLimit;

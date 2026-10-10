@@ -26,8 +26,6 @@ export class ParentProfileDTO {
         preferredLocations: parent.preferences?.preferredLocations || [],
         maxDistanceKm: parent.preferences?.maxDistanceKm ?? 15,
         preferredAgeRange: parent.preferences?.preferredAgeRange || { min: 1, max: 12 },
-        languages: parent.preferences?.languages || ['Vietnamese'],
-        additionalNotes: parent.preferences?.additionalNotes || '',
       },
       privacySettings: {
         isProfileHidden: Boolean(parent.privacySettings?.isProfileHidden),

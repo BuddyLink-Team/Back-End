@@ -8,8 +8,8 @@ export const authorizeRoles = (...roles) => {
       );
     }
 
-    const userRole = (req.user.role || "").toUpperCase();
-    const normalizedRoles = roles.map((r) => String(r).toUpperCase());
+    const userRole = String(req.user.role || "").toLowerCase();
+    const normalizedRoles = roles.map((r) => String(r).toLowerCase());
 
     if (!normalizedRoles.includes(userRole)) {
       return next(

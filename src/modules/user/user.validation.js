@@ -20,33 +20,5 @@ export const changeUserPasswordValidation = [
     }),
 ];
 
-export const updateUserProfileValidation = [
-  body('phone')
-    .optional()
-    .isString()
-    .trim(),
-  body('fullName')
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage('Full name must be between 2 and 100 characters'),
-  body('bio')
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ max: 500 })
-    .withMessage('Bio cannot exceed 500 characters'),
-  body('location')
-    .optional()
-    .isObject()
-    .withMessage('Location must be an object'),
-  body('preferences')
-    .optional()
-    .isObject()
-    .withMessage('Preferences must be an object'),
-  body('privacySettings')
-    .optional()
-    .isObject()
-    .withMessage('PrivacySettings must be an object'),
-];
+// Profile update rules are shared with PUT /parent/me (same update flow), including phone
+export { updateParentProfileValidation as updateUserProfileValidation } from '../parent/parent.validation.js';

@@ -3,6 +3,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 import app from '../../src/app.js';
 import env from '../../src/config/env.js';
+import Payment from '../../src/modules/subscription/payment.model.js';
 import subscriptionService, {
   calculateCalendarEndDate,
 } from '../../src/modules/subscription/subscription.service.js';
@@ -55,7 +56,6 @@ function createSignedWebhookPayload(data, code = '00', desc = 'success') {
 
 describe('Subscription & Payment Integration Flow', () => {
   let parentToken = '';
-  let parentId = '';
   const testEmail = `sub-test-${Date.now()}@example.com`;
   const testPassword = 'Password123!';
 
@@ -71,11 +71,6 @@ describe('Subscription & Payment Integration Flow', () => {
     });
     parentToken = res.body.data.tokens.accessToken;
 
-    // Get parentId
-    const profileRes = await request(app)
-      .get('/api/v1/parent/me')
-      .set('Authorization', `Bearer ${parentToken}`);
-    parentId = profileRes.body.data.id || profileRes.body.data._id;
   });
 
   describe('Calendar Month Date Calculation', () => {
@@ -311,6 +306,24 @@ describe('Subscription & Payment Integration Flow', () => {
       expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
       expect(res.body.data.pagination.page).toBe(1);
     });
+
+    it('should list an abandoned order whose payment link expired as expired', async () => {
+      const checkoutRes = await request(app)
+        .post('/api/v1/subscriptions/checkout')
+        .set('Authorization', `Bearer ${parentToken}`)
+        .set('Idempotency-Key', `idem-abandoned-${Date.now()}`)
+        .send({ planCode: 'premium_monthly' });
+      const abandonedOrderCode = checkoutRes.body.data.orderCode;
+      await Payment.updateOne({ orderCode: abandonedOrderCode }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+
+      const res = await request(app)
+        .get('/api/v1/subscriptions/payments/history?page=1&limit=50')
+        .set('Authorization', `Bearer ${parentToken}`);
+
+      expect(res.status).toBe(200);
+      const abandoned = res.body.data.items.find((item) => item.orderCode === abandonedOrderCode);
+      expect(abandoned.status).toBe('expired');
+    });
   });
 
   describe('Error Handling & Edge Cases (Mục 8)', () => {
@@ -480,7 +493,6 @@ describe('Subscription & Payment Integration Flow', () => {
         email,
         password: testPassword,
       });
-      const token = regRes.body.data.tokens.accessToken;
       const freeParentId = regRes.body.data.parent.id;
 
       // Consume 5 swipes

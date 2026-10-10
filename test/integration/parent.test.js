@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
+import { describe, it, expect, beforeAll, jest } from "@jest/globals";
 import request from "supertest";
 import app from "../../src/app.js";
-import cloudinaryAdapter from "../../src/integrations/storage/cloudinary.adapter.js";
+import storageAdapter from "../../src/integrations/storage/storage.adapter.js";
+import geocodingAdapter from "../../src/integrations/maps/geocoding.adapter.js";
+import { PNG_BUFFER } from "../helpers/imageHelper.js";
 
 describe("Parent Profile Integration Flow", () => {
   let accessToken = "";
@@ -51,7 +53,6 @@ describe("Parent Profile Integration Flow", () => {
           preferredLocations: ["park", "outdoor"],
           maxDistanceKm: 20,
           preferredAgeRange: { min: 2, max: 10 },
-          languages: ["Vietnamese", "English"],
         },
         privacySettings: {
           isProfileHidden: false,
@@ -70,7 +71,8 @@ describe("Parent Profile Integration Flow", () => {
       expect(res.body.data.fullName).toBe("Le Van Parent Updated");
       expect(res.body.data.bio).toBe(updateData.bio);
       expect(res.body.data.preferences.maxDistanceKm).toBe(20);
-      expect(res.body.data.preferences.languages).toContain("English");
+      expect(res.body.data.preferences).not.toHaveProperty("languages");
+      expect(res.body.data.preferences).not.toHaveProperty("additionalNotes");
     });
 
     it("should reject invalid preferences parameters", async () => {
@@ -92,18 +94,16 @@ describe("Parent Profile Integration Flow", () => {
     it("should upload new avatar and update parent profile", async () => {
       // Mock Cloudinary upload to prevent real external API call in test
       const uploadSpy = jest
-        .spyOn(cloudinaryAdapter, "uploadImage")
+        .spyOn(storageAdapter, "uploadImage")
         .mockResolvedValueOnce({
           url: "https://res.cloudinary.com/test-cloud/image/upload/v12345/avatar.jpg",
           publicId: "buddylink/parents/avatars/avatar123",
         });
 
-      const fakeImageBuffer = Buffer.from("fake-image-content");
-
       const res = await request(app)
         .patch("/api/v1/parent/me/avatar")
         .set("Authorization", `Bearer ${accessToken}`)
-        .attach("avatar", fakeImageBuffer, {
+        .attach("avatar", PNG_BUFFER, {
           filename: "avatar.png",
           contentType: "image/png",
         });
@@ -128,6 +128,19 @@ describe("Parent Profile Integration Flow", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
+    });
+
+    it("should reject non-image content disguised with an image mimetype", async () => {
+      const res = await request(app)
+        .patch("/api/v1/parent/me/avatar")
+        .set("Authorization", `Bearer ${accessToken}`)
+        .attach("avatar", Buffer.from("<svg onload=alert(1)></svg> not a png"), {
+          filename: "avatar.png",
+          contentType: "image/png",
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_FILE_TYPE");
     });
   });
 
@@ -196,6 +209,51 @@ describe("Parent Profile Integration Flow", () => {
       expect(loginRes.status).toBe(200);
       expect(loginRes.body.success).toBe(true);
       expect(loginRes.body.data.tokens.accessToken).toBeDefined();
+    });
+  });
+
+  describe("PUT /api/v1/parent/me location", () => {
+    const updateLocation = (location) =>
+      request(app).put("/api/v1/parent/me").set("Authorization", `Bearer ${accessToken}`).send({ location });
+
+    it("rebuilds the address from area and city and geocodes the new place", async () => {
+      const spy = jest.spyOn(geocodingAdapter, "getCoordinatesByAddress").mockResolvedValue([106.7, 10.78]);
+      try {
+        const res = await updateLocation({ area: "Phường Bến Nghé", city: "TP. Hồ Chí Minh" });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.location.address).toBe("Phường Bến Nghé, TP. Hồ Chí Minh");
+        expect(res.body.data.location.coordinates.coordinates).toEqual([106.7, 10.78]);
+        expect(spy).toHaveBeenCalledWith("Phường Bến Nghé", "TP. Hồ Chí Minh");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("updates the address again when only the area changes", async () => {
+      const spy = jest.spyOn(geocodingAdapter, "getCoordinatesByAddress").mockResolvedValue([106.69, 10.77]);
+      try {
+        const res = await updateLocation({ area: "Phường Đa Kao", city: "TP. Hồ Chí Minh" });
+
+        expect(res.body.data.location.address).toBe("Phường Đa Kao, TP. Hồ Chí Minh");
+        expect(res.body.data.location.coordinates.coordinates).toEqual([106.69, 10.77]);
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("does not geocode again when the place is unchanged", async () => {
+      const spy = jest.spyOn(geocodingAdapter, "getCoordinatesByAddress").mockResolvedValue([0, 1]);
+      try {
+        const res = await updateLocation({ area: "Phường Đa Kao", city: "TP. Hồ Chí Minh" });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.location.coordinates.coordinates).toEqual([106.69, 10.77]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

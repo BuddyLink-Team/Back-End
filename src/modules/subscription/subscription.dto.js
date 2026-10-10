@@ -8,10 +8,14 @@ export class SubscriptionDTO {
       currency: plan.currency || 'VND',
       durationMonths: plan.durationMonths,
       billingCycle: plan.billingCycle,
+      // Limits enforced by the quota checks (-1 = unlimited)
       features: {
         childProfilesLimit: plan.features?.childProfilesLimit ?? 1,
-        discoverySwipesLimitPerDay: plan.features?.discoverySwipesLimitPerDay ?? 5,
-        playdatesCreatedLimitPerMonth: plan.features?.playdatesCreatedLimitPerMonth ?? 3,
+        discoveryViewLimitPerDay: plan.features?.discoveryViewLimitPerDay ?? 5,
+        connectionRequestsLimitPerMonth: plan.features?.connectionRequestsLimitPerMonth ?? 5,
+        playdatesLimitPerMonth: plan.features?.playdatesLimitPerMonth ?? 3,
+        playdateParticipationLimitPerMonth: plan.features?.playdateParticipationLimitPerMonth ?? 3,
+        aiAssistantLimitPerMonth: plan.features?.aiAssistantLimitPerMonth ?? 5,
       },
     };
   }

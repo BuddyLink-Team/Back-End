@@ -20,10 +20,13 @@ const usageQuotaSchema = new mongoose.Schema(
     },
     counters: {
       // Used when periodType === 'daily':
-      discoverySwipes: { type: Number, default: 0, min: 0 },
+      discoveryViews: { type: Number, default: 0, min: 0 },
 
       // Used when periodType === 'monthly':
+      connectionRequests: { type: Number, default: 0, min: 0 },
       playdatesCreated: { type: Number, default: 0, min: 0 },
+      playdatesParticipated: { type: Number, default: 0, min: 0 },
+      aiAssistantRequests: { type: Number, default: 0, min: 0 },
     },
   },
   {

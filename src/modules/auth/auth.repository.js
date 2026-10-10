@@ -12,14 +12,41 @@ class AuthRepository {
     });
   }
 
-  async findValidAuthToken({ target, tokenHash, type }) {
+  /**
+   * Invalidate every still-usable code of this target/type so only the newest one works
+   */
+  async invalidateActiveAuthTokens({ target, type }) {
+    return AuthToken.updateMany(
+      { target, type, isUsed: false },
+      { $set: { isUsed: true } }
+    );
+  }
+
+  /**
+   * Latest usable code issued for a target/type, optionally bound to a user
+   */
+  async findLatestActiveAuthToken({ target, type, userId }) {
     return AuthToken.findOne({
       target,
-      tokenHash,
       type,
       isUsed: false,
       expiresAt: { $gt: new Date() },
-    });
+      ...(userId ? { userId } : {}),
+    }).sort({ createdAt: -1 });
+  }
+
+  /**
+   * Record a wrong code; invalidate the token once the attempt limit is reached
+   */
+  async recordFailedAttempt(id, { invalidate }) {
+    return AuthToken.findByIdAndUpdate(
+      id,
+      {
+        $inc: { attempts: 1 },
+        ...(invalidate ? { $set: { isUsed: true } } : {}),
+      },
+      { new: true }
+    );
   }
 
   async markAuthTokenUsed(id) {

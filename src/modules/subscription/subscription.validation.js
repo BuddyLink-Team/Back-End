@@ -5,34 +5,34 @@ export const checkoutValidation = [
   header('idempotency-key')
     .trim()
     .notEmpty()
-    .withMessage('Idempotency-Key header là bắt buộc khi tạo checkout'),
+    .withMessage('Idempotency-Key header is required'),
   body('planCode')
     .trim()
     .notEmpty()
-    .withMessage('Mã gói cước không được để trống')
+    .withMessage('planCode is required')
     .isIn([
       SUBSCRIPTION_PLAN_CODES.PREMIUM_MONTHLY,
       SUBSCRIPTION_PLAN_CODES.PREMIUM_YEARLY,
     ])
-    .withMessage('Gói cước nâng cấp không hợp lệ'),
+    .withMessage('Invalid upgrade plan'),
 ];
 
 export const verifyPaymentValidation = [
   param('orderCode')
     .trim()
     .notEmpty()
-    .withMessage('Mã đơn hàng không được để trống')
+    .withMessage('orderCode is required')
     .isNumeric()
-    .withMessage('Mã đơn hàng phải là số'),
+    .withMessage('orderCode must be numeric'),
 ];
 
 export const historyQueryValidation = [
   query('page')
     .optional()
     .isInt({ min: 1 })
-    .withMessage('Số trang phải là số nguyên dương >= 1'),
+    .withMessage('page must be an integer >= 1'),
   query('limit')
     .optional()
     .isInt({ min: 1, max: 50 })
-    .withMessage('Số lượng mỗi trang phải từ 1 đến 50'),
+    .withMessage('limit must be between 1 and 50'),
 ];

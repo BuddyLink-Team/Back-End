@@ -1,12 +1,13 @@
-import mongoose from 'mongoose';
 import subscriptionRepository from './subscription.repository.js';
 import subscriptionPlanRepository from './subscription-plan.repository.js';
 import usageQuotaRepository from './usage-quota.repository.js';
 import paymentRepository from './payment.repository.js';
 import payosAdapter from '../../integrations/payos/payos.adapter.js';
+import childService from '../child/child.service.js';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/AppError.js';
+import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import {
   SUBSCRIPTION_PLAN_CODES,
   SUBSCRIPTION_STATUS,
@@ -14,6 +15,8 @@ import {
   PAYMENT_METHODS,
   QUOTA_PERIOD_TYPES,
   QUOTA_FEATURES,
+  QUOTA_ACTIONS,
+  QUOTA_ACTION_ALIASES,
 } from './subscription.constants.js';
 
 /**
@@ -51,22 +54,26 @@ export function calculateCalendarEndDate(anchorDate, purchasedMonths = 1) {
   return new Date(isoWithVnOffset);
 }
 
+// Formats a date as YYYY-MM-DD in the business timezone (en-CA locale uses that order)
+const dayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: env.APP_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 /**
- * Helper to get Vietnam timezone period strings
+ * Quota period key in the business timezone (Asia/Ho_Chi_Minh by default), so daily quotas reset
+ * at local midnight rather than at 00:00 UTC (07:00 in Vietnam)
  * @param {'daily'|'monthly'} periodType
  * @param {Date} date
  */
 export function getVietnamPeriodValue(periodType, date = new Date()) {
-  const vnDateStr = date.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' });
-  const vnDate = new Date(vnDateStr);
-
-  const yyyy = vnDate.getFullYear();
-  const mm = String(vnDate.getMonth() + 1).padStart(2, '0');
+  const localDay = dayFormatter.format(date); // YYYY-MM-DD
   if (periodType === QUOTA_PERIOD_TYPES.MONTHLY) {
-    return `${yyyy}-${mm}`;
+    return localDay.slice(0, 7);
   }
-  const dd = String(vnDate.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+  return localDay;
 }
 
 /**
@@ -96,6 +103,25 @@ export function getNextResetTime(periodType) {
 
   return null;
 }
+
+/**
+ * Checkout fields handed to the controller (shaped by SubscriptionDTO.toCheckoutResponse)
+ * @param {Object} payment - Payment document
+ * @param {Object} [overrides] - e.g. { isExisting: true }
+ */
+const toCheckoutResult = (payment, overrides = {}) => ({
+  orderCode: payment.orderCode,
+  status: payment.status,
+  planSnapshot: payment.planSnapshot,
+  amount: payment.amount,
+  currency: payment.currency,
+  paymentLinkId: payment.paymentLinkId,
+  checkoutUrl: payment.checkoutUrl,
+  qrCode: payment.qrCode,
+  bankInfo: payment.bankInfo,
+  expiresAt: payment.expiresAt,
+  ...overrides,
+});
 
 class SubscriptionService {
   /**
@@ -147,6 +173,14 @@ class SubscriptionService {
    */
   async getSubscriptionByParentId(parentId, session = null) {
     let sub = await subscriptionRepository.findByParentId(parentId, session);
+
+    // A paid plan past its end date falls back to Free even if the expiry job has not run yet
+    if (sub && sub.planCode !== SUBSCRIPTION_PLAN_CODES.FREE && sub.endDate && sub.endDate <= new Date()) {
+      const downgraded = await subscriptionRepository.downgradeToFree(sub._id);
+      // null: renewed or downgraded concurrently, read the current state
+      sub = downgraded || (await subscriptionRepository.findByParentId(parentId, session));
+    }
+
     if (!sub) {
       sub = await subscriptionRepository.upsertFreeSubscription(parentId, session);
     }
@@ -156,10 +190,12 @@ class SubscriptionService {
   /**
    * Get parent effective subscription status and usage quota details
    * @param {string|mongoose.Types.ObjectId} parentId
-   * @param {number} currentChildCount
    */
-  async getMySubscriptionQuota(parentId, currentChildCount = 0) {
-    const subscription = await this.getSubscriptionByParentId(parentId);
+  async getMySubscriptionQuota(parentId) {
+    const [subscription, currentChildCount] = await Promise.all([
+      this.getSubscriptionByParentId(parentId),
+      childService.countChildrenByParentId(parentId),
+    ]);
     const isPremium = this.isSubscriptionActive(subscription);
     const effectivePlanCode = isPremium ? subscription.planCode : SUBSCRIPTION_PLAN_CODES.FREE;
 
@@ -174,12 +210,14 @@ class SubscriptionService {
     const activePlan = await subscriptionPlanRepository.findByPlanCode(effectivePlanCode);
     const features = activePlan?.features || {
       childProfilesLimit: 1,
-      discoverySwipesLimitPerDay: 5,
-      playdatesCreatedLimitPerMonth: 3,
+      discoveryViewLimitPerDay: 5,
+      playdatesLimitPerMonth: 3,
     };
+    const discoveryLimit = features[QUOTA_ACTIONS.discovery.limitKey];
+    const playdatesLimit = features[QUOTA_ACTIONS.playdateCreate.limitKey];
 
-    const discoveryUsed = dailyCounters.discoverySwipes || 0;
-    const playdatesUsed = monthlyCounters.playdatesCreated || 0;
+    const discoveryUsed = dailyCounters[QUOTA_ACTIONS.discovery.counterField] || 0;
+    const playdatesUsed = monthlyCounters[QUOTA_ACTIONS.playdateCreate.counterField] || 0;
 
     return {
       isPremium,
@@ -202,21 +240,58 @@ class SubscriptionService {
           resetAt: null,
         },
         [QUOTA_FEATURES.DISCOVERY_SWIPES]: {
-          limit: isPremium ? -1 : features.discoverySwipesLimitPerDay,
+          limit: isPremium ? -1 : discoveryLimit,
           used: discoveryUsed,
-          remaining: isPremium ? null : Math.max(0, features.discoverySwipesLimitPerDay - discoveryUsed),
+          remaining: isPremium ? null : Math.max(0, discoveryLimit - discoveryUsed),
           periodType: QUOTA_PERIOD_TYPES.DAILY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.DAILY),
         },
         [QUOTA_FEATURES.PLAYDATES_CREATED]: {
-          limit: isPremium ? -1 : features.playdatesCreatedLimitPerMonth,
+          limit: isPremium ? -1 : playdatesLimit,
           used: playdatesUsed,
-          remaining: isPremium ? null : Math.max(0, features.playdatesCreatedLimitPerMonth - playdatesUsed),
+          remaining: isPremium ? null : Math.max(0, playdatesLimit - playdatesUsed),
           periodType: QUOTA_PERIOD_TYPES.MONTHLY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
         },
       },
     };
+  }
+
+  /**
+   * Current subscription of a parent (Free when none, or when the paid plan has expired)
+   * @param {string|mongoose.Types.ObjectId} parentId
+   */
+  async getActiveSubscriptionByParentId(parentId) {
+    return this.getSubscriptionByParentId(parentId);
+  }
+
+  /**
+   * Move paid subscriptions whose end date has passed back to Free.
+   * Run at startup and periodically by the subscription expiry job.
+   * @returns {Promise<number>} Number of expired subscriptions
+   */
+  async expireDueSubscriptions(now = new Date()) {
+    const dueSubscriptions = await subscriptionRepository.findDueForExpiry(now);
+    let expiredCount = 0;
+
+    for (const subscription of dueSubscriptions) {
+      const downgraded = await subscriptionRepository.downgradeToFree(subscription._id, now);
+      if (downgraded) expiredCount += 1;
+    }
+
+    if (expiredCount > 0) {
+      logger.info(`Expired ${expiredCount} subscription(s) and downgraded them to Free`);
+    }
+    return expiredCount;
+  }
+
+  /**
+   * Quota period key in the business timezone
+   * @param {'daily'|'monthly'} periodType
+   * @param {Date} date
+   */
+  getPeriodValue(periodType, date = new Date()) {
+    return getVietnamPeriodValue(periodType, date);
   }
 
   /**
@@ -230,12 +305,12 @@ class SubscriptionService {
    */
   async createCheckoutSession(parentId, { planCode, idempotencyKey = null, fingerprint = null }) {
     if (!planCode || planCode === SUBSCRIPTION_PLAN_CODES.FREE) {
-      throw new AppError('Gói cước nâng cấp không hợp lệ hoặc miễn phí', 400, 'INVALID_PLAN');
+      throw new AppError('Invalid upgrade plan', 400, 'INVALID_PLAN');
     }
 
     const plan = await subscriptionPlanRepository.findByPlanCode(planCode);
     if (!plan || !plan.isActive || plan.price <= 0) {
-      throw new AppError('Gói dịch vụ không tồn tại hoặc đã ngừng mở bán', 400, 'PLAN_NOT_AVAILABLE');
+      throw new AppError('Subscription plan not found or no longer available', 400, 'PLAN_NOT_AVAILABLE');
     }
 
     // 1. Check idempotency key if provided
@@ -248,7 +323,7 @@ class SubscriptionService {
       if (existingPayment) {
         if (existingPayment.planSnapshot.planCode !== planCode) {
           throw new AppError(
-            'Idempotency-Key đã được sử dụng cho một gói cước khác',
+            'Idempotency-Key was already used for another plan',
             409,
             'IDEMPOTENCY_CONFLICT'
           );
@@ -287,19 +362,7 @@ class SubscriptionService {
             if (payosInfo && payosInfo.status === 'PAID') {
               const fulfillment = await this.fulfillPaymentSession(existingPayment.orderCode, payosInfo);
               const fulfilled = fulfillment.payment || existingPayment;
-              return {
-                orderCode: fulfilled.orderCode,
-                status: PAYMENT_STATUS.SUCCESS,
-                planSnapshot: fulfilled.planSnapshot,
-                amount: fulfilled.amount,
-                currency: fulfilled.currency,
-                paymentLinkId: fulfilled.paymentLinkId,
-                checkoutUrl: fulfilled.checkoutUrl,
-                qrCode: fulfilled.qrCode,
-                bankInfo: fulfilled.bankInfo,
-                expiresAt: fulfilled.expiresAt,
-                isExisting: true,
-              };
+              return toCheckoutResult(fulfilled, { status: PAYMENT_STATUS.SUCCESS, isExisting: true });
             } else if (payosInfo && payosInfo.status === 'PENDING') {
               const description = `BL${existingPayment.orderCode}`.slice(0, 25);
               const bankInfo =
@@ -320,19 +383,7 @@ class SubscriptionService {
                 bankInfo,
               });
 
-              return {
-                orderCode: updated.orderCode,
-                status: updated.status,
-                planSnapshot: updated.planSnapshot,
-                amount: updated.amount,
-                currency: updated.currency,
-                paymentLinkId: updated.paymentLinkId,
-                checkoutUrl: updated.checkoutUrl,
-                qrCode: updated.qrCode,
-                bankInfo: updated.bankInfo,
-                expiresAt: updated.expiresAt,
-                isExisting: true,
-              };
+              return toCheckoutResult(updated, { isExisting: true });
             } else if (!existingPayment.checkoutUrl) {
               // Re-create payment link using same orderCode without duplicate records
               const description = `BL${existingPayment.orderCode}`.slice(0, 25);
@@ -372,37 +423,13 @@ class SubscriptionService {
                 bankInfo,
               });
 
-              return {
-                orderCode: updated.orderCode,
-                status: updated.status,
-                planSnapshot: updated.planSnapshot,
-                amount: updated.amount,
-                currency: updated.currency,
-                paymentLinkId: updated.paymentLinkId,
-                checkoutUrl: updated.checkoutUrl,
-                qrCode: updated.qrCode,
-                bankInfo: updated.bankInfo,
-                expiresAt: updated.expiresAt,
-                isExisting: true,
-              };
+              return toCheckoutResult(updated, { isExisting: true });
             }
           }
 
           // Return existing payment details if still pending/valid
           if (existingPayment.status === PAYMENT_STATUS.PENDING) {
-            return {
-              orderCode: existingPayment.orderCode,
-              status: existingPayment.status,
-              planSnapshot: existingPayment.planSnapshot,
-              amount: existingPayment.amount,
-              currency: existingPayment.currency,
-              paymentLinkId: existingPayment.paymentLinkId,
-              checkoutUrl: existingPayment.checkoutUrl,
-              qrCode: existingPayment.qrCode,
-              bankInfo: existingPayment.bankInfo,
-              expiresAt: existingPayment.expiresAt,
-              isExisting: true,
-            };
+            return toCheckoutResult(existingPayment, { isExisting: true });
           }
         }
       }
@@ -452,24 +479,12 @@ class SubscriptionService {
             if (existing) {
               if (existing.planSnapshot.planCode !== planCode) {
                 throw new AppError(
-                  'Idempotency-Key đã được sử dụng cho một gói cước khác',
+                  'Idempotency-Key was already used for another plan',
                   409,
                   'IDEMPOTENCY_CONFLICT'
                 );
               }
-              return {
-                orderCode: existing.orderCode,
-                status: existing.status,
-                planSnapshot: existing.planSnapshot,
-                amount: existing.amount,
-                currency: existing.currency,
-                paymentLinkId: existing.paymentLinkId,
-                checkoutUrl: existing.checkoutUrl,
-                qrCode: existing.qrCode,
-                bankInfo: existing.bankInfo,
-                expiresAt: existing.expiresAt,
-                isExisting: true,
-              };
+              return toCheckoutResult(existing, { isExisting: true });
             }
           }
           if (attempt < 4) continue; // Retry with new orderCode on orderCode collision
@@ -479,7 +494,7 @@ class SubscriptionService {
     }
 
     if (!payment) {
-      throw new AppError('Không thể khởi tạo mã đơn hàng', 500, 'ORDER_CREATION_FAILED');
+      throw new AppError('Could not create an order code', 500, 'ORDER_CREATION_FAILED');
     }
 
     // 3. Prepare description & URLs for PayOS
@@ -576,20 +591,7 @@ class SubscriptionService {
     const maxRetries = 3;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      let session = null;
-      try {
-        const topologyType = mongoose.connection?.client?.topology?.description?.type;
-        const isReplicaSet =
-          topologyType === 'ReplicaSetWithPrimary' ||
-          topologyType === 'ReplicaSetNoPrimary' ||
-          topologyType === 'Sharded';
-        if (isReplicaSet) {
-          session = await mongoose.startSession();
-          session.startTransaction();
-        }
-      } catch (sessionErr) {
-        session = null;
-      }
+      const session = await startTransactionIfSupported();
 
       try {
         // 1. Find payment by orderCode
@@ -621,23 +623,23 @@ class SubscriptionService {
 
         // 3. Strict verification of amount, paymentLinkId, currency, and code
         if (paymentData.amount === undefined || paymentData.amount === null) {
-          throw new AppError('Dữ liệu thanh toán thiếu số tiền', 400, 'INVALID_PAYMENT_DATA');
+          throw new AppError('Payment data has no amount', 400, 'INVALID_PAYMENT_DATA');
         }
 
         if (Number(paymentData.amount) !== Number(payment.amount)) {
           logger.error(
             `Amount mismatch for order ${orderCode}: received ${paymentData.amount}, expected ${payment.amount}`
           );
-          throw new AppError('Số tiền thanh toán không khớp với đơn hàng', 400, 'AMOUNT_MISMATCH');
+          throw new AppError('Paid amount does not match the order', 400, 'AMOUNT_MISMATCH');
         }
 
         if (paymentData.currency && paymentData.currency !== (payment.currency || 'VND')) {
-          throw new AppError('Đơn vị tiền tệ không khớp với đơn hàng', 400, 'CURRENCY_MISMATCH');
+          throw new AppError('Currency does not match the order', 400, 'CURRENCY_MISMATCH');
         }
 
         if (payment.paymentLinkId && paymentData.paymentLinkId) {
           if (payment.paymentLinkId !== paymentData.paymentLinkId) {
-            throw new AppError('Mã liên kết thanh toán không khớp', 400, 'PAYMENT_LINK_MISMATCH');
+            throw new AppError('Payment link does not match the order', 400, 'PAYMENT_LINK_MISMATCH');
           }
         }
 
@@ -737,7 +739,9 @@ class SubscriptionService {
         if (session) {
           try {
             await session.abortTransaction();
-          } catch (e) {}
+          } catch {
+            // Already aborted: nothing left to roll back
+          }
           session.endSession();
         }
 
@@ -763,7 +767,8 @@ class SubscriptionService {
    * @param {Object} webhookBody
    */
   async handlePayOSWebhook(webhookBody) {
-    logger.info(`Received PayOS Webhook payload: ${JSON.stringify(webhookBody)}`);
+    // Log the order only: the payload carries the payer's bank details
+    logger.info(`Received PayOS webhook for order ${webhookBody?.data?.orderCode ?? 'unknown'}`);
 
     // Verify webhook signature
     const verifiedData = payosAdapter.verifyPaymentWebhookData(webhookBody);
@@ -776,7 +781,7 @@ class SubscriptionService {
     }
 
     if (!orderCode) {
-      throw new AppError('Dữ liệu webhook thiếu orderCode', 400, 'INVALID_WEBHOOK_PAYLOAD');
+      throw new AppError('Webhook payload has no orderCode', 400, 'INVALID_WEBHOOK_PAYLOAD');
     }
 
     const isSuccess =
@@ -807,7 +812,7 @@ class SubscriptionService {
   async verifyPayment(parentId, orderCode) {
     const payment = await paymentRepository.findByOrderCode(orderCode);
     if (!payment || String(payment.parentId) !== String(parentId)) {
-      throw new AppError('Không tìm thấy thông tin đơn hàng', 404, 'PAYMENT_NOT_FOUND');
+      throw new AppError('Payment not found', 404, 'PAYMENT_NOT_FOUND');
     }
 
     // FR-04: If already success, return current result; never downgrade success
@@ -896,11 +901,63 @@ class SubscriptionService {
 
 
   /**
+   * Settle orders still 'creating' / 'pending' after their payment link expired, asking PayOS for
+   * the final state. A webhook can be missed (server asleep or restarting, local development
+   * without a public URL): a PAID order is then fulfilled here instead of being marked expired.
+   * Orders PayOS cannot be asked about right now stay pending and are retried on the next run.
+   * @param {{ parentId?: string|mongoose.Types.ObjectId, now?: Date }} [options] - All parents when no parentId
+   * @returns {Promise<{ fulfilled: number, closed: number }>}
+   */
+  async reconcileStalePayments({ parentId, now = new Date() } = {}) {
+    const result = { fulfilled: 0, closed: 0 };
+    const stalePayments = await paymentRepository.findStaleUnpaid({ parentId, now });
+
+    const close = async (payment, status, failureReason) => {
+      const updated = await paymentRepository.updateNonSuccessStatus(payment.orderCode, { status, failureReason });
+      if (updated) result.closed += 1;
+    };
+
+    for (const payment of stalePayments) {
+      // Sandbox order left over after switching to live PayOS: PayOS never knew it
+      if (payment.paymentLinkId?.startsWith('mock_') && payosAdapter.isLive()) {
+        await close(payment, PAYMENT_STATUS.EXPIRED, 'Payment link expired');
+        continue;
+      }
+
+      try {
+        const payosInfo = await payosAdapter.getPaymentLinkInformation(payment.orderCode);
+        if (payosInfo?.status === 'PAID') {
+          const fulfillment = await this.fulfillPaymentSession(payment.orderCode, payosInfo);
+          if (fulfillment?.success) result.fulfilled += 1;
+        } else if (payosInfo?.status === 'CANCELLED') {
+          await close(payment, PAYMENT_STATUS.CANCELLED, 'Payment cancelled on PayOS');
+        } else {
+          // PENDING / EXPIRED past expiresAt: the link can no longer be paid
+          await close(payment, PAYMENT_STATUS.EXPIRED, 'Payment link expired');
+        }
+      } catch (error) {
+        if (error.statusCode === 404) {
+          await close(payment, PAYMENT_STATUS.EXPIRED, 'Payment link not found on PayOS');
+        } else {
+          logger.warn(`Could not reconcile stale order ${payment.orderCode} with PayOS: ${error.message}`);
+        }
+      }
+    }
+
+    if (result.fulfilled > 0) {
+      logger.info(`Reconciled ${result.fulfilled} paid order(s) whose webhook was missed`);
+    }
+    return result;
+  }
+
+  /**
    * Get paginated payment history for a parent
    * @param {string|mongoose.Types.ObjectId} parentId
    * @param {Object} queryOptions
    */
   async getPaymentHistory(parentId, { page = 1, limit = 10 } = {}) {
+    // Settle expired unpaid orders first: paid ones (webhook missed) are granted, others expire
+    await this.reconcileStalePayments({ parentId });
     const result = await paymentRepository.findHistoryByParentId(parentId, { page, limit });
     const formattedItems = result.items.map((item) => ({
       orderCode: item.orderCode,
@@ -921,8 +978,7 @@ class SubscriptionService {
   }
 
   /**
-   * Check if parent has reached child profiles limit
-   * Enforces 1 child profile limit for Free tier
+   * Check if parent has reached the child profiles limit of the Free plan (childProfilesLimit)
    * @param {string|mongoose.Types.ObjectId} parentId
    * @param {number} currentChildCount
    * @param {mongoose.ClientSession} [session]
@@ -935,10 +991,15 @@ class SubscriptionService {
       return { allowed: true, limit: -1, currentUsed: currentChildCount };
     }
 
-    const freeLimit = 1;
+    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
+    const freeLimit = freePlan?.features?.childProfilesLimit ?? 1;
+    if (freeLimit === -1) {
+      return { allowed: true, limit: -1, currentUsed: currentChildCount };
+    }
+
     if (currentChildCount >= freeLimit) {
       throw new AppError(
-        'Bạn đã tạo tối đa 1 hồ sơ bé trong gói Miễn phí. Nâng cấp Premium để tạo không giới hạn!',
+        `Child profile limit reached (${freeLimit}) on the Free plan. Upgrade to Premium for unlimited child profiles.`,
         403,
         'CHILD_QUOTA_EXCEEDED',
         {
@@ -956,60 +1017,58 @@ class SubscriptionService {
 
   /**
    * Atomically check and consume quota for bounded actions
-   * Supports 'discovery_swipes' and 'playdates_created'
    * @param {string|mongoose.Types.ObjectId} parentId
-   * @param {'discovery_swipes'|'playdates_created'} feature
-   * @param {boolean} consume
+   * @param {'discovery'|'connectionRequest'|'playdateCreate'|'playdateParticipate'|'aiAssistant'|string} actionType
+   *   A QUOTA_ACTIONS key, or its QUOTA_FEATURES name (e.g. 'discovery_swipes')
+   * @param {boolean} consume If true, increments the counter when allowed
    */
-  async checkAndConsumeQuota(parentId, feature, consume = true) {
-    const subscription = await this.getSubscriptionByParentId(parentId);
-    const isPremium = this.isSubscriptionActive(subscription);
-
-    let periodType;
-    let periodValue;
-    let counterField;
-    let limit;
-    let message;
-
-    if (feature === QUOTA_FEATURES.DISCOVERY_SWIPES || feature === 'discovery') {
-      periodType = QUOTA_PERIOD_TYPES.DAILY;
-      periodValue = getVietnamPeriodValue(QUOTA_PERIOD_TYPES.DAILY);
-      counterField = 'discoverySwipes';
-      limit = isPremium ? -1 : 5;
-      message = 'Bạn đã dùng hết 5 lượt quẹt hôm nay. Nâng cấp Premium để tiếp tục.';
-    } else if (feature === QUOTA_FEATURES.PLAYDATES_CREATED || feature === 'playdateCreate') {
-      periodType = QUOTA_PERIOD_TYPES.MONTHLY;
-      periodValue = getVietnamPeriodValue(QUOTA_PERIOD_TYPES.MONTHLY);
-      counterField = 'playdatesCreated';
-      limit = isPremium ? -1 : 3;
-      message = 'Bạn đã tạo tối đa 3 cuộc hẹn chơi trong tháng này. Nâng cấp Premium để tạo không giới hạn!';
-    } else {
-      throw new AppError(`Tính năng quota không xác định: ${feature}`, 400, 'INVALID_QUOTA_FEATURE');
+  async checkAndConsumeQuota(parentId, actionType, consume = true) {
+    const action = QUOTA_ACTIONS[QUOTA_ACTION_ALIASES[actionType] || actionType];
+    if (!action) {
+      throw new AppError(`Unknown quota action: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
     }
 
+    const subscription = await this.getSubscriptionByParentId(parentId);
+    const isPremium = this.isSubscriptionActive(subscription);
+    const { feature, periodType, counterField } = action;
+    const periodValue = getVietnamPeriodValue(periodType);
+
+    // Premium: unlimited, usage is still recorded for statistics
     if (isPremium) {
       if (consume) {
         await usageQuotaRepository.incrementCounter(parentId, periodType, periodValue, counterField, 1);
       }
-      return { allowed: true, limit: -1, currentUsed: 0 };
+      return { allowed: true, limit: -1, currentUsed: 0, remaining: -1 };
+    }
+
+    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
+    const limit = freePlan?.features?.[action.limitKey] ?? 0;
+    const quotaExceeded = (currentUsed) =>
+      new AppError(action.message(limit), 403, 'QUOTA_EXCEEDED', {
+        feature,
+        limit,
+        currentUsed,
+        periodType,
+        resetAt: getNextResetTime(periodType),
+      });
+
+    if (limit === -1) {
+      if (consume) {
+        await usageQuotaRepository.incrementCounter(parentId, periodType, periodValue, counterField, 1);
+      }
+      return { allowed: true, limit: -1, currentUsed: 0, remaining: -1 };
     }
 
     if (!consume) {
       const counters = await usageQuotaRepository.getCounters(parentId, periodType, periodValue);
       const used = counters[counterField] || 0;
       if (used >= limit) {
-        throw new AppError(message, 403, 'QUOTA_EXCEEDED', {
-          feature,
-          limit,
-          currentUsed: used,
-          periodType,
-          resetAt: getNextResetTime(periodType),
-        });
+        throw quotaExceeded(used);
       }
-      return { allowed: true, limit, currentUsed: used };
+      return { allowed: true, limit, currentUsed: used, remaining: Math.max(0, limit - used) };
     }
 
-    // Atomic check and consume
+    // Check and consume atomically so concurrent requests cannot exceed the limit
     const result = await usageQuotaRepository.atomicCheckAndConsume(
       parentId,
       periodType,
@@ -1017,24 +1076,15 @@ class SubscriptionService {
       counterField,
       limit
     );
-
     if (!result.allowed) {
-      throw new AppError(message, 403, 'QUOTA_EXCEEDED', {
-        feature,
-        limit,
-        currentUsed: result.currentUsed,
-        periodType,
-        resetAt: getNextResetTime(periodType),
-      });
+      throw quotaExceeded(result.currentUsed);
     }
-
-    const remaining = limit === -1 ? null : Math.max(0, limit - result.currentUsed);
 
     return {
       allowed: true,
       limit,
       currentUsed: result.currentUsed,
-      remaining,
+      remaining: Math.max(0, limit - result.currentUsed),
     };
   }
 
@@ -1043,7 +1093,7 @@ class SubscriptionService {
    * @param {string|mongoose.Types.ObjectId} parentId
    */
   async getQuotaSummary(parentId) {
-    const quotaData = await this.getMySubscriptionQuota(parentId, 0);
+    const quotaData = await this.getMySubscriptionQuota(parentId);
     return {
       planCode: quotaData.effectivePlanCode,
       isPremium: quotaData.isPremium,

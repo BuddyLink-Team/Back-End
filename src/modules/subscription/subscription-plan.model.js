@@ -39,10 +39,8 @@ const subscriptionPlanSchema = new mongoose.Schema(
     },
     features: {
       childProfilesLimit: { type: Number, default: 1 }, // -1 = unlimited
-      discoverySwipesLimitPerDay: { type: Number, default: 5 }, // -1 = unlimited
       discoveryViewLimitPerDay: { type: Number, default: 5 },
       connectionRequestsLimitPerMonth: { type: Number, default: 5 },
-      playdatesCreatedLimitPerMonth: { type: Number, default: 3 }, // -1 = unlimited
       playdatesLimitPerMonth: { type: Number, default: 3 },
       playdateParticipationLimitPerMonth: { type: Number, default: 3 },
       aiAssistantLimitPerMonth: { type: Number, default: 5 },

@@ -48,8 +48,8 @@ const rescheduleRequestSchema = new mongoose.Schema(
       address: { type: String },
       placeId: { type: String },
       coordinates: {
-        type: { type: String, enum: ['Point'], default: 'Point' },
-        coordinates: { type: [Number], default: [0, 0] },
+        type: { type: String, enum: ['Point'] },
+        coordinates: { type: [Number] },
       },
     },
     reason: {
@@ -75,7 +75,6 @@ const rescheduleRequestSchema = new mongoose.Schema(
 );
 
 rescheduleRequestSchema.index({ playdateId: 1, status: 1 });
-rescheduleRequestSchema.index({ requestedBy: 1 });
 
 const RescheduleRequest =
   mongoose.models.RescheduleRequest || mongoose.model('RescheduleRequest', rescheduleRequestSchema);

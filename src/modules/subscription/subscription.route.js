@@ -21,7 +21,7 @@ router.post('/webhook', subscriptionController.handleWebhook);
 
 // Parent authenticated routes
 router.use(authenticate);
-router.use(authorizeRoles(USER_ROLES.PARENT, 'PARENT', 'parent'));
+router.use(authorizeRoles(USER_ROLES.PARENT));
 
 // Get current parent subscription & usage quota
 router.get('/my', subscriptionController.getMySubscriptionQuota);

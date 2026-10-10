@@ -1,6 +1,5 @@
 import subscriptionService from './subscription.service.js';
 import parentService from '../parent/parent.service.js';
-import childService from '../child/child.service.js';
 import SubscriptionDTO from './subscription.dto.js';
 import { successResponse } from '../../shared/response/index.js';
 import AppError from '../../shared/exceptions/AppError.js';
@@ -21,7 +20,7 @@ class SubscriptionController {
   async _getParent(userId) {
     const parent = await parentService.getParentByUserId(userId);
     if (!parent) {
-      throw new AppError('Chưa tìm thấy hồ sơ phụ huynh', 404, 'PARENT_NOT_FOUND');
+      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
     return parent;
   }
@@ -36,7 +35,7 @@ class SubscriptionController {
       return successResponse(
         res,
         SubscriptionDTO.toPlanListResponse(plans),
-        'Lấy danh sách gói cước thành công',
+        'Subscription plans retrieved successfully',
         200
       );
     } catch (error) {
@@ -51,17 +50,12 @@ class SubscriptionController {
   async getMySubscriptionQuota(req, res, next) {
     try {
       const parent = await this._getParent(req.userId);
-      const childCount = await childService.countChildrenByParentId(parent._id);
-
-      const quotaData = await subscriptionService.getMySubscriptionQuota(
-        parent._id,
-        childCount
-      );
+      const quotaData = await subscriptionService.getMySubscriptionQuota(parent._id);
 
       return successResponse(
         res,
         quotaData,
-        'Lấy thông tin gói cước và hạn mức thành công',
+        'Subscription and quota retrieved successfully',
         200
       );
     } catch (error) {
@@ -93,7 +87,7 @@ class SubscriptionController {
       return successResponse(
         res,
         SubscriptionDTO.toCheckoutResponse(checkoutSession),
-        'Khởi tạo liên kết thanh toán PayOS thành công',
+        'Checkout session created successfully',
         statusCode
       );
     } catch (error) {
@@ -108,12 +102,7 @@ class SubscriptionController {
   async handleWebhook(req, res, next) {
     try {
       const result = await subscriptionService.handlePayOSWebhook(req.body);
-      return res.status(200).json({
-        success: true,
-        message: result.message || 'Webhook processed successfully',
-        data: result,
-        error: null,
-      });
+      return successResponse(res, result, result.message || 'Webhook processed successfully', 200);
     } catch (error) {
       return next(error);
     }
@@ -136,7 +125,7 @@ class SubscriptionController {
       return successResponse(
         res,
         paymentResult,
-        'Kiểm tra trạng thái thanh toán thành công',
+        'Payment status retrieved successfully',
         200
       );
     } catch (error) {
@@ -161,7 +150,7 @@ class SubscriptionController {
       return successResponse(
         res,
         historyData,
-        'Lấy lịch sử giao dịch thành công',
+        'Payment history retrieved successfully',
         200
       );
     } catch (error) {

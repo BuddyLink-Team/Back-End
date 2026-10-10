@@ -2,8 +2,8 @@ import axios from 'axios';
 import logger from '../../shared/logger/index.js';
 
 /**
- * Tọa độ tâm dự phòng của các tỉnh/thành phố lớn tại Việt Nam [lng, lat]
- * Chuẩn định dạng GeoJSON: [longitude, latitude]
+ * Fallback center coordinates of major Vietnamese provinces/cities.
+ * GeoJSON order: [longitude, latitude]. Keys are lower-case Vietnamese names matched against user input.
  */
 const DEFAULT_CITY_COORDINATES = {
   'hồ chí minh': [106.6297, 10.8231],
@@ -27,11 +27,11 @@ const DEFAULT_CITY_COORDINATES = {
 
 class GeocodingAdapter {
   /**
-   * Lấy tọa độ [lng, lat] từ tên Phường/Xã và Tỉnh/Thành phố
-   * Sử dụng OpenStreetMap Nominatim API (Hoàn toàn miễn phí, không yêu cầu thẻ tín dụng/API Key)
+   * Resolve [lng, lat] from a ward/district and a province/city name.
+   * Uses the OpenStreetMap Nominatim API (free, no API key or billing required).
    *
-   * @param {string} area - Phường/Xã
-   * @param {string} city - Tỉnh/Thành phố
+   * @param {string} area - Ward / district
+   * @param {string} city - Province / city
    * @returns {Promise<[number, number]>} [longitude, latitude]
    */
   async getCoordinatesByAddress(area, city) {
@@ -44,7 +44,7 @@ class GeocodingAdapter {
     }
 
     try {
-      logger.info(`[Geocoding] Đang truy vấn tọa độ cho: "${query}" qua OpenStreetMap Nominatim...`);
+      logger.info(`[Geocoding] Querying OpenStreetMap Nominatim for "${query}"`);
 
       const response = await axios.get('https://nominatim.openstreetmap.org/search', {
         params: {
@@ -67,16 +67,16 @@ class GeocodingAdapter {
 
         if (!isNaN(lat) && !isNaN(lon)) {
           logger.info(
-            `[Geocoding Success] "${query}" -> [lng: ${lon}, lat: ${lat}] (Địa chỉ nhận diện: ${item.display_name})`
+            `[Geocoding Success] "${query}" -> [lng: ${lon}, lat: ${lat}] (matched: ${item.display_name})`
           );
           return [lon, lat];
         }
       }
 
-      logger.warn(`[Geocoding Warn] Không tìm thấy kết quả từ OSM cho "${query}", sử dụng fallback.`);
+      logger.warn(`[Geocoding Warn] No OSM result for "${query}", using fallback coordinates`);
     } catch (error) {
       logger.warn(
-        `[Geocoding Warn] Lỗi khi gọi OpenStreetMap API: ${error.message}. Chuyển sang dùng tọa độ dự phòng.`
+        `[Geocoding Warn] OpenStreetMap request failed: ${error.message}. Using fallback coordinates`
       );
     }
 
@@ -91,6 +91,62 @@ class GeocodingAdapter {
 
     // Default to Ho Chi Minh City coordinates if no match is found
     return [106.6297, 10.8231];
+  }
+
+  /**
+   * Readable address of a point with OpenStreetMap Nominatim reverse geocoding.
+   * Used once per place (the result is cached), so the 1 request/second policy is respected.
+   *
+   * @param {number} lng
+   * @param {number} lat
+   * @returns {Promise<string>} '' when nothing is found or the request fails
+   */
+  async reverseGeocode(lng, lat) {
+    try {
+      const response = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+        params: { lat, lon: lng, format: 'json', zoom: 18, addressdetails: 1 },
+        headers: {
+          'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
+          'Accept-Language': 'vi',
+        },
+        timeout: 6000,
+      });
+      const address = response.data?.address || {};
+      const street = [address.house_number, address.road].filter(Boolean).join(' ');
+      const parts = [
+        street,
+        address.quarter || address.suburb || address.neighbourhood,
+        address.city_district,
+        address.city || address.town || address.state,
+      ].filter(Boolean);
+      return [...new Set(parts)].join(', ') || response.data?.display_name || '';
+    } catch (error) {
+      logger.warn(`[Geocoding Warn] Reverse geocoding failed for [${lng}, ${lat}]: ${error.message}`);
+      return '';
+    }
+  }
+
+  /**
+   * Bounding box of a place name in Vietnam with OpenStreetMap Nominatim (places sync --city)
+   *
+   * @param {string} name - city / district / province, e.g. "Huế", "Quận 7, TP. Hồ Chí Minh"
+   * @returns {Promise<{ label: string, bbox: [number, number, number, number] }|null>}
+   *   bbox is [south, west, north, east], null when nothing is found
+   */
+  async getBoundingBox(name) {
+    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { q: name, format: 'json', limit: 1, countrycodes: 'vn' },
+      headers: {
+        'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
+        'Accept-Language': 'vi',
+      },
+      timeout: 10000,
+    });
+    const item = response.data?.[0];
+    // Nominatim order: [south, north, west, east]
+    const [south, north, west, east] = (item?.boundingbox || []).map(Number);
+    if (![south, north, west, east].every(Number.isFinite)) return null;
+    return { label: item.display_name, bbox: [south, west, north, east] };
   }
 }
 

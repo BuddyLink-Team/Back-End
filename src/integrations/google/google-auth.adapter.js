@@ -13,7 +13,7 @@ class GoogleAuthAdapter {
       throw new AppError('Google ID token is required', 400, 'INVALID_GOOGLE_TOKEN');
     }
 
-    // Support mock idToken for integration testing: "mock-google-token:<email>:<name>"
+    // Support mock idToken for integration testing: "mock-google-token:<email>:<name>[:unverified]"
     if (process.env.NODE_ENV === 'test' && idToken.startsWith('mock-google-token:')) {
       const parts = idToken.split(':');
       const email = parts[1] || 'googleuser@test.com';
@@ -24,7 +24,7 @@ class GoogleAuthAdapter {
         email,
         name,
         picture: 'https://lh3.googleusercontent.com/a/default-user',
-        email_verified: true,
+        email_verified: parts[3] !== 'unverified',
       });
     }
 
