@@ -8,6 +8,7 @@ const subscriptionPlanSchema = new mongoose.Schema(
       enum: Object.values(SUBSCRIPTION_PLAN_CODES),
       required: true,
       unique: true,
+      trim: true,
     },
     name: {
       type: String,
@@ -18,10 +19,18 @@ const subscriptionPlanSchema = new mongoose.Schema(
       type: Number,
       required: true,
       default: 0,
+      min: 0,
     },
     currency: {
       type: String,
       default: 'VND',
+      trim: true,
+    },
+    durationMonths: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
     },
     billingCycle: {
       type: String,
@@ -48,6 +57,7 @@ const subscriptionPlanSchema = new mongoose.Schema(
 );
 
 const SubscriptionPlan =
-  mongoose.models.SubscriptionPlan || mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
+  mongoose.models.SubscriptionPlan ||
+  mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
 
 export default SubscriptionPlan;

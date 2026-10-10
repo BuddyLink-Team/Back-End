@@ -14,7 +14,7 @@ class RatingFeedbackController {
   async createRating(req, res, next) {
     try {
       const rating = await createRating(req.userId, req.params.id, req.body);
-      return successResponse(res, rating, 'Đã gửi đánh giá.', 201);
+      return successResponse(res, rating, 'Rating submitted successfully', 201);
     } catch (error) {
       return next(error);
     }

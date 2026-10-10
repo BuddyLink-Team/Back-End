@@ -42,6 +42,7 @@ import Report from '../src/modules/safety/report.model.js';
 import Subscription from '../src/modules/subscription/subscription.model.js';
 import Payment from '../src/modules/subscription/payment.model.js';
 import UsageQuota from '../src/modules/subscription/usage-quota.model.js';
+import { SUBSCRIPTION_PLAN_DEFAULTS } from '../src/modules/subscription/subscription.constants.js';
 import AIChatSession from '../src/modules/ai-assistant/ai-assistant.model.js';
 
 export const SEED_PASSWORD = '123456';
@@ -376,50 +377,59 @@ export async function seedDatabase({ log = console.log } = {}) {
   const userOf = (parent) => users[parents.indexOf(parent)];
 
   // ---- Subscriptions & payments (10 premium families) -------------------------
+  // One subscription document per parent (Free until a PayOS payment upgrades it)
   const premiumParents = parents.slice(0, 10);
   const subscriptions = [];
   const payments = [];
+  let nextOrderCode = 100001;
+  const planSnapshot = (planCode) => {
+    const { name, price, currency, durationMonths } = SUBSCRIPTION_PLAN_DEFAULTS.find((p) => p.planCode === planCode);
+    return { planCode, name, price, currency, durationMonths };
+  };
+  const payosPayment = (parent, planCode, status, createdAt) => ({
+    parentId: parent._id,
+    orderCode: nextOrderCode++,
+    planSnapshot: planSnapshot(planCode),
+    amount: planSnapshot(planCode).price,
+    paymentMethod: 'payos',
+    status,
+    createdAt,
+    // PayOS links stay payable for 15 minutes
+    expiresAt: new Date(createdAt.getTime() + 15 * 60 * 1000),
+  });
   for (const parent of parents) {
     const isPremium = premiumParents.includes(parent);
     if (!isPremium) {
-      subscriptions.push({ parentId: parent._id, planCode: 'free', status: 'active', startDate: parent.createdAt, endDate: null, autoRenew: false });
+      subscriptions.push({ parentId: parent._id, planCode: 'free', status: 'active', startDate: parent.createdAt, endDate: null });
       continue;
     }
     const yearly = premiumParents.indexOf(parent) < 3;
+    const planCode = yearly ? 'premium_yearly' : 'premium_monthly';
     const startDate = daysAgo(yearly ? int(40, 120) : int(3, 25), int(8, 21));
     const endDate = new Date(startDate.getTime() + (yearly ? 365 : 30) * DAY);
-    // Premium families first used the Free plan
-    subscriptions.push({ parentId: parent._id, planCode: 'free', status: 'expired', startDate: parent.createdAt, endDate: startDate, autoRenew: false });
     subscriptions.push({
       parentId: parent._id,
-      planCode: yearly ? 'premium_yearly' : 'premium_monthly',
+      planCode,
       status: 'active',
       startDate,
       endDate,
-      autoRenew: !yearly,
+      calendarAnchorAt: startDate,
+      purchasedMonths: yearly ? 12 : 1,
     });
     payments.push({
-      parentId: parent._id,
-      amount: yearly ? 990000 : 99000,
-      paymentMethod: pick(['payos', 'payos', 'momo', 'vnpay']),
-      status: 'success',
+      ...payosPayment(parent, planCode, 'success', startDate),
       paidAt: startDate,
-      createdAt: startDate,
+      fulfilledAt: startDate,
+      transactionId: `PAYOS${startDate.getTime().toString().slice(-9)}${int(100, 999)}`,
+      grantResult: { effectiveStartDate: startDate, effectiveEndDate: endDate, monthsGranted: yearly ? 12 : 1 },
     });
   }
-  // A failed attempt and a cancelled monthly plan for realism
-  payments.push({ parentId: parents[12]._id, amount: 99000, paymentMethod: 'payos', status: 'failed', paidAt: null, createdAt: daysAgo(6, 21, 14) });
-  payments.push({ parentId: parents[15]._id, amount: 99000, paymentMethod: 'momo', status: 'pending', paidAt: null, createdAt: daysAgo(0, 8, 40) });
+  // A failed attempt and a checkout still waiting for payment, for realism
+  payments.push(payosPayment(parents[12], 'premium_monthly', 'failed', daysAgo(6, 21, 14)));
+  payments.push(payosPayment(parents[15], 'premium_monthly', 'pending', new Date(Date.now() - 5 * 60 * 1000)));
   const insertedSubscriptions = await Subscription.insertMany(subscriptions);
-  const subscriptionFor = (parentId) =>
-    insertedSubscriptions.find((s) => s.parentId.equals(parentId) && s.status === 'active');
-  await Payment.insertMany(
-    payments.map((p) => ({
-      ...p,
-      subscriptionId: subscriptionFor(p.parentId)._id,
-      transactionId: `PAYOS${p.createdAt.getTime().toString().slice(-9)}${int(100, 999)}`,
-    })),
-  );
+  const subscriptionFor = (parentId) => insertedSubscriptions.find((s) => s.parentId.equals(parentId));
+  await Payment.insertMany(payments.map((p) => ({ ...p, subscriptionId: subscriptionFor(p.parentId)._id })));
 
   // ---- Children (Free plan: 1 child, Premium: 1-2) -----------------------------
   const childDocs = [];

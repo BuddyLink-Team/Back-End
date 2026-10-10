@@ -33,10 +33,16 @@ const env = {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   },
 
+  // 'mock' lets development run checkouts without PayOS keys (never honored in production)
+  PAYMENT_MODE: process.env.PAYMENT_MODE || 'live',
+
   PAYOS: {
     CLIENT_ID: process.env.PAYOS_CLIENT_ID || '',
     API_KEY: process.env.PAYOS_API_KEY || '',
-    CHECKSUM_KEY: process.env.PAYOS_CHECKSUM_KEY || '',
+    // A fixed key is only used by the test suite (it signs its own webhooks)
+    CHECKSUM_KEY:
+      process.env.PAYOS_CHECKSUM_KEY ||
+      (process.env.NODE_ENV === 'test' ? 'test_payos_checksum_key_for_dev_and_test' : ''),
     RETURN_URL: process.env.PAYOS_RETURN_URL || 'http://localhost:5173/payment/success',
     CANCEL_URL: process.env.PAYOS_CANCEL_URL || 'http://localhost:5173/payment/cancel',
   },

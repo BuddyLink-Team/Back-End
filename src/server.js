@@ -36,6 +36,10 @@ const startServer = async () => {
 
     // 4. Expire past-due paid plans now, then keep doing it on a schedule
     await subscriptionService.expireDueSubscriptions();
+    // Orders paid while the server was down (webhook missed): asks PayOS, never delays startup
+    subscriptionService
+      .reconcileStalePayments()
+      .catch((error) => logger.error(`Stale payment reconciliation failed: ${error.message}`));
     startSubscriptionExpiryJob();
 
     // Close the playdates of past days now (in case the server was down at midnight), then daily at 00:00

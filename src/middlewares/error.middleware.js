@@ -33,7 +33,8 @@ export const errorHandler = (error, _req, res, _next) => {
   let code = isSafe && typeof error.code === "string"
     ? error.code
     : statusCode < 500 ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR";
-  let details = isSafe && Array.isArray(error.details) ? error.details : [];
+  // Details may be an object (e.g. QUOTA_EXCEEDED: { feature, limit, resetAt } read by the paywall)
+  let details = isSafe && error.details !== undefined && error.details !== null ? error.details : [];
 
   // Unknown errors (programming bugs, DB/network failures) never leak their message or details
   if (!isSafe) {

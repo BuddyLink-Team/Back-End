@@ -7,7 +7,8 @@ import subscriptionService from '../modules/subscription/subscription.service.js
 const SCHEDULE = '5 * * * *';
 
 /**
- * Periodically expire paid subscriptions past their end date and downgrade them to Free.
+ * Periodically expire paid subscriptions past their end date and downgrade them to Free,
+ * then settle expired unpaid PayOS orders (reconciled with PayOS).
  * (Reads also expire lazily in subscriptionService.getActiveSubscriptionByParentId; this job keeps
  * stored statuses accurate for admin statistics and parents who are not active.)
  * @returns {import('node-cron').ScheduledTask}
@@ -18,6 +19,8 @@ export const startSubscriptionExpiryJob = () =>
     async () => {
       try {
         await subscriptionService.expireDueSubscriptions();
+        // Orders paid while a PayOS webhook was missed are granted here even if the parent never comes back
+        await subscriptionService.reconcileStalePayments();
       } catch (error) {
         logger.error(`[SubscriptionExpiryJob] Failed: ${error.message}`);
       }

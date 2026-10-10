@@ -6,7 +6,7 @@ import { ensureRatingEligibility } from './rating-feedback.rules.js';
 
 async function getParent(userId) {
   const parent = await parentService.getParentByUserId(userId);
-  if (!parent) throw new AppError('Không tìm thấy hồ sơ phụ huynh.', 404, 'PARENT_NOT_FOUND');
+  if (!parent) throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
   return parent;
 }
 
@@ -18,7 +18,7 @@ export async function createRating(userId, playdateId, { rating, feedback = '' }
   try {
     result = await ratingFeedbackRepository.create({ playdateId, parentId: parent._id, rating, feedback });
   } catch (error) {
-    if (error.code === 11000) throw new AppError('Bạn đã đánh giá Playdate này.', 409, 'RATING_ALREADY_EXISTS');
+    if (error.code === 11000) throw new AppError('You have already rated this playdate', 409, 'RATING_ALREADY_EXISTS');
     throw error;
   }
   return result;

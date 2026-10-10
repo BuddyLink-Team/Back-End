@@ -513,7 +513,7 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(res.status).toBe(403);
       expect(res.body.success).toBe(false);
       expect(res.body.error.code).toBe('QUOTA_EXCEEDED');
-      expect(res.body.error.details[0].message).toBe('discovery');
+      expect(res.body.error.details.feature).toBe('discovery_swipes');
     });
   });
 
@@ -582,7 +582,7 @@ describe('Discovery & Smart Matching Integration Flow', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe('QUOTA_EXCEEDED');
-      expect(res.body.error.details[0].message).toBe('connectionRequest');
+      expect(res.body.error.details.feature).toBe('connection_requests');
       expect(await getRemainingViews(liker.token)).toBe(5);
     });
 

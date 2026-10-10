@@ -404,7 +404,7 @@ erDiagram
 ```mermaid
 erDiagram
     SUBSCRIPTION_PLANS ||--o{ SUBSCRIPTIONS : "plan blueprint (planCode)"
-    PARENTS ||--o{ SUBSCRIPTIONS : "subscribes (1:N)"
+    PARENTS ||--|| SUBSCRIPTIONS : "subscribes (1:1)"
     SUBSCRIPTIONS ||--o{ PAYMENTS : "invoices (1:N)"
     PARENTS ||--o{ PAYMENTS : "payer (parentId)"
     PARENTS ||--o{ USAGE_QUOTAS : "tracks usage (1:N)"
@@ -415,6 +415,7 @@ erDiagram
         string name "Tên gói hiển thị"
         int price "0 hoặc số tiền VNĐ"
         string currency "VND"
+        int durationMonths "0 (Free) | 1 | 12"
         string billingCycle "monthly | yearly | none"
         object features "childProfilesLimit, discoveryViewLimitPerDay, connectionRequestsLimitPerMonth..."
         boolean isActive
@@ -422,13 +423,14 @@ erDiagram
 
     SUBSCRIPTIONS {
         ObjectId _id PK
-        ObjectId parentId FK "Ref: parents._id"
+        ObjectId parentId FK,UK "Ref: parents._id (1 document / parent)"
         string planCode FK "Ref: subscription_plans.planCode"
-        string status "active | cancelled | expired"
+        string status "active | expired"
         date startDate
         date endDate "null nếu gói Free"
-        boolean autoRenew
-        date cancelledAt
+        date calendarAnchorAt "Mốc tính tháng của chuỗi gia hạn liên tục"
+        int purchasedMonths "Tổng số tháng đã mua liên tục"
+        ObjectId lastPaymentId FK "Ref: payments._id"
         date createdAt
         date updatedAt
     }
@@ -437,12 +439,18 @@ erDiagram
         ObjectId _id PK
         ObjectId subscriptionId FK "Ref: subscriptions._id"
         ObjectId parentId FK "Ref: parents._id"
+        int orderCode UK "Mã đơn PayOS"
+        string idempotencyKey "Unique theo parentId"
+        object planSnapshot "planCode, name, price, currency, durationMonths"
         int amount "Số tiền giao dịch"
         string currency "VND"
-        string paymentMethod "momo | vnpay | zalopay | credit_card"
-        string transactionId UK "Unique mã giao dịch từ cổng thanh toán"
-        string status "pending | success | failed"
+        string paymentMethod "payos"
+        string status "creating | pending | success | failed | cancelled | expired"
+        string paymentLinkId UK "PayOS payment link"
+        string transactionId "Mã giao dịch ngân hàng"
+        date expiresAt "Link thanh toán hết hạn sau 15 phút"
         date paidAt
+        date fulfilledAt
         date createdAt
     }
 
@@ -450,8 +458,8 @@ erDiagram
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
         string periodType "daily | monthly"
-        string periodValue "YYYY-MM-DD (daily) hoặc YYYY-MM (monthly)"
-        object counters "discoveryViews (daily) | connectionRequests, playdatesCreated, aiAssistant (monthly)"
+        string periodValue "YYYY-MM-DD (daily) hoặc YYYY-MM (monthly), giờ Việt Nam"
+        object counters "discoveryViews (daily) | connectionRequests, playdatesCreated, playdatesParticipated, aiAssistantRequests (monthly)"
         date updatedAt
     }
 ```
@@ -1125,15 +1133,17 @@ _Indexes:_
 interface ISubscriptionPlan {
   _id: ObjectId;
   planCode: "free" | "premium_monthly" | "premium_yearly";
-  name: string; // "Gói Miễn Phí", "Gói Premium Hàng Tháng", "Gói Premium Hàng Năm"
-  price: number; // 0 VNĐ hoặc giá theo tháng/năm
+  name: string; // "Gói Miễn Phí (Free)", "Gói Cao Cấp 1 Tháng", "Gói Cao Cấp 1 Năm"
+  price: number; // 0 VNĐ hoặc giá của cả gói (99.000 / 990.000)
   currency: "VND";
+  durationMonths: number; // Free: 0, Monthly: 1, Yearly: 12 (số tháng được cộng khi mua)
   billingCycle: "monthly" | "yearly" | "none";
   features: {
     childProfilesLimit: number; // Free: 1, Premium: -1 (unlimited)
     discoveryViewLimitPerDay: number; // Free: 5, Premium: -1
     connectionRequestsLimitPerMonth: number; // Free: 5, Premium: -1
-    playdatesLimitPerMonth: number; // Free: 3, Premium: -1
+    playdatesLimitPerMonth: number; // Free: 3, Premium: -1 (tạo Playdate)
+    playdateParticipationLimitPerMonth: number; // Free: 3, Premium: -1 (tham gia Playdate)
     aiAssistantLimitPerMonth: number; // Free: 5, Premium: -1
   };
   isActive: boolean; // Default: true
@@ -1144,18 +1154,23 @@ _Indexes:_
 
 - `{ planCode: 1 }` (unique)
 
+> Gói mặc định được seed khi server khởi động, chỉ tạo gói còn thiếu (không ghi đè giá đã cấu hình).
+
 #### B. `subscriptions` Collection (Mục 14.2)
+
+Mô hình **trả trước từng lần** qua PayOS (payOS không hỗ trợ trừ tiền định kỳ): mỗi phụ huynh có đúng 1 document. Mua Premium khi gói còn hạn thì cộng dồn tháng theo lịch (giữ `calendarAnchorAt`), khi đã hết hạn thì tính lại từ lúc thanh toán. Gói trả phí quá `endDate` được đưa về Free (job hết hạn hoặc ngay khi đọc).
 
 ```typescript
 interface ISubscription {
   _id: ObjectId;
-  parentId: ObjectId; // Tham chiếu parents._id
-  planCode: "free" | "premium_monthly" | "premium_yearly";
-  status: "active" | "cancelled" | "expired";
+  parentId: ObjectId; // Tham chiếu parents._id (unique)
+  planCode: "free" | "premium_monthly" | "premium_yearly"; // Default: "free"
+  status: "active" | "expired";
   startDate: Date;
   endDate?: Date; // null nếu là gói Free
-  autoRenew: boolean; // Default: true
-  cancelledAt?: Date;
+  calendarAnchorAt?: Date; // Mốc tính tháng của chuỗi Premium liên tục, null với Free
+  purchasedMonths: number; // Tổng số tháng đã mua trong chuỗi liên tục, Default: 0
+  lastPaymentId?: ObjectId; // Tham chiếu payments._id của lần thanh toán gần nhất
   createdAt: Date;
   updatedAt: Date;
 }
@@ -1163,29 +1178,55 @@ interface ISubscription {
 
 _Indexes:_
 
-- `{ parentId: 1, status: 1 }` (Kiểm tra gói dịch vụ hiện tại của phụ huynh)
+- `{ parentId: 1 }` (unique)
+- `{ parentId: 1, status: 1 }`
 
 #### C. `payments` Collection (Mục 14.2 & 15.6)
+
+Payment được lưu **trước** khi gọi PayOS (`status: creating`), rồi chuyển `pending` khi có link. Webhook và API verify cùng gọi một bước fulfill idempotent (không bao giờ hạ một payment `success`).
 
 ```typescript
 interface IPayment {
   _id: ObjectId;
-  subscriptionId: ObjectId; // Tham chiếu subscriptions._id
   parentId: ObjectId; // Tham chiếu parents._id
+  subscriptionId?: ObjectId; // Tham chiếu subscriptions._id (gán khi thanh toán thành công)
+  orderCode: number; // Mã đơn gửi PayOS
+  idempotencyKey?: string; // Header Idempotency-Key của request checkout
+  fingerprint?: string;
+  planSnapshot: {
+    planCode: "premium_monthly" | "premium_yearly";
+    name: string;
+    price: number;
+    currency: "VND";
+    durationMonths: number;
+  };
   amount: number; // Số tiền thanh toán (VNĐ)
   currency: "VND";
-  paymentMethod: "vnpay" | "momo" | "zalopay" | "credit_card";
-  transactionId: string; // Mã giao dịch do cổng thanh toán trả về
-  status: "pending" | "success" | "failed";
+  paymentMethod: "payos";
+  status: "creating" | "pending" | "success" | "failed" | "cancelled" | "expired";
+  paymentLinkId?: string; // ID link thanh toán PayOS
+  checkoutUrl?: string;
+  qrCode?: string; // Chuỗi VietQR
+  transactionId?: string; // Mã tham chiếu giao dịch ngân hàng
+  bankInfo?: { bin: string; accountNumber: string; accountName: string; description: string };
+  expiresAt: Date; // Link hết hạn sau 15 phút
   paidAt?: Date;
+  fulfilledAt?: Date; // Thời điểm đã cộng tháng vào subscription
+  lastReconciledAt?: Date; // Lần đối soát gần nhất với PayOS (tối đa 1 lần / 10 giây)
+  failureReason?: string;
+  grantResult?: { effectiveStartDate: Date; effectiveEndDate: Date; monthsGranted: number };
+  rawWebhookData?: object;
   createdAt: Date;
+  updatedAt: Date;
 }
 ```
 
 _Indexes:_
 
-- `{ transactionId: 1 }` (unique)
-- `{ parentId: 1, createdAt: -1 }` (Lịch sử thanh toán của phụ huynh)
+- `{ orderCode: 1 }` (unique)
+- `{ parentId: 1, idempotencyKey: 1 }` (unique khi có idempotencyKey)
+- `{ paymentLinkId: 1 }` (unique khi có paymentLinkId)
+- `{ parentId: 1, createdAt: -1, _id: -1 }` (Lịch sử thanh toán của phụ huynh)
 
 #### D. `usage_quotas` Collection (Mục 14.1 Feature Quota Limiting)
 
@@ -1196,7 +1237,7 @@ interface IUsageQuota {
   _id: ObjectId;
   parentId: ObjectId; // Tham chiếu parents._id
   periodType: "daily" | "monthly";
-  periodValue: string; // 'YYYY-MM-DD' (nếu daily) hoặc 'YYYY-MM' (nếu monthly)
+  periodValue: string; // 'YYYY-MM-DD' (nếu daily) hoặc 'YYYY-MM' (nếu monthly), theo giờ Việt Nam (APP_TIMEZONE)
 
   counters: {
     // Chỉ dùng khi periodType === 'daily':
@@ -1205,7 +1246,7 @@ interface IUsageQuota {
     // Chỉ dùng khi periodType === 'monthly':
     connectionRequests?: number; // Free: tối đa 5 requests/tháng
     playdatesCreated?: number; // Free: tối đa 3 playdates/tháng
-    playdatesJoined?: number; // Free: tối đa 3 playdates/tháng
+    playdatesParticipated?: number; // Free: tối đa 3 playdates/tháng
     aiAssistantRequests?: number; // Free: tối đa 5 requests/tháng
   };
 

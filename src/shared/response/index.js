@@ -24,7 +24,7 @@ export const errorResponse = (
     data: null,
     error: {
       code: error?.code || "INTERNAL_SERVER_ERROR",
-      details: Array.isArray(error?.details) ? error.details : [],
+      details: error?.details !== undefined && error?.details !== null ? error.details : [],
     },
   });
 };

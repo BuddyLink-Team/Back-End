@@ -38,7 +38,7 @@ class GamificationService {
     );
     // The repository keeps the best recorded streak when historical records change
     const parent = await parentService.updateStreak(parentId, current, longestStreak);
-    if (!parent) throw new AppError('Không tìm thấy hồ sơ phụ huynh.', 404, 'PARENT_NOT_FOUND');
+    if (!parent) throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
 
     const metrics = buildMetrics({
       parentId,
@@ -86,7 +86,7 @@ class GamificationService {
    */
   async getMyAchievements(userId) {
     const parent = await parentService.getParentByUserId(userId);
-    if (!parent) throw new AppError('Không tìm thấy hồ sơ phụ huynh.', 404, 'PARENT_NOT_FOUND');
+    if (!parent) throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     return this.syncParentAchievements(parent._id);
   }
 

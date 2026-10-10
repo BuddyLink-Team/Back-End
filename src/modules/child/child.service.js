@@ -3,6 +3,7 @@ import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
+import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import { ChildResponseDTO, ChildPublicProfileDTO } from './child.dto.js';
 import { CHILD_EDITABLE_FIELDS } from './child.constants.js';
 
@@ -35,15 +36,38 @@ class ChildService {
   async createChild(userId, childData) {
     const parentId = await this._getParentId(userId);
 
-    // Enforce subscription quota on child profiles count
-    await subscriptionService.checkChildProfileQuota(parentId);
+    const session = await startTransactionIfSupported();
 
-    const child = await childRepository.create({
-      ...pickEditableFields(childData),
-      parentId,
-    });
+    try {
+      // Enforce subscription quota on child profiles count
+      const currentCount = await childRepository.countByParentId(parentId, session);
+      await subscriptionService.checkChildProfileQuota(parentId, currentCount, session);
 
-    return ChildResponseDTO.toResponse(child);
+      const child = await childRepository.create(
+        {
+          ...pickEditableFields(childData),
+          parentId,
+        },
+        session
+      );
+
+      if (session) {
+        await session.commitTransaction();
+        session.endSession();
+      }
+
+      return ChildResponseDTO.toResponse(child);
+    } catch (err) {
+      if (session) {
+        try {
+          await session.abortTransaction();
+        } catch {
+          // Already aborted: nothing left to roll back
+        }
+        session.endSession();
+      }
+      throw err;
+    }
   }
 
   /**

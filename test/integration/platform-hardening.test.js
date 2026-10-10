@@ -83,32 +83,34 @@ describe('Subscription quota', () => {
 
   it('should expire past-due premium plans and fall back to Free', async () => {
     const { parentId } = await register('expiry');
-    await Subscription.updateMany({ parentId }, { $set: { status: 'cancelled' } });
-    await Subscription.create({
-      parentId,
-      planCode: 'premium_monthly',
-      status: 'active',
-      startDate: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
-      endDate: new Date(Date.now() - 60 * 1000),
-    });
+    // One subscription document per parent: turn it into a premium plan that ended a minute ago
+    await Subscription.updateOne(
+      { parentId },
+      {
+        $set: {
+          planCode: 'premium_monthly',
+          status: 'active',
+          startDate: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+          endDate: new Date(Date.now() - 60 * 1000),
+        },
+      },
+    );
 
     // Lazy expiry on read, before the scheduled job runs
     const active = await subscriptionService.getActiveSubscriptionByParentId(parentId);
     expect(active.planCode).toBe('free');
 
-    const premium = await Subscription.findOne({ parentId, planCode: 'premium_monthly' }).lean();
-    expect(premium.status).toBe('expired');
+    const stored = await Subscription.findOne({ parentId }).lean();
+    expect(stored.planCode).toBe('free');
+    expect(stored.endDate).toBeNull();
   });
 
   it('expireDueSubscriptions should downgrade every past-due plan', async () => {
     const { parentId } = await register('expiry-job');
-    await Subscription.updateMany({ parentId }, { $set: { status: 'cancelled' } });
-    await Subscription.create({
-      parentId,
-      planCode: 'premium_yearly',
-      status: 'active',
-      endDate: new Date(Date.now() - 1000),
-    });
+    await Subscription.updateOne(
+      { parentId },
+      { $set: { planCode: 'premium_yearly', status: 'active', endDate: new Date(Date.now() - 1000) } },
+    );
 
     const count = await subscriptionService.expireDueSubscriptions();
     expect(count).toBeGreaterThanOrEqual(1);

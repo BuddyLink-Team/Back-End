@@ -4,7 +4,11 @@ import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 
 class ChildRepository {
-  async create(childData) {
+  async create(childData, session = null) {
+    if (session) {
+      const created = await Child.create([childData], { session });
+      return created[0];
+    }
     return Child.create(childData);
   }
 
@@ -55,28 +59,36 @@ class ChildRepository {
     return Child.find(query).lean();
   }
 
-  async findByParentId(parentId) {
-    return Child.find({ parentId, isArchived: false }).sort({ createdAt: -1 });
+  async findByParentId(parentId, session = null) {
+    const query = Child.find({ parentId, isArchived: false }).sort({ createdAt: -1 });
+    if (session) query.session(session);
+    return query;
   }
 
-  async updateById(id, parentId, updateData) {
+  async updateById(id, parentId, updateData, session = null) {
+    const options = { new: true };
+    if (session) options.session = session;
     return Child.findOneAndUpdate(
       { _id: id, parentId, isArchived: false },
       { $set: updateData },
-      { new: true, runValidators: true }
+      { ...options, runValidators: true }
     );
   }
 
-  async softDeleteById(id, parentId) {
+  async softDeleteById(id, parentId, session = null) {
+    const options = { new: true };
+    if (session) options.session = session;
     return Child.findOneAndUpdate(
       { _id: id, parentId, isArchived: false },
       { $set: { isArchived: true } },
-      { new: true }
+      options
     );
   }
 
-  async countByParentId(parentId) {
-    return Child.countDocuments({ parentId, isArchived: false });
+  async countByParentId(parentId, session = null) {
+    const query = Child.countDocuments({ parentId, isArchived: false });
+    if (session) query.session(session);
+    return query;
   }
 
   /**
@@ -93,3 +105,4 @@ class ChildRepository {
 }
 
 export default new ChildRepository();
+
