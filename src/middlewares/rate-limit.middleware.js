@@ -1,22 +1,25 @@
 import rateLimit from 'express-rate-limit';
 import { OTP_RATE_LIMIT } from '../modules/auth/auth.constants.js';
+import { errorResponse } from '../shared/response/index.js';
 
-const buildLimiter = ({ windowMs, max, message }) =>
+export const buildLimiter = ({ windowMs, max, message, skip }) =>
   rateLimit({
     windowMs,
     max,
     standardHeaders: true,
     legacyHeaders: false,
-    message: {
-      success: false,
-      message,
-      data: null,
-      error: {
-        code: 'TOO_MANY_REQUESTS',
-        details: [],
-      },
-    },
+    ...(skip ? { skip } : {}),
+    handler: (req, res, next, options) =>
+      errorResponse(res, message, options.statusCode, { code: 'TOO_MANY_REQUESTS', details: [] }),
   });
+
+// Whole API (payment verification is polled by the client, so it is not counted)
+export const apiLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  message: 'Too many requests, please try again later.',
+  skip: (req) => req.originalUrl?.includes('/subscriptions/payments/verify/'),
+});
 
 // Endpoints that send a one-time code (SMS/email cost + spam to the recipient)
 export const otpSendLimiter = buildLimiter({

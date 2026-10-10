@@ -4,6 +4,8 @@ import Playdate from './playdate.model.js';
 import '../parent/parent.model.js';
 import '../child/child.model.js';
 import { PLAYDATE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
+import { PAGINATION } from '../../shared/constants/index.js';
+import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 class PlaydateRepository {
   /**
@@ -110,7 +112,7 @@ class PlaydateRepository {
 
     // Safely escaped search condition to prevent ReDoS and injection
     if (search && search.trim()) {
-      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = escapeRegExp(search.trim());
       andConditions.push({
         $or: [
           { activity: { $regex: escaped, $options: 'i' } },
@@ -134,8 +136,8 @@ class PlaydateRepository {
       ? { scheduledDate: -1, createdAt: -1 }
       : { scheduledDate: 1, createdAt: 1 };
 
-    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || 50));
+    const parsedPage = Math.max(PAGINATION.DEFAULT_PAGE, parseInt(page, 10) || PAGINATION.DEFAULT_PAGE);
     const skip = (parsedPage - 1) * parsedLimit;
 
     const [total, playdates] = await Promise.all([
@@ -304,6 +306,26 @@ class PlaydateRepository {
       { _id: id, 'participants.parentId': parentId },
       { $set: { 'participants.$.status': PARTICIPANT_STATUS.PENDING, 'participants.$.respondedAt': null } },
     );
+  }
+
+  /**
+   * Completed playdates a parent attended (as host or accepted participant)
+   * @param {string|ObjectId} parentId
+   * @param {{ excludeIds?: Array<string|ObjectId>, select?: string }} [options]
+   * @returns {Promise<Array<Object>>} Oldest completion first
+   */
+  async findCompletedForParent(parentId, { excludeIds = [], select = 'completedAt scheduledDate location' } = {}) {
+    return Playdate.find({
+      status: PLAYDATE_STATUS.COMPLETED,
+      $or: [
+        { hostParentId: parentId },
+        { participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.ACCEPTED } } },
+      ],
+      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {}),
+    })
+      .select(select)
+      .sort({ completedAt: 1, _id: 1 })
+      .lean();
   }
 
   /**

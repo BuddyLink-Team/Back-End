@@ -1,4 +1,3 @@
-import { attachAchievementHooks } from '../gamification/gamification.hooks.js';
 import mongoose from 'mongoose';
 import { CONNECTION_STATUS } from './connection.constants.js';
 
@@ -76,8 +75,6 @@ connectionSchema.index(
 connectionSchema.index({ parents: 1, status: 1 });
 connectionSchema.index({ recipientId: 1, status: 1 });
 connectionSchema.index({ requesterId: 1, createdAt: 1 });
-
-attachAchievementHooks(connectionSchema, 'connection');
 
 const Connection = mongoose.models.Connection || mongoose.model('Connection', connectionSchema);
 

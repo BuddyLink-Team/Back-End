@@ -5,6 +5,7 @@ import subscriptionService from '../subscription/subscription.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
 import { CONNECTION_STATUS } from './connection.constants.js';
+import { emitConnectionEvent, CONNECTION_EVENTS } from './connection.events.js';
 
 class ConnectionService {
   /**
@@ -36,6 +37,15 @@ class ConnectionService {
    */
   async getAcceptedConnections(parentId) {
     return connectionRepository.findAcceptedForParent(parentId);
+  }
+
+  /**
+   * Count the accepted connections of a parent
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<number>}
+   */
+  async countAcceptedConnections(parentId) {
+    return connectionRepository.countAcceptedForParent(parentId);
   }
 
   /**
@@ -103,6 +113,9 @@ class ConnectionService {
       if (isIncomingRequest) {
         const accepted = await connectionRepository.acceptPendingById(existingConnection._id);
         if (accepted) {
+          await emitConnectionEvent(CONNECTION_EVENTS.ACCEPTED, {
+            parentIds: accepted.parents.map((id) => id.toString()),
+          });
           return { connection: accepted, isNew: false, isMatched: true };
         }
       }

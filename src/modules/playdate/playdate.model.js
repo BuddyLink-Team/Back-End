@@ -1,4 +1,3 @@
-import { attachAchievementHooks } from '../gamification/gamification.hooks.js';
 import mongoose from 'mongoose';
 import { PLAYDATE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
 
@@ -107,8 +106,6 @@ playdateSchema.index({ hostParentId: 1, status: 1 });
 playdateSchema.index({ 'participants.parentId': 1, status: 1 });
 playdateSchema.index({ scheduledDate: 1, status: 1 });
 playdateSchema.index({ 'location.coordinates': '2dsphere' }, { sparse: true });
-
-attachAchievementHooks(playdateSchema, 'playdate');
 
 const Playdate = mongoose.models.Playdate || mongoose.model('Playdate', playdateSchema);
 

@@ -6,7 +6,7 @@ import gamificationController from './gamification.controller.js';
 
 const router = Router();
 
-router.use(authenticate, authorizeRoles(USER_ROLES.PARENT, 'parent'));
+router.use(authenticate, authorizeRoles(USER_ROLES.PARENT));
 
 router.get('/', gamificationController.getMyAchievements);
 

@@ -1,6 +1,7 @@
-import { test } from 'node:test';
+import { test } from '@jest/globals';
 import assert from 'node:assert/strict';
-import { calculateStreak, weekStart, weekKey, locationKey, BADGE_DEFINITIONS } from '../../src/modules/gamification/gamification.rules.js';
+import { calculateStreak, weekStart, weekKey, locationKey, buildMetrics } from '../../src/modules/gamification/gamification.rules.js';
+import { BADGE_DEFINITIONS, BADGE_METRICS } from '../../src/modules/gamification/gamification.constants.js';
 import { ensureRatingEligibility } from '../../src/modules/rating-feedback/rating-feedback.rules.js';
 
 const now = new Date('2026-10-02T22:00:00+07:00');
@@ -47,9 +48,22 @@ test('location identity uses place ID or normalized address', () => {
   assert.equal(locationKey({name:'A',address:'  1  Đường ABC '}), locationKey({name:'B',address:'1 đường abc'}));
   assert.equal(locationKey({}), null);
 });
-test('exactly the six documented badge conditions', () => {
-  assert.deepEqual(BADGE_DEFINITIONS.map(b => b.requirementCount), [1,1,4,10,10,5]);
-  assert.equal(new Set(BADGE_DEFINITIONS.map(b => b.code)).size, 6);
+test('exactly the documented badge conditions', () => {
+  assert.deepEqual(BADGE_DEFINITIONS.map(b => b.requirementCount), [1,1,4,10,10,5,1,5,8,12,25,25,10]);
+  assert.equal(new Set(BADGE_DEFINITIONS.map(b => b.code)).size, 13);
+  assert.ok(BADGE_DEFINITIONS.every(b => Object.values(BADGE_METRICS).includes(b.metric)));
+});
+test('hosted metric counts only completed playdates the parent hosted', () => {
+  const playdates = [
+    { hostParentId: 'me', location: { placeId: 'a' } },
+    { hostParentId: { toString: () => 'me' }, location: { placeId: 'b' } },
+    { hostParentId: 'other', location: { placeId: 'a' } },
+    { location: { placeId: 'c' } },
+  ];
+  const metrics = buildMetrics({ parentId: 'me', playdates, connectionCount: 0, longestStreak: 0 });
+  assert.equal(metrics[BADGE_METRICS.HOSTED], 2);
+  assert.equal(metrics[BADGE_METRICS.PLAYDATES], 4);
+  assert.equal(metrics[BADGE_METRICS.PLACES], 3);
 });
 const completed = { hostParentId: 'host', status:'completed', participants:[{parentId:'accepted',status:'accepted'},{parentId:'pending',status:'pending'},{parentId:'declined',status:'declined'}] };
 test('host and accepted participant can rate', () => {

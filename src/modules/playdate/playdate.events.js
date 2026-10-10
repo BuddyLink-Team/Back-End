@@ -8,6 +8,8 @@ import logger from '../../shared/logger/index.js';
 export const PLAYDATE_EVENTS = Object.freeze({
   // Host or accepted participants changed (created, RSVP accepted/declined)
   MEMBERS_CHANGED: 'playdate.membersChanged',
+  // Playdate became completed (by the host or the daily auto-close job)
+  COMPLETED: 'playdate.completed',
 });
 
 const emitter = new EventEmitter();

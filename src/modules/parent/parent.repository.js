@@ -67,6 +67,32 @@ class ParentRepository {
     return Parent.deleteOne({ userId });
   }
 
+  /**
+   * Save the weekly streak; the longest streak never decreases
+   * @param {string|ObjectId} parentId
+   * @param {{ currentWeeklyStreak: number, lastCompletedPlaydateWeek: string|null, streakUpdatedAt: Date }} current
+   * @param {number} longestStreak
+   * @returns {Promise<Object|null>}
+   */
+  async updateStreak(parentId, current, longestStreak) {
+    return Parent.findByIdAndUpdate(
+      parentId,
+      {
+        $set: Object.fromEntries(Object.entries(current).map(([key, value]) => [`streak.${key}`, value])),
+        $max: { 'streak.longestStreak': longestStreak },
+      },
+      { new: true }
+    ).lean();
+  }
+
+  /**
+   * Stream the IDs of every parent (for batch jobs)
+   * @returns {import('mongoose').Cursor}
+   */
+  findAllIdsCursor() {
+    return Parent.find().select('_id').lean().cursor();
+  }
+
   async updateVerification(userId, verificationUpdates) {
     const parent = await Parent.findOne({ userId });
     if (!parent) return null;

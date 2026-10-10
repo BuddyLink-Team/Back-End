@@ -1,13 +1,13 @@
 import PlacesCache from './places-cache.model.js';
 import PlacesSyncTile from './places-sync-tile.model.js';
 import { PLACES_SYNC_TILE_STATUS } from './places.constants.js';
+import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 /**
  * Escapes special regex characters to prevent ReDoS and regex injection attacks
  * @param {string} str
  * @returns {string}
  */
-const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class PlacesRepository {
   /**
@@ -54,7 +54,7 @@ class PlacesRepository {
     }
 
     if (searchTerm && searchTerm.trim()) {
-      const escaped = escapeRegex(searchTerm.trim());
+      const escaped = escapeRegExp(searchTerm.trim());
       query.$or = [
         { name: { $regex: escaped, $options: 'i' } },
         { address: { $regex: escaped, $options: 'i' } },

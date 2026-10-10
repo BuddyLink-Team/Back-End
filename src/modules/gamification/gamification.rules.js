@@ -1,5 +1,7 @@
-export const GAMIFICATION_TIMEZONE = 'Asia/Ho_Chi_Minh';
+import { BADGE_METRICS } from './gamification.constants.js';
+
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// Fixed UTC+7 offset of GAMIFICATION_TIMEZONE (Vietnam has no daylight saving time)
 const OFFSET_MS = 7 * 60 * 60 * 1000;
 
 // Monday-based ISO weeks in Vietnam, including ISO week-year boundaries.
@@ -42,15 +44,6 @@ export function calculateStreak(dates, now = new Date()) {
   };
 }
 
-export const BADGE_DEFINITIONS = Object.freeze([
-  { code: 'first_connection', title: 'Kết nối đầu tiên', description: 'Có ít nhất 1 kết nối được chấp nhận.', requirementCount: 1, metric: 'connections' },
-  { code: 'first_playdate', title: 'Playdate đầu tiên', description: 'Hoàn thành ít nhất 1 Playdate.', requirementCount: 1, metric: 'playdates' },
-  { code: '4_week_streak', title: 'Chuỗi 4 tuần', description: 'Hoàn thành Playdate trong ít nhất 4 tuần liên tiếp.', requirementCount: 4, metric: 'longestStreak' },
-  { code: '10_playdates', title: '10 Playdates', description: 'Hoàn thành ít nhất 10 Playdates.', requirementCount: 10, metric: 'playdates' },
-  { code: 'social_family', title: 'Gia đình kết nối', description: 'Có ít nhất 10 kết nối được chấp nhận.', requirementCount: 10, metric: 'connections' },
-  { code: 'explorer', title: 'Nhà khám phá', description: 'Hoàn thành Playdate tại ít nhất 5 địa điểm khác nhau.', requirementCount: 5, metric: 'places' },
-]);
-
 export function locationKey(location = {}) {
   if (location.placeId?.trim()) return `place:${location.placeId.trim()}`;
   const normalize = value => (value || '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -59,12 +52,13 @@ export function locationKey(location = {}) {
   return address ? `address:${address}` : name ? `name:${name}` : null;
 }
 
-export function completedParticipation(parentId) {
+// Values each badge requirement is compared against.
+export function buildMetrics({ parentId, playdates, connectionCount, longestStreak }) {
   return {
-    status: 'completed',
-    $or: [
-      { hostParentId: parentId },
-      { participants: { $elemMatch: { parentId, status: 'accepted' } } },
-    ],
+    [BADGE_METRICS.CONNECTIONS]: connectionCount,
+    [BADGE_METRICS.PLAYDATES]: playdates.length,
+    [BADGE_METRICS.PLACES]: new Set(playdates.map(p => locationKey(p.location)).filter(Boolean)).size,
+    [BADGE_METRICS.LONGEST_STREAK]: longestStreak,
+    [BADGE_METRICS.HOSTED]: playdates.filter(p => p.hostParentId && String(p.hostParentId) === String(parentId)).length,
   };
 }

@@ -1,13 +1,18 @@
-import Playdate from '../playdate/playdate.model.js';
 import ratingFeedbackRepository from './rating-feedback.repository.js';
+import parentService from '../parent/parent.service.js';
+import playdateService from '../playdate/playdate.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
-import { getParent } from '../gamification/gamification.service.js';
 import { ensureRatingEligibility } from './rating-feedback.rules.js';
-import { completedParticipation } from '../gamification/gamification.rules.js';
+
+async function getParent(userId) {
+  const parent = await parentService.getParentByUserId(userId);
+  if (!parent) throw new AppError('Không tìm thấy hồ sơ phụ huynh.', 404, 'PARENT_NOT_FOUND');
+  return parent;
+}
 
 export async function createRating(userId, playdateId, { rating, feedback = '' }) {
   const parent = await getParent(userId);
-  const playdate = await Playdate.findById(playdateId);
+  const playdate = await playdateService.findPlaydateDocById(playdateId);
   ensureRatingEligibility(playdate, parent._id);
   let result;
   try {
@@ -22,7 +27,8 @@ export async function createRating(userId, playdateId, { rating, feedback = '' }
 export async function getPendingRatings(userId) {
   const parent = await getParent(userId);
   const ratedIds = await ratingFeedbackRepository.findDistinctRatedPlaydateIds(parent._id);
-  return Playdate.find({ ...completedParticipation(parent._id), _id: { $nin: ratedIds } })
-    .select('activity scheduledDate completedAt location.name')
-    .sort({ completedAt: 1, _id: 1 }).lean();
+  return playdateService.getCompletedPlaydatesForParent(parent._id, {
+    excludeIds: ratedIds,
+    select: 'activity scheduledDate completedAt location.name',
+  });
 }

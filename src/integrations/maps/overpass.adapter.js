@@ -1,6 +1,7 @@
 import axios from 'axios';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
+import { wait } from '../../shared/helpers/async.helper.js';
 import { PLACE_TYPES } from '../../modules/places/places.constants.js';
 
 /**
@@ -19,7 +20,6 @@ const TYPE_FILTERS = Object.freeze({
 const KIDS_NAME_REGEX = /kid|trẻ em|thiếu nhi/i;
 // Public instances answer 429 / 504 when busy: worth retrying after a pause
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Place type of an OSM element from its tags (null when it is not a supported kid-friendly place)
