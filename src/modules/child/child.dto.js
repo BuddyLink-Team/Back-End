@@ -1,28 +1,25 @@
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
+
 export class ChildPublicProfileDTO {
   /**
    * Shape a child document (with populated parentId) into a safe public-facing response.
-   * Fields are masked according to the child's privacySettings.
+   * Visibility (hidden / blocked parents) is enforced by ChildService before shaping.
    * @param {Object} child - Mongoose lean document with parentId populated
    * @returns {Object}
    */
   static toResponse(child) {
-    const priv = child.privacySettings || {};
     const parent = child.parentId || {};
 
-    const ageYears = child.dateOfBirth
-      ? Math.floor((Date.now() - new Date(child.dateOfBirth)) / (365.25 * 24 * 3600 * 1000))
-      : null;
+    const ageYears = calculateAgeYears(child.dateOfBirth);
 
     return {
       childId: child._id,
-      displayName: priv.showFullName !== false ? child.displayName : (child.displayName?.split(' ').pop() || child.displayName),
-      age: priv.showAge !== false ? ageYears : null,
-      gender: priv.showGender !== false ? child.gender : null,
-      avatarUrl: priv.showRealPhoto === true ? (child.avatarUrl || null) : null,
-      schoolLevel: priv.showSchool === true ? (child.schoolLevel || null) : null,
-      interests: priv.showInterests !== false ? (child.interests || []) : [],
-      favoriteActivities: priv.showInterests !== false ? (child.favoriteActivities || []) : [],
-      personality: priv.showPersonality !== false ? (child.personality || []) : [],
+      displayName: child.displayName,
+      age: ageYears,
+      gender: child.gender,
+      interests: child.interests || [],
+      favoriteActivities: child.favoriteActivities || [],
+      personality: child.personality || [],
       parent: {
         fullName: parent.fullName || null,
         avatarUrl: parent.avatarUrl || null,
@@ -45,14 +42,7 @@ export class ChildResponseDTO {
   static toResponse(child) {
     if (!child) return null;
 
-    // Calculate approximate age from dateOfBirth
-    let age = null;
-    if (child.dateOfBirth) {
-      const birthDate = new Date(child.dateOfBirth);
-      const diffMs = Date.now() - birthDate.getTime();
-      const ageDt = new Date(diffMs);
-      age = Math.abs(ageDt.getUTCFullYear() - 1970);
-    }
+    const age = calculateAgeYears(child.dateOfBirth);
 
     return {
       id: child._id,

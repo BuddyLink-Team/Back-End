@@ -3,14 +3,21 @@ import {
   PREFERRED_DAYS,
   TIME_SLOTS,
   PREFERRED_LOCATIONS,
+  PREFERENCE_LIMITS,
 } from './parent.constants.js';
 
-export const onboardingPreferencesValidation = [
+const locationRules = [
   body('location').optional().isObject().withMessage('Location must be an object'),
-  body('location.address').optional().isString().trim(),
-  body('location.area').optional().isString().trim(),
-  body('location.city').optional().isString().trim(),
+  body('location.address').optional().isString().trim().isLength({ max: 255 }),
+  body('location.area').optional().isString().trim().isLength({ max: 100 }),
+  body('location.city').optional().isString().trim().isLength({ max: 100 }),
   body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be an array of [lng, lat]'),
+  body('location.coordinates[0]').optional().isFloat({ min: -180, max: 180 }).withMessage('Longitude must be between -180 and 180').toFloat(),
+  body('location.coordinates[1]').optional().isFloat({ min: -90, max: 90 }).withMessage('Latitude must be between -90 and 90').toFloat(),
+];
+
+export const onboardingPreferencesValidation = [
+  ...locationRules,
   body('preferences').optional().isObject().withMessage('Preferences must be an object'),
   body('preferences.preferredPlaydateDays')
     .optional()
@@ -29,23 +36,30 @@ export const onboardingPreferencesValidation = [
     .withMessage(`preferredLocations must be one of: ${PREFERRED_LOCATIONS.join(', ')}`),
   body('preferences.maxDistanceKm')
     .optional()
-    .isNumeric()
-    .withMessage('maxDistanceKm must be a number'),
+    .isFloat({ min: PREFERENCE_LIMITS.MIN_DISTANCE_KM, max: PREFERENCE_LIMITS.MAX_DISTANCE_KM })
+    .withMessage(`maxDistanceKm must be between ${PREFERENCE_LIMITS.MIN_DISTANCE_KM} and ${PREFERENCE_LIMITS.MAX_DISTANCE_KM}`)
+    .toFloat(),
   body('preferences.preferredAgeRange.min')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('preferredAgeRange.min must be a non-negative integer'),
+    .isInt({ min: PREFERENCE_LIMITS.MIN_CHILD_AGE, max: PREFERENCE_LIMITS.MAX_CHILD_AGE })
+    .withMessage(`preferredAgeRange.min must be an integer between ${PREFERENCE_LIMITS.MIN_CHILD_AGE} and ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`)
+    .toInt(),
   body('preferences.preferredAgeRange.max')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('preferredAgeRange.max must be a non-negative integer'),
-  body('preferences.languages')
-    .optional()
-    .isArray()
-    .withMessage('languages must be an array of strings'),
+    .isInt({ min: PREFERENCE_LIMITS.MIN_CHILD_AGE, max: PREFERENCE_LIMITS.MAX_CHILD_AGE })
+    .withMessage(`preferredAgeRange.max must be an integer between ${PREFERENCE_LIMITS.MIN_CHILD_AGE} and ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`)
+    .toInt(),
 ];
 
 export const updateParentProfileValidation = [
+  // Empty string clears the phone number; a changed number must be re-verified via OTP
+  body('phone')
+    .optional({ values: 'null' })
+    .isString()
+    .withMessage('Phone must be a string')
+    .trim()
+    .custom((value) => value === '' || /^\+?[0-9]{9,15}$/.test(value))
+    .withMessage('Invalid phone number format. Must contain 9 to 15 digits'),
   body('fullName')
     .optional()
     .isString()
@@ -58,11 +72,7 @@ export const updateParentProfileValidation = [
     .trim()
     .isLength({ max: 500 })
     .withMessage('Bio cannot exceed 500 characters'),
-  body('location').optional().isObject().withMessage('Location must be an object'),
-  body('location.address').optional().isString().trim(),
-  body('location.area').optional().isString().trim(),
-  body('location.city').optional().isString().trim(),
-  body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be an array of [lng, lat]'),
+  ...locationRules,
   body('preferences').optional().isObject().withMessage('Preferences must be an object'),
   body('preferences.preferredPlaydateDays')
     .optional()
@@ -81,20 +91,19 @@ export const updateParentProfileValidation = [
     .withMessage(`preferredLocations must be one of: ${PREFERRED_LOCATIONS.join(', ')}`),
   body('preferences.maxDistanceKm')
     .optional()
-    .isNumeric()
-    .withMessage('maxDistanceKm must be a number'),
+    .isFloat({ min: PREFERENCE_LIMITS.MIN_DISTANCE_KM, max: PREFERENCE_LIMITS.MAX_DISTANCE_KM })
+    .withMessage(`maxDistanceKm must be between ${PREFERENCE_LIMITS.MIN_DISTANCE_KM} and ${PREFERENCE_LIMITS.MAX_DISTANCE_KM}`)
+    .toFloat(),
   body('preferences.preferredAgeRange.min')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('preferredAgeRange.min must be a non-negative integer'),
+    .isInt({ min: PREFERENCE_LIMITS.MIN_CHILD_AGE, max: PREFERENCE_LIMITS.MAX_CHILD_AGE })
+    .withMessage(`preferredAgeRange.min must be an integer between ${PREFERENCE_LIMITS.MIN_CHILD_AGE} and ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`)
+    .toInt(),
   body('preferences.preferredAgeRange.max')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('preferredAgeRange.max must be a non-negative integer'),
-  body('preferences.languages')
-    .optional()
-    .isArray()
-    .withMessage('languages must be an array of strings'),
+    .isInt({ min: PREFERENCE_LIMITS.MIN_CHILD_AGE, max: PREFERENCE_LIMITS.MAX_CHILD_AGE })
+    .withMessage(`preferredAgeRange.max must be an integer between ${PREFERENCE_LIMITS.MIN_CHILD_AGE} and ${PREFERENCE_LIMITS.MAX_CHILD_AGE}`)
+    .toInt(),
   body('privacySettings').optional().isObject().withMessage('privacySettings must be an object'),
   body('privacySettings.isProfileHidden').optional().isBoolean().withMessage('isProfileHidden must be a boolean'),
   body('privacySettings.connectionPrivacy').optional().isIn(['everyone', 'nobody']).withMessage('connectionPrivacy must be either everyone or nobody'),

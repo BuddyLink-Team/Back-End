@@ -12,23 +12,21 @@ import {
 
 const router = Router();
 
-// All connection routes require authenticated parent
+// All connection routes require an authenticated parent
 router.use(authenticate);
-router.use(authorizeRoles(USER_ROLES.PARENT, 'PARENT', 'parent'));
+router.use(authorizeRoles(USER_ROLES.PARENT));
 
-// Get list of connections/requests
+// Connections / requests of the current parent (?status=pending|accepted&direction=incoming|outgoing)
 router.get('/', validate(getConnectionsValidation), connectionController.getConnections);
 
-// Send connection request
-router.post('/request', validate(requestConnectionValidation), connectionController.createConnectionRequest);
+// Send a connection request
+router.post('/', validate(requestConnectionValidation), connectionController.createConnectionRequest);
 
-// Accept connection request
-router.put('/accept/:id', validate(connectionIdParamValidation), connectionController.acceptConnectionRequest);
+// Accept / decline an incoming request
+router.patch('/:id/accept', validate(connectionIdParamValidation), connectionController.acceptConnectionRequest);
+router.patch('/:id/decline', validate(connectionIdParamValidation), connectionController.declineConnectionRequest);
 
-// Decline connection request
-router.put('/decline/:id', validate(connectionIdParamValidation), connectionController.declineConnectionRequest);
-
-// Remove connection
-router.delete('/remove/:id', validate(connectionIdParamValidation), connectionController.removeConnection);
+// Remove a connection, or cancel a sent request
+router.delete('/:id', validate(connectionIdParamValidation), connectionController.removeConnection);
 
 export default router;

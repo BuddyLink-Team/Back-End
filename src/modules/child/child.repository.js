@@ -1,36 +1,116 @@
+import mongoose from 'mongoose';
 import Child from './child.model.js';
+import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
+
 
 class ChildRepository {
-  async create(childData) {
+  async create(childData, session = null) {
+    if (session) {
+      const created = await Child.create([childData], { session });
+      return created[0];
+    }
     return Child.create(childData);
   }
 
-  async findById(id) {
+  async findByIdAndParentId(id, parentId) {
+    return Child.findOne({ _id: id, parentId, isArchived: false });
+  }
+
+  async findActiveById(id) {
     return Child.findOne({ _id: id, isArchived: false });
   }
 
-  async findByParentId(parentId) {
-    return Child.find({ parentId, isArchived: false }).sort({ createdAt: -1 });
+  /**
+   * Active children of the given parents, for discovery.
+   * @param {Object} criteria
+   * @param {Array<string|ObjectId>} criteria.parentIds
+   * @param {Array<string|ObjectId>} [criteria.excludeChildIds] - Already swiped children
+   * @param {number} [criteria.ageMin]
+   * @param {number} [criteria.ageMax]
+   * @param {string[]} [criteria.interests] - Case-insensitive, matches interests or favorite activities
+   * @returns {Promise<Array<Object>>}
+   */
+  async findDiscoverable({ parentIds, excludeChildIds = [], ageMin, ageMax, interests = [] }) {
+    const query = {
+      parentId: { $in: parentIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      _id: { $nin: excludeChildIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      isArchived: false,
+    };
+
+    // Age range → dateOfBirth range
+    if (ageMin !== undefined || ageMax !== undefined) {
+      const now = new Date();
+      query.dateOfBirth = {};
+      if (ageMax !== undefined) {
+        // ageMax → child must be born AFTER this date (younger bound)
+        query.dateOfBirth.$gt = new Date(now.getFullYear() - ageMax - 1, now.getMonth(), now.getDate());
+      }
+      if (ageMin !== undefined) {
+        // ageMin → child must be born ON or BEFORE this date (older bound)
+        query.dateOfBirth.$lte = new Date(now.getFullYear() - ageMin, now.getMonth(), now.getDate());
+      }
+    }
+
+    if (interests.length > 0) {
+      const patterns = interests.map((interest) => new RegExp(`^${escapeRegExp(interest)}$`, 'i'));
+      query.$or = [{ interests: { $in: patterns } }, { favoriteActivities: { $in: patterns } }];
+    }
+
+    return Child.find(query).lean();
   }
 
-  async updateById(id, parentId, updateData) {
+  /**
+   * Active children of several parents in one query, newest first
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Array<Object>>}
+   */
+  async findByParentIds(parentIds) {
+    if (!parentIds.length) return [];
+    return Child.find({ parentId: { $in: parentIds }, isArchived: false }).sort({ createdAt: -1 }).lean();
+  }
+
+  /**
+   * IDs of the parents having an active child whose name contains the text
+   * @param {string} search
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findParentIdsByChildName(search) {
+    return Child.distinct('parentId', {
+      displayName: { $regex: escapeRegExp(search), $options: 'i' },
+      isArchived: false,
+    });
+  }
+
+  async findByParentId(parentId, session = null) {
+    const query = Child.find({ parentId, isArchived: false }).sort({ createdAt: -1 });
+    if (session) query.session(session);
+    return query;
+  }
+
+  async updateById(id, parentId, updateData, session = null) {
+    const options = { new: true };
+    if (session) options.session = session;
     return Child.findOneAndUpdate(
       { _id: id, parentId, isArchived: false },
       { $set: updateData },
-      { new: true }
+      { ...options, runValidators: true }
     );
   }
 
-  async softDeleteById(id, parentId) {
+  async softDeleteById(id, parentId, session = null) {
+    const options = { new: true };
+    if (session) options.session = session;
     return Child.findOneAndUpdate(
       { _id: id, parentId, isArchived: false },
       { $set: { isArchived: true } },
-      { new: true }
+      options
     );
   }
 
-  async countByParentId(parentId) {
-    return Child.countDocuments({ parentId, isArchived: false });
+  async countByParentId(parentId, session = null) {
+    const query = Child.countDocuments({ parentId, isArchived: false });
+    if (session) query.session(session);
+    return query;
   }
 
   /**
@@ -40,10 +120,11 @@ class ChildRepository {
     return Child.findOne({ _id: childId, isArchived: false })
       .populate({
         path: 'parentId',
-        select: 'fullName avatarUrl bio location verification preferences',
+        select: 'fullName avatarUrl bio location.area location.city verification preferences privacySettings.isProfileHidden',
       })
       .lean();
   }
 }
 
 export default new ChildRepository();
+

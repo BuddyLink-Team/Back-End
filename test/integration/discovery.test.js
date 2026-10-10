@@ -4,6 +4,11 @@ import mongoose from 'mongoose';
 import app from '../../src/app.js';
 import Parent from '../../src/modules/parent/parent.model.js';
 import Child from '../../src/modules/child/child.model.js';
+import Connection from '../../src/modules/connection/connection.model.js';
+import discoveryService from '../../src/modules/discovery/discovery.service.js';
+import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
+import subscriptionService from '../../src/modules/subscription/subscription.service.js';
+import { QUOTA_PERIOD_TYPES } from '../../src/modules/subscription/subscription.constants.js';
 
 describe('Discovery & Smart Matching Integration Flow', () => {
   // Parent A: the searcher
@@ -245,7 +250,32 @@ describe('Discovery & Smart Matching Integration Flow', () => {
         expect(profile.parent).toHaveProperty('isVerifiedParent');
         expect(profile).toHaveProperty('matchScore');
         expect(profile).toHaveProperty('distanceKm');
+        expect(profile).not.toHaveProperty('avatarUrl');
+        expect(Number.isInteger(profile.distanceKm)).toBe(true);
+        expect(Object.keys(profile.parent.preferences).sort()).toEqual([
+          'preferredLocations',
+          'preferredPlaydateDays',
+          'preferredTimeSlots',
+        ]);
       }
+    });
+
+    it('should reject lat without lng', async () => {
+      const res = await request(app)
+        .get('/api/v1/discovery?lat=10.8')
+        .set('Authorization', `Bearer ${parentAToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('should reject ageMin greater than ageMax', async () => {
+      const res = await request(app)
+        .get('/api/v1/discovery?ageMin=8&ageMax=3')
+        .set('Authorization', `Bearer ${parentAToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('should return meta with remainingViews for Free plan', async () => {
@@ -296,6 +326,16 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(typeof res.body.data.remainingViews).toBe('number');
     });
 
+    it('should send a pending connection request when liking', async () => {
+      const connection = await Connection.findOne({
+        requesterId: parentAId,
+        recipientId: parentBId,
+      }).lean();
+
+      expect(connection).not.toBeNull();
+      expect(connection.status).toBe('pending');
+    });
+
     it('should reject duplicate swipe with 409', async () => {
       const res = await request(app)
         .post('/api/v1/discovery/swipe')
@@ -316,6 +356,10 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.isLike).toBe(false);
+      expect(res.body.data.connection).toBeNull();
+
+      const connection = await Connection.findOne({ requesterId: parentAId, recipientId: parentCId });
+      expect(connection).toBeNull();
     });
 
     it('should exclude swiped profiles from discovery results', async () => {
@@ -393,6 +437,24 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       });
     });
 
+    it('should not consume quota when a swipe is rejected', async () => {
+      const fakeChildId = new mongoose.Types.ObjectId().toString();
+      for (let i = 0; i < 3; i++) {
+        const res = await request(app)
+          .post('/api/v1/discovery/swipe')
+          .set('Authorization', `Bearer ${quotaTestToken}`)
+          .send({ targetChildId: fakeChildId, isLike: true });
+        expect(res.status).toBe(404);
+      }
+
+      const res = await request(app)
+        .get('/api/v1/discovery')
+        .set('Authorization', `Bearer ${quotaTestToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.meta.remainingViews).toBe(5);
+    });
+
     it('should block swipe when Free daily quota is exceeded', async () => {
       // Create 5 target children from different parents to exhaust quota
       const targetChildIds = [];
@@ -416,12 +478,12 @@ describe('Discovery & Smart Matching Integration Flow', () => {
         targetChildIds.push(childRes.body.data.id || childRes.body.data._id);
       }
 
-      // Swipe on all 5 children (exhaust daily quota)
+      // Pass on all 5 children (exhaust daily quota without touching connection quota)
       for (const targetId of targetChildIds) {
         await request(app)
           .post('/api/v1/discovery/swipe')
           .set('Authorization', `Bearer ${quotaTestToken}`)
-          .send({ targetChildId: targetId, isLike: true });
+          .send({ targetChildId: targetId, isLike: false });
       }
 
       // Create 6th target child
@@ -451,6 +513,291 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(res.status).toBe(403);
       expect(res.body.success).toBe(false);
       expect(res.body.error.code).toBe('QUOTA_EXCEEDED');
+      expect(res.body.error.details.feature).toBe('discovery_swipes');
     });
+  });
+
+  // ============================================
+  // Like = Connection Request
+  // ============================================
+
+  describe('Like sends a connection request', () => {
+    const registerParentWithChild = async (label, connectionPrivacy) => {
+      const reg = await request(app).post('/api/v1/auth/register').send({
+        fullName: `${label} Parent`,
+        email: `${label}-${Date.now()}-${Math.random()}@example.com`,
+        password: testPassword,
+      });
+      const token = reg.body.data.tokens.accessToken;
+      const profile = await request(app).get('/api/v1/parent/me').set('Authorization', `Bearer ${token}`);
+      const parentId = profile.body.data.id || profile.body.data._id;
+      if (connectionPrivacy) {
+        await Parent.findByIdAndUpdate(parentId, { $set: { 'privacySettings.connectionPrivacy': connectionPrivacy } });
+      }
+      const child = await request(app)
+        .post('/api/v1/children')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ displayName: `${label} Child`, dateOfBirth: '2020-01-01', gender: 'girl' });
+      return { token, parentId, childId: child.body.data.id || child.body.data._id };
+    };
+
+    const getRemainingViews = async (token) => {
+      const res = await request(app).get('/api/v1/discovery?lat=10.8&lng=106.7').set('Authorization', `Bearer ${token}`);
+      return res.body.data.meta.remainingViews;
+    };
+
+    it('should reject liking a parent who accepts no connections without consuming quota', async () => {
+      const liker = await registerParentWithChild('liker-privacy');
+      const target = await registerParentWithChild('nobody', 'nobody');
+
+      const res = await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${liker.token}`)
+        .send({ targetChildId: target.childId, isLike: true });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('CONNECTION_NOT_ALLOWED');
+      expect(await getRemainingViews(liker.token)).toBe(5);
+    });
+
+    it('should block a like when the monthly connection quota is used up, without consuming discovery quota', async () => {
+      const liker = await registerParentWithChild('liker-quota');
+      const extraTarget = await registerParentWithChild('target-extra');
+
+      // Use up the 5 monthly connection requests directly in the quota counters
+      await UsageQuota.updateOne(
+        {
+          parentId: liker.parentId,
+          periodType: QUOTA_PERIOD_TYPES.MONTHLY,
+          periodValue: subscriptionService.getPeriodValue(QUOTA_PERIOD_TYPES.MONTHLY),
+        },
+        { $set: { 'counters.connectionRequests': 5 } },
+        { upsert: true }
+      );
+
+      const res = await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${liker.token}`)
+        .send({ targetChildId: extraTarget.childId, isLike: true });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('QUOTA_EXCEEDED');
+      expect(res.body.error.details.feature).toBe('connection_requests');
+      expect(await getRemainingViews(liker.token)).toBe(5);
+    });
+
+    it('should auto-connect when the recipient of a pending request likes back', async () => {
+      const a = await registerParentWithChild('mutual-a');
+      const b = await registerParentWithChild('mutual-b');
+
+      await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ targetChildId: b.childId, isLike: true });
+
+      const res = await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${b.token}`)
+        .send({ targetChildId: a.childId, isLike: true });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.connection.isNew).toBe(false);
+      expect(res.body.data.connection.isMatched).toBe(true);
+      expect(res.body.data.connection.status).toBe('accepted');
+
+      const connections = await Connection.find({ parents: { $all: [a.parentId, b.parentId] } }).lean();
+      expect(connections).toHaveLength(1);
+      expect(connections[0].status).toBe('accepted');
+      expect(connections[0].connectedAt).not.toBeNull();
+    });
+
+    it('should keep the request pending when the requester likes again', async () => {
+      const a = await registerParentWithChild('repeat-a');
+      const b = await registerParentWithChild('repeat-b');
+
+      // A likes B's child, then likes another child of B
+      await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ targetChildId: b.childId, isLike: true });
+
+      const secondChild = await Child.create({
+        parentId: b.parentId,
+        displayName: 'Second Child',
+        dateOfBirth: new Date('2019-01-01'),
+        gender: 'boy',
+      });
+
+      const res = await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ targetChildId: secondChild._id.toString(), isLike: true });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.connection.isMatched).toBe(false);
+      expect(res.body.data.connection.status).toBe('pending');
+    });
+  });
+});
+
+// ============================================
+// Radius accuracy (known distances)
+// ============================================
+
+describe('Discovery radius accuracy', () => {
+  const password = 'Password123!';
+  // 1 degree of latitude ≈ 111.3 km on MongoDB's sphere, so +0.09° ≈ 10 km and +0.27° ≈ 30 km
+  const SEARCHER = [105.0, 20.0];
+  const NEAR = [105.0, 20.09];
+  const FAR = [105.0, 20.27];
+
+  let searcherToken = '';
+  let nearChildId = '';
+  let farChildId = '';
+
+  const createParentAt = async (label, coordinates) => {
+    const reg = await request(app).post('/api/v1/auth/register').send({
+      fullName: `Radius ${label}`,
+      email: `radius-${label}-${Date.now()}-${Math.random()}@example.com`,
+      password,
+    });
+    const token = reg.body.data.tokens.accessToken;
+    const me = await request(app).get('/api/v1/parent/me').set('Authorization', `Bearer ${token}`);
+    const parentId = me.body.data.id || me.body.data._id;
+    await Parent.findByIdAndUpdate(parentId, {
+      $set: { 'location.coordinates': { type: 'Point', coordinates } },
+    });
+    const child = await request(app)
+      .post('/api/v1/children')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ displayName: `Radius ${label} Child`, dateOfBirth: '2020-01-01', gender: 'boy' });
+    return { token, childId: child.body.data.id || child.body.data._id };
+  };
+
+  const discover = (maxDistanceKm) =>
+    request(app)
+      .get(`/api/v1/discovery?maxDistanceKm=${maxDistanceKm}`)
+      .set('Authorization', `Bearer ${searcherToken}`);
+
+  const findChild = (res, childId) => res.body.data.profiles.find((p) => p.childId.toString() === childId);
+
+  beforeAll(async () => {
+    searcherToken = (await createParentAt('searcher', SEARCHER)).token;
+    nearChildId = (await createParentAt('near', NEAR)).childId;
+    farChildId = (await createParentAt('far', FAR)).childId;
+  });
+
+  it('excludes a parent just outside the radius (10 km away, radius 9 km)', async () => {
+    const res = await discover(9);
+    expect(res.status).toBe(200);
+    expect(findChild(res, nearChildId)).toBeUndefined();
+    expect(findChild(res, farChildId)).toBeUndefined();
+  });
+
+  it('includes a parent just inside the radius and reports ~10 km', async () => {
+    const res = await discover(11);
+    expect(findChild(res, nearChildId)?.distanceKm).toBe(10);
+    expect(findChild(res, farChildId)).toBeUndefined();
+  });
+
+  it('scores distance against the searched radius, not only the saved preference', async () => {
+    // Searcher preference is the default 15 km; the far child is ~30 km away
+    const narrow = findChild(await discover(31), farChildId);
+    const wide = findChild(await discover(50), farChildId);
+    expect(wide.matchScore).toBeGreaterThan(narrow.matchScore);
+
+    expect(discoveryService._calcDistanceScore(30, 50)).toBe(8);
+    expect(discoveryService._calcDistanceScore(30, 31)).toBe(1);
+    expect(discoveryService._calcDistanceScore(30, undefined)).toBe(0);
+  });
+
+  it('reports ~30 km for the far parent when the radius covers it', async () => {
+    const res = await discover(31);
+    expect(findChild(res, nearChildId)?.distanceKm).toBe(10);
+    expect(findChild(res, farChildId)?.distanceKm).toBe(30);
+  });
+});
+
+// ============================================
+// Candidate pool & selected child
+// ============================================
+
+describe('Discovery candidate pool and selected child', () => {
+  const password = 'Password123!';
+  const BASE = [104.0, 19.0];
+
+  const createParentAt = async (label, coordinates, children = []) => {
+    const reg = await request(app).post('/api/v1/auth/register').send({
+      fullName: `Pool ${label}`,
+      email: `pool-${label}-${Date.now()}-${Math.random()}@example.com`,
+      password,
+    });
+    const token = reg.body.data.tokens.accessToken;
+    const me = await request(app).get('/api/v1/parent/me').set('Authorization', `Bearer ${token}`);
+    const parentId = me.body.data.id || me.body.data._id;
+    await Parent.findByIdAndUpdate(parentId, {
+      $set: { 'location.coordinates': { type: 'Point', coordinates } },
+    });
+    const childIds = [];
+    for (const child of children) {
+      const created = await Child.create({ parentId, dateOfBirth: new Date('2020-01-01'), gender: 'girl', ...child });
+      childIds.push(created._id.toString());
+    }
+    return { token, parentId, childIds };
+  };
+
+  const findChild = (res, childId) => res.body.data.profiles.find((p) => p.childId.toString() === childId);
+
+  it('still shows farther parents once the nearest candidates are all swiped', async () => {
+    const searcher = await createParentAt('searcher', BASE);
+    const near = await createParentAt('near', [104.0, 19.01], [{ displayName: 'Near Kid' }]);
+    const far = await createParentAt('far', [104.0, 19.05], [{ displayName: 'Far Kid' }]);
+
+    const originalPoolSize = discoveryService.candidatePoolSize;
+    discoveryService.candidatePoolSize = 1;
+    try {
+      const first = await request(app).get('/api/v1/discovery').set('Authorization', `Bearer ${searcher.token}`);
+      expect(findChild(first, near.childIds[0])).toBeDefined();
+      expect(findChild(first, far.childIds[0])).toBeUndefined();
+
+      await request(app)
+        .post('/api/v1/discovery/swipe')
+        .set('Authorization', `Bearer ${searcher.token}`)
+        .send({ targetChildId: near.childIds[0], isLike: false });
+
+      const second = await request(app).get('/api/v1/discovery').set('Authorization', `Bearer ${searcher.token}`);
+      expect(findChild(second, far.childIds[0])).toBeDefined();
+    } finally {
+      discoveryService.candidatePoolSize = originalPoolSize;
+    }
+  });
+
+  it('matches interests against the selected child only', async () => {
+    const searcher = await createParentAt('multi', [103.0, 18.0], [
+      { displayName: 'Lego Kid', interests: ['Lego'] },
+      { displayName: 'Music Kid', interests: ['Âm nhạc'] },
+    ]);
+    const target = await createParentAt('target', [103.0, 18.01], [{ displayName: 'Lego Friend', interests: ['Lego'] }]);
+    const [legoKidId, musicKidId] = searcher.childIds;
+
+    const discoverFor = (childId) =>
+      request(app).get(`/api/v1/discovery?childId=${childId}`).set('Authorization', `Bearer ${searcher.token}`);
+
+    const forLegoKid = await discoverFor(legoKidId);
+    expect(findChild(forLegoKid, target.childIds[0]).matchedInterestsCount).toBe(1);
+
+    const forMusicKid = await discoverFor(musicKidId);
+    expect(findChild(forMusicKid, target.childIds[0]).matchedInterestsCount).toBe(0);
+  });
+
+  it('rejects a childId that does not belong to the parent', async () => {
+    const searcher = await createParentAt('owner-check', [102.0, 17.0], [{ displayName: 'Own Kid' }]);
+    const other = await createParentAt('other', [102.0, 17.01], [{ displayName: 'Other Kid' }]);
+
+    const res = await request(app)
+      .get(`/api/v1/discovery?childId=${other.childIds[0]}`)
+      .set('Authorization', `Bearer ${searcher.token}`);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('CHILD_NOT_FOUND');
   });
 });

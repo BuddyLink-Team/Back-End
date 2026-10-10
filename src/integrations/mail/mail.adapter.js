@@ -2,6 +2,22 @@ import nodemailer from "nodemailer";
 import env from "../../config/env.js";
 import logger from "../../shared/logger/index.js";
 
+/**
+ * Escape user-provided text before inserting it into email HTML (e.g. a full name containing
+ * markup or links would otherwise be rendered inside our branded email)
+ */
+const escapeHtml = (value) =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const SMTP_TIMEOUT_MS = 10000;
+const BREVO_API_URL = "https://api.brevo.com/v3";
+const BREVO_TIMEOUT_MS = 10000;
+
 class MailAdapter {
   constructor() {
     this.transporter = null;
@@ -9,6 +25,11 @@ class MailAdapter {
   }
 
   initTransporter() {
+    if (env.EMAIL.BREVO_API_KEY) {
+      logger.info("Email provider: Brevo HTTP API.");
+      return;
+    }
+
     if (env.EMAIL.SMTP_HOST && env.EMAIL.SMTP_USER && env.EMAIL.SMTP_PASSWORD) {
       this.transporter = nodemailer.createTransport({
         host: env.EMAIL.SMTP_HOST,
@@ -18,10 +39,46 @@ class MailAdapter {
           user: env.EMAIL.SMTP_USER,
           pass: env.EMAIL.SMTP_PASSWORD,
         },
+        // Fail fast instead of nodemailer's 2-minute default (e.g. when the host blocks SMTP ports)
+        connectionTimeout: SMTP_TIMEOUT_MS,
+        greetingTimeout: SMTP_TIMEOUT_MS,
+        socketTimeout: SMTP_TIMEOUT_MS,
       });
     } else {
       logger.warn(
         "SMTP configuration missing. Email will run in mock mode (logged to console).",
+      );
+    }
+  }
+
+  /**
+   * Check the SMTP connection and credentials (called once at startup so deploy logs show
+   * a misconfiguration right away).
+   */
+  async verifyConnection() {
+    if (process.env.NODE_ENV === "test") return;
+
+    if (env.EMAIL.BREVO_API_KEY) {
+      try {
+        const response = await this._brevoRequest("/account", { method: "GET" });
+        if (response.ok) {
+          logger.info("Brevo API key is valid.");
+        } else {
+          logger.error(`Brevo API key check failed: HTTP ${response.status} ${await response.text()}`);
+        }
+      } catch (error) {
+        logger.error(`Brevo API unreachable: ${error.message}`);
+      }
+      return;
+    }
+
+    if (!this.transporter) return;
+    try {
+      await this.transporter.verify();
+      logger.info(`SMTP connection ready (${env.EMAIL.SMTP_HOST}:${env.EMAIL.SMTP_PORT})`);
+    } catch (error) {
+      logger.error(
+        `SMTP connection failed (${env.EMAIL.SMTP_HOST}:${env.EMAIL.SMTP_PORT}): [${error.code || "UNKNOWN"}] ${error.message}`,
       );
     }
   }
@@ -31,7 +88,7 @@ class MailAdapter {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
         <h2 style="color: #4F46E5; text-align: center; margin-bottom: 24px;">Xác thực tài khoản BuddyLink</h2>
-        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${fullName}</strong>,</p>
+        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${escapeHtml(fullName)}</strong>,</p>
         <p style="font-size: 15px; color: #374151; line-height: 1.6;">
           Cảm ơn bạn đã tham gia nền tảng <strong>BuddyLink</strong>! Vui lòng sử dụng mã OTP dưới đây để xác thực địa chỉ email của bạn:
         </p>
@@ -64,7 +121,7 @@ class MailAdapter {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
         <h2 style="color: #EF4444; text-align: center; margin-bottom: 24px;">Đặt lại mật khẩu BuddyLink</h2>
-        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${fullName}</strong>,</p>
+        <p style="font-size: 15px; color: #374151;">Xin chào <strong>${escapeHtml(fullName)}</strong>,</p>
         <p style="font-size: 15px; color: #374151; line-height: 1.6;">
           Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn. Vui lòng nhập mã xác thực bên dưới để thiết lập mật khẩu mới:
         </p>
@@ -98,14 +155,12 @@ class MailAdapter {
       };
     }
 
+    if (env.EMAIL.BREVO_API_KEY) {
+      return this._sendViaBrevo({ to, subject, html, text });
+    }
+
     if (this.transporter) {
       try {
-        console.log(`\n======================================================`);
-        console.log(`🔥 [EMAIL OTP INTERCEPT] SENT TO: ${to}`);
-        console.log(`🔥 SUBJECT: ${subject}`);
-        console.log(`🔥 TEXT: ${text}`);
-        console.log(`======================================================\n`);
-        
         const info = await this.transporter.sendMail({
           from: `"BuddyLink Team" <${env.EMAIL.FROM}>`,
           to,
@@ -116,20 +171,55 @@ class MailAdapter {
         logger.info(`Email sent to ${to}: ${info.messageId}`);
         return { success: true, messageId: info.messageId };
       } catch (error) {
-        logger.error(`Error sending email to ${to}: ${error.message}`);
-        // Fallback gracefully without breaking test flow
+        logger.error(`Error sending email to ${to}: [${error.code || "UNKNOWN"}] ${error.message}`);
         return { success: false, error: error.message };
       }
     }
 
-    // In dev / test or when SMTP is unconfigured
-    console.log(`\n======================================================`);
-    console.log(`🔥 [MOCK EMAIL OTP] SENT TO: ${to}`);
-    console.log(`🔥 SUBJECT: ${subject}`);
-    console.log(`🔥 TEXT: ${text}`);
-    console.log(`======================================================\n`);
+    // In dev / test or when no email provider is configured
     logger.info(`[MOCK EMAIL] To: ${to} | Subject: ${subject} | Body: ${text}`);
     return { success: true, mock: true };
+  }
+
+  _brevoRequest(path, { method, body }) {
+    return fetch(`${BREVO_API_URL}${path}`, {
+      method,
+      headers: {
+        "api-key": env.EMAIL.BREVO_API_KEY,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+    });
+  }
+
+  async _sendViaBrevo({ to, subject, html, text }) {
+    try {
+      const response = await this._brevoRequest("/smtp/email", {
+        method: "POST",
+        body: {
+          sender: { name: "BuddyLink Team", email: env.EMAIL.FROM },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          textContent: text,
+        },
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        logger.error(`Brevo failed to send email to ${to}: HTTP ${response.status} ${errorBody}`);
+        return { success: false, error: `Brevo HTTP ${response.status}` };
+      }
+
+      const { messageId } = await response.json();
+      logger.info(`Email sent to ${to} via Brevo: ${messageId}`);
+      return { success: true, messageId };
+    } catch (error) {
+      logger.error(`Error sending email to ${to} via Brevo: ${error.message}`);
+      return { success: false, error: error.message };
+    }
   }
 }
 

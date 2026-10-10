@@ -7,6 +7,18 @@ const env = {
   PORT: parseInt(process.env.PORT, 10) || 5000,
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
 
+  // Business timezone used for daily/monthly quota periods (users are in Vietnam)
+  APP_TIMEZONE: process.env.APP_TIMEZONE || 'Asia/Ho_Chi_Minh',
+
+  // Number of reverse proxies in front of the app (Render/Railway/Nginx: 1).
+  // Required so req.ip (used by rate limiters) is the real client IP, not the proxy's.
+  TRUST_PROXY: process.env.TRUST_PROXY !== undefined
+    ? parseInt(process.env.TRUST_PROXY, 10) || 0
+    : process.env.NODE_ENV === 'production' ? 1 : 0,
+
+  // Refresh-token cookie SameSite: 'lax' when frontend and API share a site, 'none' when they are on
+  // different domains (requires HTTPS)
+
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/buddylink_db',
 
   JWT: {
@@ -21,16 +33,36 @@ const env = {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   },
 
+  // 'mock' lets development run checkouts without PayOS keys (never honored in production)
+  PAYMENT_MODE: process.env.PAYMENT_MODE || 'live',
+
   PAYOS: {
     CLIENT_ID: process.env.PAYOS_CLIENT_ID || '',
     API_KEY: process.env.PAYOS_API_KEY || '',
-    CHECKSUM_KEY: process.env.PAYOS_CHECKSUM_KEY || '',
+    // A fixed key is only used by the test suite (it signs its own webhooks)
+    CHECKSUM_KEY:
+      process.env.PAYOS_CHECKSUM_KEY ||
+      (process.env.NODE_ENV === 'test' ? 'test_payos_checksum_key_for_dev_and_test' : ''),
     RETURN_URL: process.env.PAYOS_RETURN_URL || 'http://localhost:5173/payment/success',
     CANCEL_URL: process.env.PAYOS_CANCEL_URL || 'http://localhost:5173/payment/cancel',
   },
 
-  GOOGLE_MAPS: {
-    API_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
+  // OpenStreetMap Overpass API for nearby kid-friendly places (free, no API key).
+  // Comma-separated instances, tried in order. Disabled in tests so they never call the public API.
+  OVERPASS: {
+    API_URLS: (process.env.OVERPASS_API_URLS || 'https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter')
+      .split(',')
+      .map((url) => url.trim())
+      .filter(Boolean),
+    ENABLED: process.env.OVERPASS_ENABLED
+      ? process.env.OVERPASS_ENABLED === 'true'
+      : process.env.NODE_ENV !== 'test',
+    TIMEOUT_MS: parseInt(process.env.OVERPASS_TIMEOUT_MS, 10) || 15000,
+  },
+
+  PLACES: {
+    // Fetch the places around a parent in the background when their area was never synced
+    AUTO_SYNC: process.env.PLACES_AUTO_SYNC !== 'false',
   },
 
   GOOGLE: {
@@ -43,6 +75,8 @@ const env = {
     SMTP_USER: process.env.SMTP_USER || '',
     SMTP_PASSWORD: process.env.SMTP_PASSWORD || '',
     FROM: process.env.EMAIL_FROM || 'no-reply@buddylink.com',
+    // When set, emails are sent through the Brevo HTTP API (port 443) instead of SMTP
+    BREVO_API_KEY: process.env.BREVO_API_KEY || '',
   },
 
   STORAGE: {

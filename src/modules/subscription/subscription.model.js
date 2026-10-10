@@ -7,11 +7,13 @@ const subscriptionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Parent',
       required: true,
+      unique: true,
       index: true,
     },
     planCode: {
       type: String,
       enum: Object.values(SUBSCRIPTION_PLAN_CODES),
+      default: SUBSCRIPTION_PLAN_CODES.FREE,
       required: true,
     },
     status: {
@@ -28,12 +30,18 @@ const subscriptionSchema = new mongoose.Schema(
       type: Date,
       default: null, // null for Free plan
     },
-    autoRenew: {
-      type: Boolean,
-      default: true,
-    },
-    cancelledAt: {
+    calendarAnchorAt: {
       type: Date,
+      default: null,
+    },
+    purchasedMonths: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    lastPaymentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Payment',
       default: null,
     },
   },
@@ -46,6 +54,7 @@ const subscriptionSchema = new mongoose.Schema(
 subscriptionSchema.index({ parentId: 1, status: 1 });
 
 const Subscription =
-  mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
+  mongoose.models.Subscription ||
+  mongoose.model('Subscription', subscriptionSchema);
 
 export default Subscription;

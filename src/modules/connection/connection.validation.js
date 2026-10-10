@@ -1,4 +1,5 @@
 import { body, param, query } from 'express-validator';
+import { CONNECTION_STATUS } from './connection.constants.js';
 
 export const requestConnectionValidation = [
   body('recipientId')
@@ -15,6 +16,13 @@ export const connectionIdParamValidation = [
 export const getConnectionsValidation = [
   query('status')
     .optional()
-    .isIn(['pending', 'accepted', 'declined', 'removed'])
+    .isIn(Object.values(CONNECTION_STATUS))
     .withMessage('Invalid status value'),
+  query('direction')
+    .optional()
+    .isIn(['incoming', 'outgoing'])
+    .withMessage('direction must be incoming or outgoing'),
+  query('search').optional().isString().trim().isLength({ max: 100 }).withMessage('search must be at most 100 characters'),
+  query('page').optional().isInt({ min: 1 }).withMessage('page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit must be between 1 and 100'),
 ];

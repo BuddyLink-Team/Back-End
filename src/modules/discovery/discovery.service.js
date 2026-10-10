@@ -1,19 +1,28 @@
 import discoveryRepository from './discovery.repository.js';
 import parentService from '../parent/parent.service.js';
-import childRepository from '../child/child.repository.js';
+import userService from '../user/user.service.js';
+import childService from '../child/child.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
+import connectionService from '../connection/connection.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { DiscoveryProfileDTO } from './discovery.dto.js';
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { MATCHING_WEIGHTS, DISCOVERY_DEFAULTS } from './discovery.constants.js';
+import { SUBSCRIPTION_PLAN_CODES } from '../subscription/subscription.constants.js';
 
 class DiscoveryService {
+  constructor() {
+    // Nearest discoverable children scored per request (instance field so tests can lower it)
+    this.candidatePoolSize = DISCOVERY_DEFAULTS.CANDIDATE_POOL_SIZE;
+  }
+
   /**
    * Get discovery profiles for the authenticated parent.
    * Performs geo-filtering, exclusion logic, Smart Matching scoring, and quota awareness.
    *
    * @param {string} userId - Authenticated user's ID (from JWT)
-   * @param {Object} queryFilters - { lat, lng, maxDistanceKm, ageMin, ageMax, interests }
+   * @param {Object} queryFilters - { lat, lng, maxDistanceKm, ageMin, ageMax, interests, childId }
    * @returns {Promise<{profiles: Array, meta: Object}>}
    */
   async getDiscoveryProfiles(userId, queryFilters) {
@@ -31,9 +40,6 @@ class DiscoveryService {
       ? parseFloat(queryFilters.lng)
       : parent.location?.coordinates?.coordinates?.[0];
 
-    console.log('[DEBUG] parent.location:', JSON.stringify(parent.location, null, 2));
-    console.log(`[DEBUG] lat: ${lat}, lng: ${lng}`);
-
     if (!lat || !lng || (lat === 0 && lng === 0)) {
       throw new AppError(
         'Location is required. Please update your profile location or provide lat/lng query parameters.',
@@ -47,28 +53,7 @@ class DiscoveryService {
       : parent.preferences?.maxDistanceKm || DISCOVERY_DEFAULTS.DEFAULT_MAX_DISTANCE_KM;
     const maxDistanceMeters = maxDistanceKm * 1000;
 
-    // Step 3: Get quota info (do not consume here, just check remaining)
-    const planFeatures = await subscriptionService.getParentPlanFeatures(parent._id);
-    const quotaSummary = await subscriptionService.getQuotaSummary(parent._id);
-    const remainingViews =
-      planFeatures.discoveryViewLimitPerDay === -1
-        ? -1
-        : Math.max(
-            0,
-            planFeatures.discoveryViewLimitPerDay -
-              (quotaSummary.usage.discoveryViewsToday || 0)
-          );
-    const isPremium = planFeatures.planCode !== 'free';
-
-    // Step 4: Get current parent's children (for interest matching)
-    const currentChildren = await childRepository.findByParentId(parent._id);
-
-    // Step 5: Build exclusion lists
-    const blockedParentIds = await safetyService.getBlockedParentIds(parent._id);
-    const swipedChildIds = await discoveryRepository.getSwipedChildIds(parent._id);
-    const excludeParentIds = [parent._id.toString(), ...blockedParentIds];
-
-    // Step 6: Parse filters
+    // Step 3: Parse filters
     const filters = {};
     if (queryFilters.ageMin !== undefined) {
       filters.ageMin = parseInt(queryFilters.ageMin, 10);
@@ -77,34 +62,82 @@ class DiscoveryService {
       filters.ageMax = parseInt(queryFilters.ageMax, 10);
     }
     if (queryFilters.interests) {
-      filters.interests = queryFilters.interests.split(',').map((s) => s.trim());
+      filters.interests = queryFilters.interests
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     }
 
-    // Step 7: Query nearby profiles via repository
-    const rawProfiles = await discoveryRepository.findNearbyProfiles(
+    // Step 4: Load quota info (do not consume here), current children and exclusion lists
+    const [quotaSummary, currentChildren, blockedParentIds, swipedChildIds] = await Promise.all([
+      subscriptionService.getQuotaSummary(parent._id),
+      childService.getActiveChildrenByParentId(parent._id),
+      safetyService.getBlockedParentIds(parent._id),
+      discoveryRepository.getSwipedChildIds(parent._id),
+    ]);
+
+    // Match against the selected child only (when the parent has several), otherwise all of them
+    const matchingChildren = queryFilters.childId
+      ? currentChildren.filter((c) => c._id.toString() === queryFilters.childId)
+      : currentChildren;
+    if (queryFilters.childId && matchingChildren.length === 0) {
+      throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
+    }
+
+    const viewLimit = quotaSummary.limits.discoveryViewsPerDay;
+    const remainingViews =
+      viewLimit === -1
+        ? -1
+        : Math.max(0, viewLimit - (quotaSummary.usage.discoveryViewsToday || 0));
+    const isPremium = quotaSummary.planCode !== SUBSCRIPTION_PLAN_CODES.FREE;
+    const excludeParentIds = [parent._id.toString(), ...blockedParentIds];
+
+    // Step 5: Collect candidates from the owning modules: visible parents inside the radius with
+    // an active account, then their children not swiped yet and matching the filters.
+    // The candidate pool is cut AFTER removing swiped children, so parents further away still
+    // show up once the nearest ones have all been swiped.
+    const nearbyParents = await parentService.findNearbyVisibleParents(
       [lng, lat],
       maxDistanceMeters,
       excludeParentIds,
-      swipedChildIds,
-      filters,
-      DISCOVERY_DEFAULTS.MAX_RESULTS_PER_REQUEST
+      DISCOVERY_DEFAULTS.MAX_NEARBY_PARENTS
     );
+    const activeUserIds = new Set(
+      await userService.getActiveUserIds(nearbyParents.map((p) => p.userId))
+    );
+    const candidateParents = nearbyParents.filter((p) => activeUserIds.has(p.userId.toString()));
+    const parentsById = new Map(candidateParents.map((p) => [p._id.toString(), p]));
 
-    // Calculate current parent's children interests set once
+    const candidateChildren = await childService.getDiscoverableChildren({
+      parentIds: [...parentsById.keys()],
+      excludeChildIds: swipedChildIds,
+      ...filters,
+    });
+
+    const rawProfiles = candidateChildren
+      .map((child) => {
+        const childParent = parentsById.get(child.parentId.toString());
+        return { child, parent: childParent, distanceKm: childParent.distanceKm };
+      })
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, this.candidatePoolSize);
+
+    // Calculate the matched children's interests set once
     const currentSet = new Set();
-    currentChildren.forEach((child) => {
+    matchingChildren.forEach((child) => {
       (child.interests || []).forEach((i) => currentSet.add(i.toLowerCase()));
       (child.favoriteActivities || []).forEach((a) => currentSet.add(a.toLowerCase()));
     });
 
-    // Step 8: Calculate match scores and sort
+    // Step 6: Calculate match scores and sort
     const scoredProfiles = rawProfiles.map((profile) => {
       const matchScore = this._calculateMatchScore(
         parent,
-        currentChildren,
+        matchingChildren,
         profile.child,
         profile.parent,
-        profile.distanceKm
+        profile.distanceKm,
+        maxDistanceKm
       );
 
       const targetSet = new Set();
@@ -125,11 +158,12 @@ class DiscoveryService {
       };
     });
 
-    // Sort by matchScore descending
+    // Sort by matchScore descending, then keep the best matches only
     scoredProfiles.sort((a, b) => b.matchScore - a.matchScore);
+    const topProfiles = scoredProfiles.slice(0, DISCOVERY_DEFAULTS.MAX_RESULTS_PER_REQUEST);
 
-    // Step 9: Shape response via DTO
-    const profiles = DiscoveryProfileDTO.toResponseList(scoredProfiles);
+    // Step 7: Shape response via DTO
+    const profiles = DiscoveryProfileDTO.toResponseList(topProfiles);
 
     return {
       profiles,
@@ -144,6 +178,7 @@ class DiscoveryService {
 
   /**
    * Record a swipe action (Like or Pass) and consume a discovery quota unit.
+   * A Like also sends a connection request to the target child's parent.
    *
    * @param {string} userId - Authenticated user's ID (from JWT)
    * @param {string} targetChildId - The child profile being swiped
@@ -157,15 +192,8 @@ class DiscoveryService {
       throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
 
-    // Step 2: Check and consume discovery quota
-    const quotaResult = await subscriptionService.checkAndConsumeQuota(
-      parent._id,
-      'discovery',
-      true
-    );
-
-    // Step 3: Validate target child exists and belongs to a different parent
-    const targetChild = await childRepository.findById(targetChildId);
+    // Step 2: Validate target child exists and belongs to a different parent
+    const targetChild = await childService.getActiveChildById(targetChildId);
     if (!targetChild) {
       throw new AppError('Target child profile not found', 404, 'CHILD_NOT_FOUND');
     }
@@ -177,7 +205,7 @@ class DiscoveryService {
       );
     }
 
-    // Step 4: Check if already swiped
+    // Step 3: Check if already swiped
     const existingSwipe = await discoveryRepository.findExistingSwipe(
       parent._id,
       targetChildId
@@ -190,7 +218,7 @@ class DiscoveryService {
       );
     }
 
-    // Step 5: Check if target parent is blocked
+    // Step 4: Check if target parent is blocked
     const isBlocked = await safetyService.isBlocked(
       parent._id,
       targetChild.parentId
@@ -203,7 +231,19 @@ class DiscoveryService {
       );
     }
 
-    // Step 6: Create swipe record
+    // Step 5: A Like sends a connection request — make sure it can be sent before spending quota
+    if (isLike) {
+      await connectionService.validateConnectionRequest(parent._id, targetChild.parentId);
+    }
+
+    // Step 6: Consume discovery quota only once the swipe is known to be valid
+    const quotaResult = await subscriptionService.checkAndConsumeQuota(
+      parent._id,
+      'discovery',
+      true
+    );
+
+    // Step 7: Create swipe record
     const swipe = await discoveryRepository.createSwipe(
       parent._id,
       targetChildId,
@@ -211,21 +251,23 @@ class DiscoveryService {
       isLike
     );
 
-    // If it's a Like, also create a Connection Request
+    // Step 8: Like = send connection request (consumes the monthly connection request quota)
+    let connection = null;
     if (isLike) {
-      const connectionService = (await import('../connection/connection.service.js')).default;
-      try {
-        await connectionService.createConnectionRequest(parent._id, targetChild.parentId);
-      } catch (err) {
-        // If connection request already exists or fails, just swallow it for the swipe flow
-        console.warn('Could not create connection request:', err.message);
-      }
+      const result = await connectionService.sendConnectionRequest(parent._id, targetChild.parentId);
+      connection = {
+        connectionId: result.connection._id,
+        status: result.connection.status,
+        isNew: result.isNew,
+        isMatched: result.isMatched,
+      };
     }
 
     return {
       swipeId: swipe._id,
       isLike: swipe.isLike,
       remainingViews: quotaResult.remaining,
+      connection,
     };
   }
 
@@ -242,14 +284,15 @@ class DiscoveryService {
    * @param {Object} targetChild - Target child document
    * @param {Object} targetParent - Target parent document
    * @param {number} distanceKm - Distance between parents in km
+   * @param {number} searchRadiusKm - Radius of the current search (query filter or preference)
    * @returns {number} Match score (0-100)
    */
-  _calculateMatchScore(currentParent, currentChildren, targetChild, targetParent, distanceKm) {
+  _calculateMatchScore(currentParent, currentChildren, targetChild, targetParent, distanceKm, searchRadiusKm) {
     let score = 0;
 
     score += this._calcAgeScore(currentParent, targetChild);
     score += this._calcInterestScore(currentChildren, targetChild);
-    score += this._calcDistanceScore(distanceKm, currentParent);
+    score += this._calcDistanceScore(distanceKm, searchRadiusKm);
     score += this._calcPreferenceScore(currentParent, targetParent);
 
     return Math.min(100, Math.max(0, Math.round(score)));
@@ -268,7 +311,7 @@ class DiscoveryService {
       return maxPoints * 0.5; // Neutral score when data is missing
     }
 
-    const childAge = DiscoveryProfileDTO.calculateAge(targetChild.dateOfBirth);
+    const childAge = calculateAgeYears(targetChild.dateOfBirth);
     if (childAge === null) return maxPoints * 0.5;
 
     const { min, max } = preferredRange;
@@ -325,12 +368,12 @@ class DiscoveryService {
 
   /**
    * Distance Proximity Score (max 20 points).
-   * Closer parents get higher scores. Linear decay from max distance.
+   * Closer parents get higher scores. Linear decay up to the radius of the current search,
+   * so every profile inside the searched radius can earn distance points.
    */
-  _calcDistanceScore(distanceKm, currentParent) {
+  _calcDistanceScore(distanceKm, searchRadiusKm) {
     const maxPoints = MATCHING_WEIGHTS.DISTANCE_PROXIMITY;
-    const maxDistanceKm =
-      currentParent.preferences?.maxDistanceKm || DISCOVERY_DEFAULTS.DEFAULT_MAX_DISTANCE_KM;
+    const maxDistanceKm = searchRadiusKm || DISCOVERY_DEFAULTS.DEFAULT_MAX_DISTANCE_KM;
 
     if (distanceKm <= 0) return maxPoints;
     if (distanceKm >= maxDistanceKm) return 0;

@@ -223,6 +223,25 @@ You can also verify data using MongoDB Compass.
 
 ---
 
+# Deploy on Render & PayOS Webhook
+
+Render's free instances **sleep after 15 minutes without requests** and take ~30-60 s to start again (the first request wakes them).
+
+## Register the PayOS webhook
+
+Webhook URL: `https://<your-api>.onrender.com/api/v1/subscriptions/webhook` (PayOS dashboard → Webhook).
+
+When the URL is saved, PayOS immediately POSTs a signed test payload (`orderCode: 123`); the API answers it with 200. If the instance is asleep, the ping can time out while it starts: open `https://<your-api>.onrender.com/api/v1` first so the server is awake, then save the URL.
+
+## If a webhook is missed
+
+Payments never depend on the webhook alone:
+
+- The checkout page polls `GET /subscriptions/payments/verify/:orderCode`, which asks PayOS directly.
+- Orders still unpaid after their link expired are reconciled with PayOS (at startup, every hour by the subscription expiry job, and when a parent opens the payment history): a `PAID` order is fulfilled, the others are closed as `expired` / `cancelled`.
+
+---
+
 # Required Packages (Don't Need To Run Again)
 
 ```bash

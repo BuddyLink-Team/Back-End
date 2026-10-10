@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import logger from "../shared/logger/index.js";
 import { errorResponse } from "../shared/response/index.js";
+import AppError from "../shared/exceptions/AppError.js";
 
 export const notFoundHandler = (req, res) => {
   return errorResponse(res, `Route not found: ${req.method} ${req.originalUrl}`, 404, {
@@ -14,11 +15,31 @@ export const notFoundHandler = (req, res) => {
   });
 };
 
+const INTERNAL_ERROR_MESSAGE = "Internal server error";
+
+/**
+ * Errors whose message is safe to show to clients: our AppError (operational) and
+ * client errors raised by Express/body-parser (e.g. malformed JSON, payload too large)
+ */
+const isClientSafeError = (error) =>
+  error instanceof AppError ||
+  error.isOperational === true ||
+  (error.expose === true && (error.statusCode || error.status) < 500);
+
 export const errorHandler = (error, _req, res, _next) => {
-  let statusCode = error.statusCode || 500;
-  let message = error.message || "Internal server error";
-  let code = error.code || "INTERNAL_SERVER_ERROR";
-  let details = Array.isArray(error.details) ? error.details : [];
+  const isSafe = isClientSafeError(error);
+  let statusCode = error.statusCode || error.status || 500;
+  let message = isSafe ? error.message || INTERNAL_ERROR_MESSAGE : INTERNAL_ERROR_MESSAGE;
+  let code = isSafe && typeof error.code === "string"
+    ? error.code
+    : statusCode < 500 ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR";
+  // Details may be an object (e.g. QUOTA_EXCEEDED: { feature, limit, resetAt } read by the paywall)
+  let details = isSafe && error.details !== undefined && error.details !== null ? error.details : [];
+
+  // Unknown errors (programming bugs, DB/network failures) never leak their message or details
+  if (!isSafe) {
+    statusCode = statusCode < 500 ? statusCode : 500;
+  }
 
   // Mongoose duplicate key error (code 11000)
   if (error.code === 11000) {
@@ -60,9 +81,10 @@ export const errorHandler = (error, _req, res, _next) => {
     }));
   }
 
-  // Log error using pino
+  // Log the original error (the client only receives the sanitized message above)
   logger.error({
-    message,
+    message: error.message,
+    clientMessage: message,
     code,
     statusCode,
     details,

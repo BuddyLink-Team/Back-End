@@ -45,7 +45,8 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 | 20 | `usage_quotas`        | Kiểm soát giới hạn hạn mức Free vs Premium theo ngày/tháng            | Mục 14.1 (Feature Quota Limiting)                           |
 | 21 | `reports`             | Báo cáo vi phạm an toàn, người dùng, tin nhắn                         | Mục 12.1 (Safety), 15.4 (Admin Safety)                      |
 | 22 | `blocks`              | Danh sách phụ huynh bị chặn                                               | Mục 4.3 & 12.1 (Block User)                                 |
-| 23 | `places_cache`        | Cache thông tin địa điểm vui chơi từ Google Places API                 | Mục 7.2 (Nearby Places & Activity)                          |
+| 23 | `places_cache`        | Cache thông tin địa điểm vui chơi từ OpenStreetMap (Overpass API)      | Mục 7.2 (Nearby Places & Activity)                          |
+| 24 | `places_sync_tiles`   | Các ô lưới bản đồ đã nạp vào `places_cache` (sync tay & tự động)       | Mục 7.2 (Nearby Places & Activity)                          |
 
 ---
 ## 2. Mermaid Entity Relationship Diagrams (Phân tách theo từng Module)
@@ -77,6 +78,7 @@ flowchart TD
         PD --- RR["reschedule_requests"]
         PD --- RF["ratings_feedbacks"]
         PC["places_cache"]
+        PST["places_sync_tiles"] -.-> PC
     end
 
     subgraph M4["Module 4: Chat & AI Assistant"]
@@ -141,7 +143,7 @@ erDiagram
         string avatarUrl
         string bio
         object location "address, area, city, coordinates (2dsphere)"
-        object preferences "preferredDays, timeSlots, locations, maxDistanceKm, ageRange, languages"
+        object preferences "preferredDays, timeSlots, locations, maxDistanceKm, ageRange"
         object privacySettings "isProfileHidden, connectionPrivacy, messagePrivacy"
         object verification "isEmailVerified, isPhoneVerified, isVerifiedParent"
         object streak "currentWeeklyStreak, longestStreak, lastCompletedPlaydateWeek"
@@ -155,7 +157,6 @@ erDiagram
         string displayName
         date dateOfBirth "Tính tuổi chính xác"
         string gender "boy | girl | other"
-        string avatarUrl
         string[] interests "Lego, vẽ tranh, khủng long..."
         string[] favoriteActivities "Đạp xe, bơi lội, công viên..."
         string[] personality "Năng động, hòa đồng, sáng tạo..."
@@ -172,6 +173,7 @@ erDiagram
         string type "phone_otp | password_reset | email_verify"
         date expiresAt "TTL Index: tự hủy khi hết hạn"
         boolean isUsed
+        int attempts "Số lần nhập sai, vô hiệu sau 5 lần"
         date createdAt
     }
 
@@ -214,6 +216,7 @@ erDiagram
     CONNECTIONS {
         ObjectId _id PK
         ObjectId[] parents "Sorted [minId, maxId] triệt tiêu trùng 2 chiều"
+        string pairKey "minId_maxId, unique khi pending/accepted"
         ObjectId requesterId FK "Ref: parents._id"
         ObjectId recipientId FK "Ref: parents._id"
         string status "pending | accepted | declined | removed"
@@ -229,8 +232,8 @@ erDiagram
 
 ### 2.4 Module 3: Sự kiện Playdate, Đổi lịch, Đánh giá & Địa điểm (Playdates, Reschedule, Feedback & Places)
 
-> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`  
-> **Nghiệp vụ:** Tổ chức lịch gặp gỡ (không có activityCategory và endTime), quy trình đồng thuận đổi lịch (không có newEndTime), đánh giá sau buổi chơi, cache địa điểm Google Places.
+> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`, `places_sync_tiles`  
+> **Nghiệp vụ:** Tổ chức lịch gặp gỡ (không có activityCategory và endTime), quy trình đồng thuận đổi lịch (không có newEndTime), đánh giá sau buổi chơi, cache địa điểm OpenStreetMaps.
 
 ```mermaid
 erDiagram
@@ -286,14 +289,15 @@ erDiagram
 
     PLACES_CACHE {
         ObjectId _id PK
-        string googlePlaceId UK "Unique ID từ Google Places API"
+        string osmId UK "ID phần tử OpenStreetMap: osm-node-123 | osm-way-456 | osm-relation-789"
         string name "Tên khu vui chơi/công viên"
-        string address
+        string address "Có thể rỗng, bổ sung bằng reverse geocoding khi xem chi tiết"
         object coordinates "GeoJSON Point [lng, lat] (2dsphere)"
         string placeType "park | kids_cafe | playground | library | sports_center | workshop"
-        float rating "Điểm đánh giá Google"
-        int userRatingsTotal
-        date lastFetchedAt "Kiểm tra TTL làm mới cache"
+        string openingHours
+        string phone
+        string website
+        date lastFetchedAt "Kiểm tra TTL làm mới cache (30 ngày)"
     }
 ```
 
@@ -400,7 +404,7 @@ erDiagram
 ```mermaid
 erDiagram
     SUBSCRIPTION_PLANS ||--o{ SUBSCRIPTIONS : "plan blueprint (planCode)"
-    PARENTS ||--o{ SUBSCRIPTIONS : "subscribes (1:N)"
+    PARENTS ||--|| SUBSCRIPTIONS : "subscribes (1:1)"
     SUBSCRIPTIONS ||--o{ PAYMENTS : "invoices (1:N)"
     PARENTS ||--o{ PAYMENTS : "payer (parentId)"
     PARENTS ||--o{ USAGE_QUOTAS : "tracks usage (1:N)"
@@ -411,6 +415,7 @@ erDiagram
         string name "Tên gói hiển thị"
         int price "0 hoặc số tiền VNĐ"
         string currency "VND"
+        int durationMonths "0 (Free) | 1 | 12"
         string billingCycle "monthly | yearly | none"
         object features "childProfilesLimit, discoveryViewLimitPerDay, connectionRequestsLimitPerMonth..."
         boolean isActive
@@ -418,13 +423,14 @@ erDiagram
 
     SUBSCRIPTIONS {
         ObjectId _id PK
-        ObjectId parentId FK "Ref: parents._id"
+        ObjectId parentId FK,UK "Ref: parents._id (1 document / parent)"
         string planCode FK "Ref: subscription_plans.planCode"
-        string status "active | cancelled | expired"
+        string status "active | expired"
         date startDate
         date endDate "null nếu gói Free"
-        boolean autoRenew
-        date cancelledAt
+        date calendarAnchorAt "Mốc tính tháng của chuỗi gia hạn liên tục"
+        int purchasedMonths "Tổng số tháng đã mua liên tục"
+        ObjectId lastPaymentId FK "Ref: payments._id"
         date createdAt
         date updatedAt
     }
@@ -433,12 +439,18 @@ erDiagram
         ObjectId _id PK
         ObjectId subscriptionId FK "Ref: subscriptions._id"
         ObjectId parentId FK "Ref: parents._id"
+        int orderCode UK "Mã đơn PayOS"
+        string idempotencyKey "Unique theo parentId"
+        object planSnapshot "planCode, name, price, currency, durationMonths"
         int amount "Số tiền giao dịch"
         string currency "VND"
-        string paymentMethod "momo | vnpay | zalopay | credit_card"
-        string transactionId UK "Unique mã giao dịch từ cổng thanh toán"
-        string status "pending | success | failed"
+        string paymentMethod "payos"
+        string status "creating | pending | success | failed | cancelled | expired"
+        string paymentLinkId UK "PayOS payment link"
+        string transactionId "Mã giao dịch ngân hàng"
+        date expiresAt "Link thanh toán hết hạn sau 15 phút"
         date paidAt
+        date fulfilledAt
         date createdAt
     }
 
@@ -446,8 +458,8 @@ erDiagram
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
         string periodType "daily | monthly"
-        string periodValue "YYYY-MM-DD (daily) hoặc YYYY-MM (monthly)"
-        object counters "discoveryViews (daily) | connectionRequests, playdatesCreated, aiAssistant (monthly)"
+        string periodValue "YYYY-MM-DD (daily) hoặc YYYY-MM (monthly), giờ Việt Nam"
+        object counters "discoveryViews (daily) | connectionRequests, playdatesCreated, playdatesParticipated, aiAssistantRequests (monthly)"
         date updatedAt
     }
 ```
@@ -539,8 +551,6 @@ interface IParentPreferences {
   preferredLocations?: ("indoor" | "outdoor" | "park" | "kids_cafe" | "home")[]; // Địa điểm ưa thích
   maxDistanceKm?: number; // Bán kính tìm kiếm bạn chơi tối đa (km)
   preferredAgeRange?: { min: number; max: number }; // Khoảng tuổi bạn chơi mong muốn
-  languages?: string[]; // Ngôn ngữ giao tiếp: ['Vietnamese', 'English']
-  additionalNotes?: string; // Ghi chú phong cách nuôi dạy hoặc lưu ý riêng
 }
 
 interface IParent {
@@ -612,6 +622,7 @@ interface IAuthToken {
   tokenHash: string; // Hash của mã OTP hoặc token ngẫu nhiên (SHA-256 / bcrypt)
   type: "phone_otp" | "password_reset" | "email_verify"; // Mục đích xác thực
   isUsed: boolean; // Trạng thái: true nếu đã xác thực thành công (Default: false)
+  attempts: number; // Số lần nhập sai mã (Default: 0). Đạt OTP_CONFIG.MAX_ATTEMPTS (5) thì mã bị vô hiệu
   expiresAt: Date; // Thời điểm hết hạn (OTP: 3-5 phút, Reset token: 15-30 phút)
   createdAt: Date;
 }
@@ -662,7 +673,6 @@ interface IChild {
   displayName: string; // Tên hoặc biệt danh
   dateOfBirth: Date; // Ngày sinh để tính tuổi chính xác
   gender: "boy" | "girl" | "other";
-  avatarUrl?: string; // Ảnh của bé
 
   interests: string[]; // ['Lego', 'Vẽ tranh', 'Khủng long', 'Âm nhạc']
   favoriteActivities: string[]; // ['Đạp xe', 'Bơi lội', 'Đi công viên', 'Đọc sách']
@@ -713,6 +723,7 @@ _Ánh xạ: Mục 4.3._
 interface IConnection {
   _id: ObjectId;
   parents: [ObjectId, ObjectId]; // Mảng 2 phần tử luôn được sort [minId, maxId] để triệt tiêu bài toán đảo chiều (Reverse Duplicate)
+  pairKey: string; // `${minId}_${maxId}`, tự sinh từ parents trước khi validate; dùng làm khóa unique của cặp
   requesterId: ObjectId; // Tham chiếu parents._id gửi lời mời
   recipientId: ObjectId; // Tham chiếu parents._id nhận lời mời
   status: "pending" | "accepted" | "declined" | "removed";
@@ -726,7 +737,8 @@ interface IConnection {
 
 _Indexes:_
 
-- `{ parents: 1 }` (unique, `partialFilterExpression: { status: { $in: ["pending", "accepted"] } }` - Chống trùng 2 chiều khi đang chờ hoặc đã kết nối; cho phép gửi lại nếu bị `declined` hoặc `removed`)
+- `{ pairKey: 1 }` (unique, `partialFilterExpression: { status: { $in: ["pending", "accepted"] } }` - Chống trùng 2 chiều khi đang chờ hoặc đã kết nối; cho phép gửi lại nếu bị `declined` hoặc `removed`)
+  - ⚠️ Không đặt unique trên mảng `parents`: index trên mảng là multikey nên MongoDB kiểm tra trùng theo **từng phần tử**, khiến mỗi phụ huynh chỉ có được 1 kết nối pending/accepted.
 - `{ parents: 1, status: 1 }` (Tìm danh sách bạn bè / trạng thái quan hệ 2 chiều cực nhanh)
 - `{ recipientId: 1, status: 1 }` (Lấy danh sách lời mời kết nối đang chờ duyệt)
 - `{ requesterId: 1, createdAt: 1 }` (Kiểm tra quota gửi request trong tháng)
@@ -812,7 +824,7 @@ interface IPlaydate {
   location: {
     name: string; // "Công viên Gia Định", "TiNiWorld Landmark 81"
     address: string;
-    placeId?: string; // Google Place ID
+    placeId?: string; // places_cache.osmId (OpenStreetMap)
     coordinates?: {
       type: "Point";
       coordinates: [number, number]; // [lng, lat]
@@ -823,12 +835,12 @@ interface IPlaydate {
   status: "upcoming" | "completed" | "cancelled";
 
   cancellation?: {
-    cancelledBy: ObjectId;
+    cancelledBy: ObjectId | null; // null khi hệ thống tự hủy (job 0h: quá ngày mà không ai Accept)
     reason?: string;
     cancelledAt: Date;
   };
 
-  completedAt?: Date;
+  completedAt?: Date; // Host bấm hoàn thành khi đến giờ, hoặc job 0h tự hoàn thành buổi đã qua ngày có người Accept
   chatConversationId?: ObjectId; // Tham chiếu conversations._id (Chat riêng cho Playdate)
 
   createdAt: Date;
@@ -841,7 +853,7 @@ _Indexes:_
 - `{ hostParentId: 1, status: 1 }`
 - `{ "participants.parentId": 1, status: 1 }`
 - `{ scheduledDate: 1, status: 1 }`
-- `{ "location.coordinates": "2dsphere" }`
+- `{ "location.coordinates": "2dsphere" }` (sparse: địa điểm nhập tay có thể không có tọa độ, không gán mặc định `[0, 0]`)
 
 ---
 
@@ -1055,9 +1067,9 @@ _Indexes:_
 ```typescript
 interface IPlacesCache {
   _id: ObjectId;
-  googlePlaceId: string; // Unique ID từ Google Places API
-  name: string; // Tên địa điểm (ví dụ: "Khu vui chơi KizCiti")
-  address: string;
+  osmId: string; // ID phần tử OpenStreetMap: "osm-node-123" | "osm-way-456" | "osm-relation-789"
+  name: string; // Tên địa điểm (ví dụ: "Công viên APEC")
+  address: string; // Từ tag addr:* của OSM; rỗng thì bổ sung bằng Nominatim reverse khi xem chi tiết
   coordinates: {
     type: "Point";
     coordinates: [number, number]; // [longitude, latitude]
@@ -1069,16 +1081,47 @@ interface IPlacesCache {
     | "library"
     | "sports_center"
     | "workshop";
-  rating?: number;
-  userRatingsTotal?: number;
-  lastFetchedAt: Date; // Dùng để kiểm tra TTL làm mới cache (ví dụ sau 30 ngày)
+  openingHours?: string; // Tag opening_hours của OSM
+  phone?: string;
+  website?: string;
+  lastFetchedAt: Date; // Làm mới từ OpenStreetMap khi quá 30 ngày (PLACES_DEFAULTS.CACHE_TTL_DAYS)
 }
 ```
 
 _Indexes:_
 
-- `{ googlePlaceId: 1 }` (unique)
+- `{ osmId: 1 }` (unique)
 - `{ coordinates: "2dsphere" }` (Tìm kiếm địa điểm vui chơi xung quanh tọa độ phụ huynh)
+
+#### E. `places_sync_tiles` Collection (Mục 7.2)
+
+Bản đồ được chia thành lưới cố định gồm các ô `cellSizeDeg` độ (mặc định 0.1°, khoảng 11 km), căn theo bội số của kích thước ô. Mỗi ô đã nạp địa điểm từ OpenStreetMap vào `places_cache` có một bản ghi, do lệnh `npm run places:sync` (`--city`, `--area`, `--bbox`) hoặc do server tự sync quanh phụ huynh khi họ tìm địa điểm (`PLACES_AUTO_SYNC`).
+
+```typescript
+interface IPlacesSyncTile {
+  _id: ObjectId;
+  key: string; // "<cellSizeDeg>:<row>:<col>", row = floor(lat / size), col = floor(lng / size)
+  cellSizeDeg: number;
+  bbox: [number, number, number, number]; // [south, west, north, east]
+  status: "syncing" | "done" | "failed";
+  placesCount: number; // Số địa điểm nhận được ở lần sync gần nhất
+  startedAt?: Date; // Lúc một lần tự sync giữ khóa ô này
+  syncedAt?: Date; // Lần sync thành công gần nhất
+  lastError: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+_Quy tắc tự sync:_
+
+- Ô trong bán kính 5 km quanh vị trí tìm kiếm được sync khi chưa có bản ghi, `done` quá 30 ngày, `failed` quá 1 giờ, hoặc kẹt `syncing` quá 15 phút (server khởi động lại giữa chừng).
+- Khóa ô bằng một lệnh `findOneAndUpdate` upsert atomic: nhiều tìm kiếm cùng lúc chỉ sync ô đó một lần.
+- `GET /places/nearby` trả `meta.areaSyncing = true` khi có ô quanh vị trí đang được sync; app tự tải lại danh sách sau ít phút.
+
+_Indexes:_
+
+- `{ key: 1 }` (unique)
 
 ---
 
@@ -1090,15 +1133,17 @@ _Indexes:_
 interface ISubscriptionPlan {
   _id: ObjectId;
   planCode: "free" | "premium_monthly" | "premium_yearly";
-  name: string; // "Gói Miễn Phí", "Gói Premium Hàng Tháng", "Gói Premium Hàng Năm"
-  price: number; // 0 VNĐ hoặc giá theo tháng/năm
+  name: string; // "Gói Miễn Phí (Free)", "Gói Cao Cấp 1 Tháng", "Gói Cao Cấp 1 Năm"
+  price: number; // 0 VNĐ hoặc giá của cả gói (99.000 / 990.000)
   currency: "VND";
+  durationMonths: number; // Free: 0, Monthly: 1, Yearly: 12 (số tháng được cộng khi mua)
   billingCycle: "monthly" | "yearly" | "none";
   features: {
     childProfilesLimit: number; // Free: 1, Premium: -1 (unlimited)
     discoveryViewLimitPerDay: number; // Free: 5, Premium: -1
     connectionRequestsLimitPerMonth: number; // Free: 5, Premium: -1
-    playdatesLimitPerMonth: number; // Free: 3, Premium: -1
+    playdatesLimitPerMonth: number; // Free: 3, Premium: -1 (tạo Playdate)
+    playdateParticipationLimitPerMonth: number; // Free: 3, Premium: -1 (tham gia Playdate)
     aiAssistantLimitPerMonth: number; // Free: 5, Premium: -1
   };
   isActive: boolean; // Default: true
@@ -1109,18 +1154,23 @@ _Indexes:_
 
 - `{ planCode: 1 }` (unique)
 
+> Gói mặc định được seed khi server khởi động, chỉ tạo gói còn thiếu (không ghi đè giá đã cấu hình).
+
 #### B. `subscriptions` Collection (Mục 14.2)
+
+Mô hình **trả trước từng lần** qua PayOS (payOS không hỗ trợ trừ tiền định kỳ): mỗi phụ huynh có đúng 1 document. Mua Premium khi gói còn hạn thì cộng dồn tháng theo lịch (giữ `calendarAnchorAt`), khi đã hết hạn thì tính lại từ lúc thanh toán. Gói trả phí quá `endDate` được đưa về Free (job hết hạn hoặc ngay khi đọc).
 
 ```typescript
 interface ISubscription {
   _id: ObjectId;
-  parentId: ObjectId; // Tham chiếu parents._id
-  planCode: "free" | "premium_monthly" | "premium_yearly";
-  status: "active" | "cancelled" | "expired";
+  parentId: ObjectId; // Tham chiếu parents._id (unique)
+  planCode: "free" | "premium_monthly" | "premium_yearly"; // Default: "free"
+  status: "active" | "expired";
   startDate: Date;
   endDate?: Date; // null nếu là gói Free
-  autoRenew: boolean; // Default: true
-  cancelledAt?: Date;
+  calendarAnchorAt?: Date; // Mốc tính tháng của chuỗi Premium liên tục, null với Free
+  purchasedMonths: number; // Tổng số tháng đã mua trong chuỗi liên tục, Default: 0
+  lastPaymentId?: ObjectId; // Tham chiếu payments._id của lần thanh toán gần nhất
   createdAt: Date;
   updatedAt: Date;
 }
@@ -1128,29 +1178,55 @@ interface ISubscription {
 
 _Indexes:_
 
-- `{ parentId: 1, status: 1 }` (Kiểm tra gói dịch vụ hiện tại của phụ huynh)
+- `{ parentId: 1 }` (unique)
+- `{ parentId: 1, status: 1 }`
 
 #### C. `payments` Collection (Mục 14.2 & 15.6)
+
+Payment được lưu **trước** khi gọi PayOS (`status: creating`), rồi chuyển `pending` khi có link. Webhook và API verify cùng gọi một bước fulfill idempotent (không bao giờ hạ một payment `success`).
 
 ```typescript
 interface IPayment {
   _id: ObjectId;
-  subscriptionId: ObjectId; // Tham chiếu subscriptions._id
   parentId: ObjectId; // Tham chiếu parents._id
+  subscriptionId?: ObjectId; // Tham chiếu subscriptions._id (gán khi thanh toán thành công)
+  orderCode: number; // Mã đơn gửi PayOS
+  idempotencyKey?: string; // Header Idempotency-Key của request checkout
+  fingerprint?: string;
+  planSnapshot: {
+    planCode: "premium_monthly" | "premium_yearly";
+    name: string;
+    price: number;
+    currency: "VND";
+    durationMonths: number;
+  };
   amount: number; // Số tiền thanh toán (VNĐ)
   currency: "VND";
-  paymentMethod: "vnpay" | "momo" | "zalopay" | "credit_card";
-  transactionId: string; // Mã giao dịch do cổng thanh toán trả về
-  status: "pending" | "success" | "failed";
+  paymentMethod: "payos";
+  status: "creating" | "pending" | "success" | "failed" | "cancelled" | "expired";
+  paymentLinkId?: string; // ID link thanh toán PayOS
+  checkoutUrl?: string;
+  qrCode?: string; // Chuỗi VietQR
+  transactionId?: string; // Mã tham chiếu giao dịch ngân hàng
+  bankInfo?: { bin: string; accountNumber: string; accountName: string; description: string };
+  expiresAt: Date; // Link hết hạn sau 15 phút
   paidAt?: Date;
+  fulfilledAt?: Date; // Thời điểm đã cộng tháng vào subscription
+  lastReconciledAt?: Date; // Lần đối soát gần nhất với PayOS (tối đa 1 lần / 10 giây)
+  failureReason?: string;
+  grantResult?: { effectiveStartDate: Date; effectiveEndDate: Date; monthsGranted: number };
+  rawWebhookData?: object;
   createdAt: Date;
+  updatedAt: Date;
 }
 ```
 
 _Indexes:_
 
-- `{ transactionId: 1 }` (unique)
-- `{ parentId: 1, createdAt: -1 }` (Lịch sử thanh toán của phụ huynh)
+- `{ orderCode: 1 }` (unique)
+- `{ parentId: 1, idempotencyKey: 1 }` (unique khi có idempotencyKey)
+- `{ paymentLinkId: 1 }` (unique khi có paymentLinkId)
+- `{ parentId: 1, createdAt: -1, _id: -1 }` (Lịch sử thanh toán của phụ huynh)
 
 #### D. `usage_quotas` Collection (Mục 14.1 Feature Quota Limiting)
 
@@ -1161,7 +1237,7 @@ interface IUsageQuota {
   _id: ObjectId;
   parentId: ObjectId; // Tham chiếu parents._id
   periodType: "daily" | "monthly";
-  periodValue: string; // 'YYYY-MM-DD' (nếu daily) hoặc 'YYYY-MM' (nếu monthly)
+  periodValue: string; // 'YYYY-MM-DD' (nếu daily) hoặc 'YYYY-MM' (nếu monthly), theo giờ Việt Nam (APP_TIMEZONE)
 
   counters: {
     // Chỉ dùng khi periodType === 'daily':
@@ -1170,7 +1246,7 @@ interface IUsageQuota {
     // Chỉ dùng khi periodType === 'monthly':
     connectionRequests?: number; // Free: tối đa 5 requests/tháng
     playdatesCreated?: number; // Free: tối đa 3 playdates/tháng
-    playdatesJoined?: number; // Free: tối đa 3 playdates/tháng
+    playdatesParticipated?: number; // Free: tối đa 3 playdates/tháng
     aiAssistantRequests?: number; // Free: tối đa 5 requests/tháng
   };
 
