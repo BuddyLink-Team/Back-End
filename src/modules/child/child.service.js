@@ -155,6 +155,31 @@ class ChildService {
   }
 
   /**
+   * Active children grouped by parent, in one query (lists showing many families)
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Map<string, Array<Object>>>} parentId -> children (newest first)
+   */
+  async getActiveChildrenByParentIds(parentIds) {
+    const children = await childRepository.findByParentIds(parentIds);
+    const byParent = new Map();
+    for (const child of children) {
+      const key = child.parentId.toString();
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(child);
+    }
+    return byParent;
+  }
+
+  /**
+   * IDs of the parents having a child whose name contains the text
+   * @param {string} search
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findParentIdsByChildName(search) {
+    return childRepository.findParentIdsByChildName(search);
+  }
+
+  /**
    * Get all active children of a parent, shaped for API responses (playdate invite list)
    * @param {string|mongoose.Types.ObjectId} parentId
    */

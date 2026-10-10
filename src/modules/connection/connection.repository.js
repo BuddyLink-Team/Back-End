@@ -75,6 +75,69 @@ class ConnectionRepository {
       status: CONNECTION_STATUS.PENDING,
     });
   }
+
+  /**
+   * @param {string|ObjectId} connectionId
+   * @returns {Promise<Object|null>}
+   */
+  async findById(connectionId) {
+    return Connection.findById(connectionId).lean();
+  }
+
+  /**
+   * Move a connection from one status to another (atomic: null when it is no longer in fromStatus)
+   * @param {string|ObjectId} connectionId
+   * @param {string} fromStatus - Status the connection must still have
+   * @param {string} toStatus - accepted | declined | removed
+   * @returns {Promise<Object|null>} Updated connection
+   */
+  async transitionStatus(connectionId, fromStatus, toStatus) {
+    const timestampField = {
+      [CONNECTION_STATUS.ACCEPTED]: 'connectedAt',
+      [CONNECTION_STATUS.DECLINED]: 'declinedAt',
+      [CONNECTION_STATUS.REMOVED]: 'removedAt',
+    }[toStatus];
+
+    return Connection.findOneAndUpdate(
+      { _id: connectionId, status: fromStatus },
+      { $set: { status: toStatus, ...(timestampField ? { [timestampField]: new Date() } : {}) } },
+      { new: true }
+    ).lean();
+  }
+
+  /**
+   * One page of a parent's connections, newest first, both sides populated (public card fields only)
+   * @param {string|ObjectId} parentId
+   * @param {Object} [filters]
+   * @param {string} [filters.status]
+   * @param {'incoming'|'outgoing'} [filters.direction]
+   * @param {Array<string|ObjectId>} [filters.excludeParentIds] - Hidden parents (block relationships)
+   * @param {Array<string|ObjectId>} [filters.partnerIds] - Only connections with one of these parents (search)
+   * @param {{ page: number, limit: number }} pagination
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPageForParent(parentId, { status, direction, excludeParentIds = [], partnerIds } = {}, { page, limit }) {
+    const conditions = [{ parents: parentId }];
+    if (status) conditions.push({ status });
+    if (direction === 'incoming') conditions.push({ recipientId: parentId });
+    if (direction === 'outgoing') conditions.push({ requesterId: parentId });
+    if (excludeParentIds.length) conditions.push({ parents: { $nin: excludeParentIds } });
+    if (partnerIds) conditions.push({ parents: { $in: partnerIds } });
+    const query = { $and: conditions };
+
+    const parentFields = 'fullName avatarUrl location.area location.city verification.isVerifiedParent preferences';
+    const [items, total] = await Promise.all([
+      Connection.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('requesterId', parentFields)
+        .populate('recipientId', parentFields)
+        .lean(),
+      Connection.countDocuments(query),
+    ]);
+    return { items, total };
+  }
 }
 
 export const connectionRepository = new ConnectionRepository();

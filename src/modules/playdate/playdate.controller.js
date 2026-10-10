@@ -34,7 +34,7 @@ class PlaydateController {
    */
   async getInvitableFriends(req, res, next) {
     try {
-      const friends = await playdateService.getInvitableFriends(req.userId);
+      const friends = await playdateService.getInvitableFriends(req.userId, req.query);
       return successResponse(res, friends, 'Connected friends retrieved successfully', 200);
     } catch (error) {
       return next(error);

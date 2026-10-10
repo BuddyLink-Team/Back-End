@@ -59,6 +59,28 @@ class ChildRepository {
     return Child.find(query).lean();
   }
 
+  /**
+   * Active children of several parents in one query, newest first
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Array<Object>>}
+   */
+  async findByParentIds(parentIds) {
+    if (!parentIds.length) return [];
+    return Child.find({ parentId: { $in: parentIds }, isArchived: false }).sort({ createdAt: -1 }).lean();
+  }
+
+  /**
+   * IDs of the parents having an active child whose name contains the text
+   * @param {string} search
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findParentIdsByChildName(search) {
+    return Child.distinct('parentId', {
+      displayName: { $regex: escapeRegExp(search), $options: 'i' },
+      isArchived: false,
+    });
+  }
+
   async findByParentId(parentId, session = null) {
     const query = Child.find({ parentId, isArchived: false }).sort({ createdAt: -1 });
     if (session) query.session(session);

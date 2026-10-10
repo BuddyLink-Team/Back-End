@@ -195,3 +195,11 @@ export const voteRescheduleValidation = [
     .isIn(['accepted', 'declined'])
     .withMessage('Vote choice must be accepted or declined'),
 ];
+
+/**
+ * Validation rules for the invitable friends list
+ */
+export const getInvitableFriendsValidation = [
+  query('search').optional().isString().trim().isLength({ max: 100 }).withMessage('search must be at most 100 characters'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit must be between 1 and 100'),
+];

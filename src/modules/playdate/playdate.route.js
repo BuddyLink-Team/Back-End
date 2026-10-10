@@ -6,6 +6,7 @@ import { authorizeRoles } from '../../middlewares/role.middleware.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import {
   getPlaydatesValidation,
+  getInvitableFriendsValidation,
   playdateIdParamValidation,
   createPlaydateValidation,
   cancelPlaydateValidation,
@@ -27,7 +28,7 @@ router.get('/', validate(getPlaydatesValidation), playdateController.getPlaydate
 router.post('/', validate(createPlaydateValidation), playdateController.createPlaydate);
 
 // GET /api/v1/playdates/friends (Invitable connected friends)
-router.get('/friends', playdateController.getInvitableFriends);
+router.get('/friends', validate(getInvitableFriendsValidation), playdateController.getInvitableFriends);
 
 // GET /api/v1/playdates/:id
 router.get('/:id', validate(playdateIdParamValidation), playdateController.getPlaydateById);

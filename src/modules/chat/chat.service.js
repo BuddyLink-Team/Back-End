@@ -129,6 +129,24 @@ class ChatService {
   }
 
   /**
+   * Direct messages need an accepted connection unless both parents accept messages from everyone
+   * (messagePrivacy). Checked when the conversation is opened and on every message, so removing
+   * the connection also stops an existing direct chat.
+   * @private
+   */
+  async _assertDirectMessagingAllowed(currentParent, targetParent) {
+    const targetPrivacy = targetParent.privacySettings?.messagePrivacy || MESSAGE_PRIVACY.CONNECTED_ONLY;
+    const currentPrivacy = currentParent.privacySettings?.messagePrivacy || MESSAGE_PRIVACY.CONNECTED_ONLY;
+
+    if (targetPrivacy === MESSAGE_PRIVACY.CONNECTED_ONLY || currentPrivacy === MESSAGE_PRIVACY.CONNECTED_ONLY) {
+      const isConnected = await connectionService.areConnected(currentParent._id, targetParent._id);
+      if (!isConnected) {
+        throw new AppError('You can only message parents you are connected with', 403, 'CONNECTION_REQUIRED');
+      }
+    }
+  }
+
+  /**
    * Get or create a 1-on-1 direct conversation with another parent
    */
   async getOrCreateDirectConversation(parentOrUserId, targetParentId) {
@@ -150,15 +168,7 @@ class ChatService {
     }
 
     // 2. Check messagePrivacy: connected_only and verify active connection
-    const targetPrivacy = targetParent.privacySettings?.messagePrivacy || MESSAGE_PRIVACY.CONNECTED_ONLY;
-    const currentPrivacy = currentParent.privacySettings?.messagePrivacy || MESSAGE_PRIVACY.CONNECTED_ONLY;
-
-    if (targetPrivacy === MESSAGE_PRIVACY.CONNECTED_ONLY || currentPrivacy === MESSAGE_PRIVACY.CONNECTED_ONLY) {
-      const isConnected = await connectionService.areConnected(currentParent._id, targetParent._id);
-      if (!isConnected) {
-        throw new AppError('You can only message parents you are connected with', 403, 'CONNECTION_REQUIRED');
-      }
-    }
+    await this._assertDirectMessagingAllowed(currentParent, targetParent);
 
     // Check if direct conversation already exists
     const existing = await chatRepository.findDirectConversation(currentParent._id, targetParent._id);
@@ -223,6 +233,12 @@ class ChatService {
     const isBlocked = await safetyService.isBlockedWithAny(parent._id, recipientIds);
     if (isBlocked) {
       throw new AppError('Cannot send messages because one of the users has blocked the other', 403, 'USER_BLOCKED');
+    }
+
+    // A direct chat continues only while the parents may still message each other (connection removed)
+    if (conversation.type === CONVERSATION_TYPES.DIRECT && recipientIds.length === 1) {
+      const recipient = await parentService.getParentById(recipientIds[0]);
+      if (recipient) await this._assertDirectMessagingAllowed(parent, recipient);
     }
 
     // Strict validation of payload for both HTTP and Socket

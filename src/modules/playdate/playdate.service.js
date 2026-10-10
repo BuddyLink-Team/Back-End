@@ -8,7 +8,8 @@ import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { getScheduledStart, getStartOfZonedDay } from '../../shared/helpers/date.helper.js';
 import { PlaydateResponseDTO, RescheduleResponseDTO } from './playdate.dto.js';
-import { PLAYDATE_STATUS, PARTICIPANT_STATUS, RESCHEDULE_STATUS } from './playdate.constants.js';
+import { PLAYDATE_STATUS, PARTICIPANT_STATUS, RESCHEDULE_STATUS, INVITABLE_FRIENDS_LIMIT } from './playdate.constants.js';
+import { PAGINATION } from '../../shared/constants/index.js';
 import { emitPlaydateEvent, PLAYDATE_EVENTS } from './playdate.events.js';
 
 const toId = (ref) => (ref?._id || ref)?.toString();
@@ -280,9 +281,11 @@ class PlaydateService {
   }
 
   /**
-   * Get connected friends and their children eligible for playdate invitation
+   * Connected friends (and their children) that can be invited to a playdate, sorted by name
+   * @param {string} userId
+   * @param {{ search?: string, limit?: number|string }} [options] - search: friend name; limit: default 50
    */
-  async getInvitableFriends(userId) {
+  async getInvitableFriends(userId, { search, limit } = {}) {
     const parentId = await this._getParentId(userId);
     const [connections, blockedIds] = await Promise.all([
       connectionService.getAcceptedConnections(parentId),
@@ -290,34 +293,37 @@ class PlaydateService {
     ]);
     // Parents in a block relationship (either direction) cannot be invited
     const blockedSet = new Set(blockedIds.map(String));
+    const searchText = search?.trim().toLowerCase();
+    const maxFriends = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || INVITABLE_FRIENDS_LIMIT));
 
-    const friends = [];
-    for (const conn of connections) {
-      const friendParent = conn.parents.find((p) => toId(p) !== parentId.toString());
-      if (!friendParent || blockedSet.has(toId(friendParent))) continue;
+    const friendParents = connections
+      .map((conn) => conn.parents.find((p) => toId(p) !== parentId.toString()))
+      .filter((friend) => friend && !blockedSet.has(toId(friend)))
+      .filter((friend) => !searchText || friend.fullName?.toLowerCase().includes(searchText))
+      .sort((a, b) => (a.fullName || '').localeCompare(b.fullName || '', 'vi'))
+      .slice(0, maxFriends);
 
-      const children = await childService.getChildrenByParentId(friendParent._id);
-      friends.push({
-        id: friendParent._id.toString(),
-        fullName: friendParent.fullName,
-        avatarUrl: friendParent.avatarUrl || '',
-        isVerified: Boolean(friendParent.verification?.isVerifiedParent),
-        // Only the area: never expose a family's exact address or coordinates
-        location: {
-          area: friendParent.location?.area || '',
-          city: friendParent.location?.city || '',
-        },
-        children: children.map((c) => ({
-          id: c.id || c._id?.toString(),
-          displayName: c.displayName,
-          dateOfBirth: c.dateOfBirth,
-          gender: c.gender,
-          interests: c.interests || [],
-        })),
-      });
-    }
+    // Children of every friend in one query
+    const childrenByParent = await childService.getActiveChildrenByParentIds(friendParents.map((f) => f._id));
 
-    return friends;
+    return friendParents.map((friendParent) => ({
+      id: friendParent._id.toString(),
+      fullName: friendParent.fullName,
+      avatarUrl: friendParent.avatarUrl || '',
+      isVerified: Boolean(friendParent.verification?.isVerifiedParent),
+      // Only the area: never expose a family's exact address or coordinates
+      location: {
+        area: friendParent.location?.area || '',
+        city: friendParent.location?.city || '',
+      },
+      children: (childrenByParent.get(friendParent._id.toString()) || []).map((c) => ({
+        id: c._id.toString(),
+        displayName: c.displayName,
+        dateOfBirth: c.dateOfBirth,
+        gender: c.gender,
+        interests: c.interests || [],
+      })),
+    }));
   }
 
   /**

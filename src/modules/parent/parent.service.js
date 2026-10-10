@@ -72,6 +72,15 @@ class ParentService {
     return parentRepository.findByUserId(userId);
   }
 
+  /**
+   * IDs of the parents whose name contains the text (used by list searches of other modules)
+   * @param {string} search
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findParentIdsByName(search) {
+    return parentRepository.findIdsByName(search);
+  }
+
   async getParentById(id) {
     return parentRepository.findById(id);
   }

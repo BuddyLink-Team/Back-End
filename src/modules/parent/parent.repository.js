@@ -1,10 +1,25 @@
 import mongoose from 'mongoose';
 import Parent from './parent.model.js';
 import { CONNECTION_PRIVACY } from './parent.constants.js';
+import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 class ParentRepository {
   async findByUserId(userId) {
     return Parent.findOne({ userId });
+  }
+
+  /**
+   * IDs of the parents whose name contains the text (case-insensitive)
+   * @param {string} search
+   * @param {number} [limit]
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findIdsByName(search, limit = 500) {
+    const parents = await Parent.find({ fullName: { $regex: escapeRegExp(search), $options: 'i' } })
+      .select('_id')
+      .limit(limit)
+      .lean();
+    return parents.map((parent) => parent._id);
   }
 
   async findById(id) {

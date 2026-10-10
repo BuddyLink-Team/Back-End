@@ -16,3 +16,6 @@ export const RESCHEDULE_STATUS = Object.freeze({
   DECLINED: 'declined',
   CANCELLED: 'cancelled',
 });
+
+// Friends returned by GET /playdates/friends (narrow the list with ?search=)
+export const INVITABLE_FRIENDS_LIMIT = 50;
