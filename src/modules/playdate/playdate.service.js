@@ -59,6 +59,21 @@ class PlaydateService {
     await emitPlaydateEvent(PLAYDATE_EVENTS.MEMBERS_CHANGED, { playdateId: playdateId.toString() });
   }
 
+  /**
+   * Let other modules react to a completed playdate (e.g. gamification updates streaks and badges)
+   * @param {Object} playdate - Completed playdate (host and participants populated or not)
+   * @private
+   */
+  async _notifyCompleted(playdate) {
+    const parentIds = [
+      toId(playdate.hostParentId),
+      ...(playdate.participants || [])
+        .filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED)
+        .map((p) => toId(p.parentId)),
+    ];
+    await emitPlaydateEvent(PLAYDATE_EVENTS.COMPLETED, { playdateId: toId(playdate._id), parentIds });
+  }
+
   // ---------------------------------------------------------------------------
   // Used by the chat module
   // ---------------------------------------------------------------------------
@@ -87,6 +102,29 @@ class PlaydateService {
       throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
     }
     return playdate;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Used by the gamification and rating-feedback modules
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Completed playdates a parent attended (as host or accepted participant), oldest first
+   * @param {string|ObjectId} parentId
+   * @param {{ excludeIds?: Array<string|ObjectId>, select?: string }} [options]
+   * @returns {Promise<Array<Object>>}
+   */
+  async getCompletedPlaydatesForParent(parentId, options) {
+    return playdateRepository.findCompletedForParent(parentId, options);
+  }
+
+  /**
+   * Get a playdate without populated references (no caller check)
+   * @param {string|ObjectId} playdateId
+   * @returns {Promise<Object|null>}
+   */
+  async findPlaydateDocById(playdateId) {
+    return playdateRepository.findDocById(playdateId);
   }
 
   /**
@@ -201,6 +239,7 @@ class PlaydateService {
 
     // A finished playdate cannot be rescheduled anymore
     await rescheduleRepository.cancelPendingByPlaydateId(id);
+    await this._notifyCompleted(updated);
 
     return PlaydateResponseDTO.toResponse(updated, parentId);
   }
@@ -233,6 +272,7 @@ class PlaydateService {
       if (!closed) continue; // the host acted in the meantime
 
       await rescheduleRepository.cancelPendingByPlaydateId(playdate._id);
+      if (hasAcceptedParticipant) await this._notifyCompleted(closed);
       result[hasAcceptedParticipant ? 'completed' : 'cancelled'] += 1;
     }
 

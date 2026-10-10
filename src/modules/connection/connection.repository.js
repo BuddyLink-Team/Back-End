@@ -27,6 +27,15 @@ class ConnectionRepository {
   }
 
   /**
+   * Number of accepted connections of a parent (one connection per parent pair)
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<number>}
+   */
+  async countAcceptedForParent(parentId) {
+    return Connection.countDocuments({ parents: parentId, status: CONNECTION_STATUS.ACCEPTED });
+  }
+
+  /**
    * Find the pending or accepted connection between two parents (direction-independent)
    * @param {string|ObjectId} parentIdA
    * @param {string|ObjectId} parentIdB

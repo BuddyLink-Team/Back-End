@@ -4,12 +4,12 @@ import geocodingAdapter from '../../integrations/maps/geocoding.adapter.js';
 import parentService from '../parent/parent.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import logger from '../../shared/logger/index.js';
+import { wait } from '../../shared/helpers/async.helper.js';
 import env from '../../config/env.js';
 import { PLACES_DEFAULTS, PLACES_SYNC_DEFAULTS, PLACES_AUTO_SYNC_DEFAULTS } from './places.constants.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const METERS_PER_DEG_LAT = 111320;
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const round6 = (v) => Math.round(v * 1e6) / 1e6;
 
 /**

@@ -35,6 +35,7 @@ import RescheduleRequest from '../src/modules/playdate/reschedule-request.model.
 import RatingFeedback from '../src/modules/rating-feedback/rating-feedback.model.js';
 import Badge from '../src/modules/gamification/badge.model.js';
 import UserBadge from '../src/modules/gamification/user-badge.model.js';
+import { BADGE_DEFINITIONS } from '../src/modules/gamification/gamification.constants.js';
 import Notification from '../src/modules/notification/notification.model.js';
 import Block from '../src/modules/safety/block.model.js';
 import Report from '../src/modules/safety/report.model.js';
@@ -166,14 +167,14 @@ const PLACES = [
   { name: 'Công viên Biển Hội An (An Bàng)', address: 'Bãi biển An Bàng, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3418, 15.9139], placeType: 'park', osmId: 'osm-way-198604477' },
 ];
 
-const BADGES = [
-  { code: 'first_connection', title: 'Người bạn đầu tiên', description: 'Kết nối thành công với một gia đình đầu tiên trên BuddyLink.', requirementCount: 1 },
-  { code: 'first_playdate', title: 'Buổi hẹn đầu tiên', description: 'Hoàn thành buổi hẹn chơi đầu tiên cùng bé.', requirementCount: 1 },
-  { code: '4_week_streak', title: 'Chuỗi 4 tuần', description: 'Duy trì ít nhất một buổi hẹn chơi mỗi tuần trong 4 tuần liên tiếp.', requirementCount: 4 },
-  { code: '10_playdates', title: 'Thập toàn thập mỹ', description: 'Hoàn thành 10 buổi hẹn chơi.', requirementCount: 10 },
-  { code: 'social_family', title: 'Gia đình hòa đồng', description: 'Kết nối với từ 5 gia đình trở lên.', requirementCount: 5 },
-  { code: 'explorer', title: 'Nhà thám hiểm', description: 'Tham gia hẹn chơi ở 3 địa điểm khác nhau.', requirementCount: 3 },
-];
+// Same badges as the app (title / description / icon / requirement), without the metric used to evaluate them
+const BADGES = BADGE_DEFINITIONS.map(({ code, title, description, iconUrl, requirementCount }) => ({
+  code,
+  title,
+  description,
+  iconUrl,
+  requirementCount,
+}));
 
 // ---------------------------------------------------------------------------
 // Builders
@@ -697,7 +698,7 @@ export async function seedDatabase({ log = console.log } = {}) {
   }
 
   // ---- Badges ----------------------------------------------------------------------------
-  await Badge.insertMany(BADGES.map((b) => ({ ...b, iconUrl: `/badges/${b.code}.svg` })));
+  await Badge.insertMany(BADGES);
   const userBadges = [];
   const awarded = new Set();
   const award = (parentId, badgeCode, unlockedAt) => {
@@ -714,6 +715,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     for (const parentId of [playdate.hostParentId, ...playdate.participants.map((p) => p.parentId)]) {
       award(parentId, 'first_playdate', playdate.completedAt);
     }
+    award(playdate.hostParentId, 'first_host', playdate.completedAt);
   }
   award(parents[0]._id, 'explorer', completedPlaydates[1].completedAt);
   await UserBadge.insertMany(userBadges);

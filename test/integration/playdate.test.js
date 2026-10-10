@@ -338,7 +338,7 @@ describe('Playdate Management Integration Flow', () => {
     // Nearby search starts from the parent location
     const center = [108.2208, 16.0678];
     await Parent.updateOne({ _id: hostParentId }, { $set: { 'location.coordinates': { type: 'Point', coordinates: center } } });
-    await PlacesCache.create({
+    const place = await PlacesCache.create({
       osmId: `osm-way-${Date.now()}`,
       name: 'Công viên APEC',
       address: 'Bạch Đằng, Đà Nẵng',
@@ -346,15 +346,20 @@ describe('Playdate Management Integration Flow', () => {
       coordinates: { type: 'Point', coordinates: [center[0] + 0.002, center[1]] },
     });
 
-    const res = await request(app)
-      .get('/api/v1/places/nearby?type=park')
-      .set('Authorization', `Bearer ${hostToken}`);
+    try {
+      const res = await request(app)
+        .get('/api/v1/places/nearby?type=park')
+        .set('Authorization', `Bearer ${hostToken}`);
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(Array.isArray(res.body.data)).toBe(true);
-    expect(res.body.data.length).toBeGreaterThanOrEqual(1);
-    expect(res.body.data[0].placeType).toBe('park');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.data[0].placeType).toBe('park');
+    } finally {
+      // The test DB is shared between suites: leave no place behind for the places tests
+      await PlacesCache.deleteOne({ _id: place._id });
+    }
   });
 
   it('15. Search isolation: stranger search must not return other parents playdates', async () => {

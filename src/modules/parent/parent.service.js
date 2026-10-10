@@ -77,6 +77,27 @@ class ParentService {
   }
 
   /**
+   * Save the weekly playdate streak (used by the gamification module)
+   * @param {string|ObjectId} parentId
+   * @param {Object} current - currentWeeklyStreak, lastCompletedPlaydateWeek, streakUpdatedAt
+   * @param {number} longestStreak - Kept only when higher than the stored value
+   * @returns {Promise<Object|null>} Updated parent, or null when not found
+   */
+  async updateStreak(parentId, current, longestStreak) {
+    return parentRepository.updateStreak(parentId, current, longestStreak);
+  }
+
+  /**
+   * Iterate over the IDs of every parent (used by batch jobs)
+   * @returns {AsyncGenerator<ObjectId>}
+   */
+  async *iterateParentIds() {
+    for await (const parent of parentRepository.findAllIdsCursor()) {
+      yield parent._id;
+    }
+  }
+
+  /**
    * Parents visible in discovery near a point, nearest first
    * @param {[number, number]} coordinates - [longitude, latitude]
    * @param {number} maxDistanceMeters

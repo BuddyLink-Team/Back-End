@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import Child from './child.model.js';
+import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class ChildRepository {
   async create(childData) {

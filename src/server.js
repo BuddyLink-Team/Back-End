@@ -10,6 +10,10 @@ import placesService from './modules/places/places.service.js';
 import { startSubscriptionExpiryJob } from './jobs/subscription-expiry.job.js';
 import { startPlaydateAutoCloseJob, runPlaydateAutoClose } from './jobs/playdate-auto-close.job.js';
 import mailAdapter from './integrations/mail/mail.adapter.js';
+import gamificationService from './modules/gamification/gamification.service.js';
+import { startGamificationJob, runGamificationJob } from './jobs/gamification.job.js';
+import UserBadge from './modules/gamification/user-badge.model.js';
+import RatingFeedback from './modules/rating-feedback/rating-feedback.model.js';
 
 const server = http.createServer(app);
 
@@ -37,6 +41,13 @@ const startServer = async () => {
     // Close the playdates of past days now (in case the server was down at midnight), then daily at 00:00
     await runPlaydateAutoClose();
     startPlaydateAutoCloseJob();
+
+    // Unique indexes that guard badge unlocks and ratings, then the badge catalog
+    await Promise.all([UserBadge.init(), RatingFeedback.init()]);
+    await gamificationService.seedBadges();
+    // Recalculate streaks missed while the server was down (not awaited: never delays startup)
+    void runGamificationJob();
+    startGamificationJob();
 
     // Not awaited: only reports SMTP problems in the logs, never blocks startup
     mailAdapter.verifyConnection();

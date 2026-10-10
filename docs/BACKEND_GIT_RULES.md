@@ -72,7 +72,7 @@ Every commit message MUST follow the **Conventional Commits** specification:
 | `socket` | Socket.io server connection, rooms, events |
 | `ai` | AI Assistant agent service, tool-calling handlers |
 | `safety` | Account report moderation, user blocking |
-| `gamification` | Streaks, Badges, reward calculation |
+| `gamification` | Weekly streaks, badge unlocks |
 | `subscription` | Membership plans, PayOS webhook checkout |
 | `admin` | Admin dashboard statistics, user management |
 | `db` | Mongoose models, schemas, indexes |
