@@ -207,7 +207,7 @@ const buildParents = (count) => {
 
     let phone;
     do {
-      phone = `${pick(['0905', '0935', '0914', '0983', '0778', '0868'])}${String(int(100000, 999999))}`;
+      phone = `+84${pick(['905', '935', '914', '983', '778', '868'])}${String(int(100000, 999999))}`;
     } while (usedPhones.has(phone));
     usedPhones.add(phone);
 

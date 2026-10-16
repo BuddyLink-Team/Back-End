@@ -15,7 +15,7 @@ describe("Authentication & Onboarding Integration Flow", () => {
   const testEmail = `parent-${Date.now()}@example.com`;
   const testPassword = "Password123!";
   const testFullName = "Nguyen Van Parent";
-  const testPhone = "+840333134898";
+  const testPhone = "+84333134898";
 
   it("0. Subscription Plans: should verify default plans are seeded", async () => {
     const plans = await SubscriptionPlan.find({});
