@@ -21,6 +21,7 @@ import {
   createRefreshTokenValue,
   hashToken,
 } from '../../shared/helpers/token.helper.js';
+import { normalizePhone } from '../../shared/helpers/phone.helper.js';
 import {
   AuthResponseDTO,
   AuthUserDTO,
@@ -198,9 +199,9 @@ class AuthService {
       throw new AppError('Email is already registered', 409, 'EMAIL_ALREADY_EXISTS');
     }
 
-    const trimmedPhone = phone ? phone.trim() : null;
-    if (trimmedPhone) {
-      const existingPhone = await userService.getUserByPhone(trimmedPhone);
+    const normalizedPhone = normalizePhone(phone);
+    if (normalizedPhone) {
+      const existingPhone = await userService.getUserByPhone(normalizedPhone);
       if (existingPhone) {
         throw new AppError('Phone number is already registered', 409, 'PHONE_ALREADY_EXISTS');
       }
@@ -212,7 +213,7 @@ class AuthService {
     const { user, parent } = await this._createParentAccount({
       userData: {
         email: normalizedEmail,
-        phone: trimmedPhone || undefined,
+        phone: normalizedPhone || undefined,
         passwordHash,
       },
       parentData: {
@@ -328,7 +329,8 @@ class AuthService {
   /**
    * Send Phone OTP
    */
-  async sendPhoneOtp(userId, phone) {
+  async sendPhoneOtp(userId, rawPhone) {
+    const phone = normalizePhone(rawPhone);
     const existingUser = await userService.getUserByPhone(phone);
     if (existingUser && existingUser._id.toString() !== userId.toString()) {
       throw new AppError('Phone number is already associated with another account', 409, 'PHONE_IN_USE');
@@ -353,7 +355,8 @@ class AuthService {
   /**
    * Verify Phone OTP (the code must have been issued to this user)
    */
-  async verifyPhoneOtp(userId, phone, otp) {
+  async verifyPhoneOtp(userId, rawPhone, otp) {
+    const phone = normalizePhone(rawPhone);
     await this._consumeOtp({
       userId,
       target: phone,
@@ -387,7 +390,7 @@ class AuthService {
       throw new AppError(error.message || 'Invalid Firebase ID token', 400, 'INVALID_FIREBASE_TOKEN');
     }
 
-    const verifiedPhone = firebaseResult.phoneNumber;
+    const verifiedPhone = normalizePhone(firebaseResult.phoneNumber);
 
     // Check if phone is already used by another user
     const existingUser = await userService.getUserByPhone(verifiedPhone);

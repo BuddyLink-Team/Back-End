@@ -52,7 +52,7 @@ async function seedChatData() {
     await usersCol.insertOne({
       _id: mockUserId,
       email: 'maianh.nguyen@buddylink.vn',
-      phone: '0912345678',
+      phone: '+84912345678',
       role: 'PARENT',
       isActive: true,
       createdAt: new Date(),

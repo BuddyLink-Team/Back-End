@@ -4,6 +4,7 @@ import parentService from '../parent/parent.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import { UserProfileDTO } from './user.dto.js';
+import { normalizePhone } from '../../shared/helpers/phone.helper.js';
 
 class UserService {
   async getUserById(id) {
@@ -92,17 +93,17 @@ class UserService {
 
     // If phone is updated, update on User model
     if (updateData.phone !== undefined) {
-      const trimmedPhone = updateData.phone ? updateData.phone.trim() : null;
-      const isPhoneChanged = (trimmedPhone || null) !== (user.phone || null);
+      const normalizedPhone = normalizePhone(updateData.phone);
+      const isPhoneChanged = normalizedPhone !== normalizePhone(user.phone);
 
       if (isPhoneChanged) {
-        if (trimmedPhone) {
-          const existingPhone = await this.getUserByPhone(trimmedPhone);
+        if (normalizedPhone) {
+          const existingPhone = await this.getUserByPhone(normalizedPhone);
           if (existingPhone && existingPhone._id.toString() !== userId.toString()) {
             throw new AppError('Phone number is already in use', 409, 'PHONE_ALREADY_EXISTS');
           }
         }
-        user = await this.updatePhone(userId, trimmedPhone);
+        user = await this.updatePhone(userId, normalizedPhone);
 
         // A new (unverified) number must go through OTP verification again
         if (user.role === USER_ROLES.PARENT) {
