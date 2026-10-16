@@ -516,8 +516,6 @@ export async function seedDatabase({ log = console.log } = {}) {
       childDocs.push(buildChild(parent._id, new Date(parent.createdAt.getTime() + (c + 1) * DAY)));
     }
   }
-  // Gender is optional for parents: one family chose "other"
-  childDocs[childDocs.length - 1].gender = 'other';
   const children = await Child.insertMany(childDocs);
   const childrenOf = (parent) => children.filter((c) => c.parentId.equals(parent._id));
   const firstChildOf = (parent) => childrenOf(parent)[0];
