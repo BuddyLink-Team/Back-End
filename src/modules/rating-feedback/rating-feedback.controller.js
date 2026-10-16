@@ -1,4 +1,4 @@
-import { createRating, getPendingRatings } from './rating-feedback.service.js';
+import { createRating, getPendingRatings, getPlaydateRatings } from './rating-feedback.service.js';
 import { successResponse } from '../../shared/response/index.js';
 
 class RatingFeedbackController {
@@ -6,6 +6,15 @@ class RatingFeedbackController {
     try {
       const pending = await getPendingRatings(req.userId);
       return successResponse(res, pending, 'Pending ratings retrieved successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async getPlaydateRatings(req, res, next) {
+    try {
+      const result = await getPlaydateRatings(req.userId, req.params.id);
+      return successResponse(res, result, 'Playdate ratings retrieved successfully');
     } catch (error) {
       return next(error);
     }

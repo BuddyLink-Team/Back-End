@@ -266,6 +266,7 @@ class PlaydateRepository {
 
     return {
       all: stats.all,
+      upcoming: upcomingCount,
       confirmed: confirmedCount,
       pending: stats.pending,
       completed: stats.completed,
