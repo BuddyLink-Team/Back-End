@@ -1,5 +1,9 @@
 import { body, param } from 'express-validator';
 
+export const playdateRatingsValidation = [
+  param('id').isMongoId().withMessage('Invalid playdate ID'),
+];
+
 export const createRatingValidation = [
   param('id').isMongoId().withMessage('Invalid playdate ID'),
   body('rating').custom(value => Number.isInteger(value) && value >= 1 && value <= 5)
