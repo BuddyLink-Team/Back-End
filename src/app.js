@@ -24,9 +24,11 @@ import connectionRoutes from "./modules/connection/connection.route.js";
 import safetyRoutes from "./modules/safety/safety.route.js";
 import { registerChatEventListeners } from "./modules/chat/chat.events.js";
 import { registerGamificationEventListeners } from "./modules/gamification/gamification.events.js";
+import { registerNotificationEventListeners } from "./modules/notification/notification.events.js";
 
 import gamificationRoutes from './modules/gamification/gamification.route.js';
 import ratingFeedbackRoutes from './modules/rating-feedback/rating-feedback.route.js';
+import notificationRoutes from './modules/notification/notification.route.js';
 
 const app = express();
 
@@ -68,6 +70,7 @@ app.get("/api/v1", (req, res) => successResponse(res, null, "BuddyLink API v1 is
 // Cross-module event listeners (e.g. playdate members -> playdate group chat)
 registerChatEventListeners();
 registerGamificationEventListeners();
+registerNotificationEventListeners();
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/user", userRoutes);
@@ -83,6 +86,7 @@ app.use("/api/v1/safety", safetyRoutes);
 
 app.use('/api/v1/gamification', gamificationRoutes);
 app.use('/api/v1/playdates', ratingFeedbackRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);

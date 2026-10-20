@@ -7,3 +7,11 @@ export const NOTIFICATION_TYPES = Object.freeze({
   STREAK_REMINDER: 'streak_reminder',
   SYSTEM: 'system',
 });
+
+export const NOTIFICATION_SOCKET_EVENTS = Object.freeze({
+  NEW_NOTIFICATION: 'notification:new',
+  UNREAD_COUNT: 'notification:unread_count',
+  READ: 'notification:read',
+  READ_ALL: 'notification:read_all',
+});
+

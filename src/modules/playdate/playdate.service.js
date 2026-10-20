@@ -407,6 +407,14 @@ class PlaydateService {
     // 5. Group chat starts with the host; invitees join once they accept
     await this._notifyMembersChanged(playdate._id);
 
+    if (uniqueParticipants.length > 0) {
+      await emitPlaydateEvent(PLAYDATE_EVENTS.INVITED, {
+        playdateId: playdate._id.toString(),
+        hostParentId: hostParentId.toString(),
+        participantParentIds: uniqueParticipants.map((p) => p.parentId.toString()),
+      });
+    }
+
     const populated = await playdateRepository.findById(playdate._id);
     return PlaydateResponseDTO.toResponse(populated, hostParentId);
   }

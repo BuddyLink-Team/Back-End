@@ -117,6 +117,9 @@ class ConnectionService {
         if (accepted) {
           await emitConnectionEvent(CONNECTION_EVENTS.ACCEPTED, {
             parentIds: accepted.parents.map((id) => id.toString()),
+            requesterId: accepted.requesterId.toString(),
+            recipientId: accepted.recipientId.toString(),
+            connectionId: accepted._id.toString(),
           });
           return { connection: accepted, isNew: false, isMatched: true };
         }
@@ -132,6 +135,11 @@ class ConnectionService {
         requesterParentId,
         recipientParentId
       );
+      await emitConnectionEvent(CONNECTION_EVENTS.REQUESTED, {
+        connectionId: connection._id.toString(),
+        requesterParentId: requesterParentId.toString(),
+        recipientParentId: recipientParentId.toString(),
+      });
       return { connection, isNew: true, isMatched: false };
     } catch (error) {
       // Concurrent request for the same pair hit the unique pairKey index
@@ -201,6 +209,9 @@ class ConnectionService {
     // Same as a discovery match: gamification updates the connection badges
     await emitConnectionEvent(CONNECTION_EVENTS.ACCEPTED, {
       parentIds: accepted.parents.map((id) => id.toString()),
+      requesterId: accepted.requesterId.toString(),
+      recipientId: accepted.recipientId.toString(),
+      connectionId: accepted._id.toString(),
     });
     return accepted;
   }
