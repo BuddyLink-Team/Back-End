@@ -35,14 +35,21 @@ class NotificationRepository {
     const filter = { recipientId };
 
     if (type) {
-      filter.type = type;
+      const types = Array.isArray(type)
+        ? type
+        : String(type).split(',').map((t) => t.trim()).filter(Boolean);
+      if (types.length === 1) {
+        filter.type = types[0];
+      } else if (types.length > 1) {
+        filter.type = { $in: types };
+      }
     }
     if (typeof isRead === 'boolean') {
       filter.isRead = isRead;
     }
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.max(1, Math.min(50, parseInt(limit, 10) || 10));
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
     const skip = (pageNum - 1) * limitNum;
 
     const [items, total] = await Promise.all([
@@ -81,7 +88,7 @@ class NotificationRepository {
    */
   async markAsRead(id, recipientId) {
     return Notification.findOneAndUpdate(
-      { _id: id, recipientId },
+      { _id: id, recipientId, isRead: false },
       { $set: { isRead: true, readAt: new Date() } },
       { new: true }
     )
@@ -100,16 +107,6 @@ class NotificationRepository {
       { $set: { isRead: true, readAt: new Date() } }
     );
     return { modifiedCount: result.modifiedCount || 0 };
-  }
-
-  /**
-   * Delete a notification (recipient only)
-   * @param {string|ObjectId} id
-   * @param {string|ObjectId} recipientId
-   * @returns {Promise<Object|null>}
-   */
-  async deleteById(id, recipientId) {
-    return Notification.findOneAndDelete({ _id: id, recipientId });
   }
 }
 

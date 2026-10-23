@@ -8,11 +8,11 @@ class NotificationController {
    */
   async getNotifications(req, res, next) {
     try {
-      const { page, limit, type, isRead } = req.query;
+      const { page, limit, type, types, isRead } = req.query;
       const data = await notificationService.getUserNotifications(req.userId, {
         page,
         limit,
-        type,
+        type: type || types,
         isRead,
       });
 

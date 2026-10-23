@@ -139,4 +139,84 @@ describe('Notifications module API (/api/v1/notifications)', () => {
     expect(reqNotif).toBeDefined();
     expect(reqNotif.data.sender.fullName).toContain('User notifyA');
   });
+
+  it('filters notifications by multiple types separated by comma', async () => {
+    const multiTypeRes = await request(app)
+      .get(`/api/v1/notifications?type=${NOTIFICATION_TYPES.BADGE_UNLOCKED},${NOTIFICATION_TYPES.CONNECTION_REQUEST}`)
+      .set(auth(userA.token));
+    expect(multiTypeRes.status).toBe(200);
+    expect(multiTypeRes.body.data.items.length).toBeGreaterThanOrEqual(2);
+    const types = multiTypeRes.body.data.items.map((n) => n.type);
+    expect(types).toContain(NOTIFICATION_TYPES.BADGE_UNLOCKED);
+    expect(types).toContain(NOTIFICATION_TYPES.CONNECTION_REQUEST);
+  });
+
+  it('marking an already-read notification is idempotent (does not overwrite readAt or decrement unreadCount)', async () => {
+    const listRes = await request(app).get('/api/v1/notifications').set(auth(userA.token));
+    const target = listRes.body.data.items.find((n) => n.isRead);
+    const originalReadAt = target.readAt;
+
+    const reReadRes = await request(app)
+      .patch(`/api/v1/notifications/${target.id}/read`)
+      .set(auth(userA.token));
+
+    expect(reReadRes.status).toBe(200);
+    expect(reReadRes.body.data.notification.isRead).toBe(true);
+    expect(reReadRes.body.data.notification.readAt).toBe(originalReadAt);
+    expect(reReadRes.body.data.unreadCount).toBe(0);
+  });
+
+  it('automatically creates notification when a connection request is accepted', async () => {
+    const { emitConnectionEvent, CONNECTION_EVENTS } = await import(
+      '../../src/modules/connection/connection.events.js'
+    );
+
+    await emitConnectionEvent(CONNECTION_EVENTS.ACCEPTED, {
+      requesterId: userA.parentId,
+      recipientId: userB.parentId,
+    });
+
+    const aNotifs = await request(app).get('/api/v1/notifications').set(auth(userA.token));
+    expect(aNotifs.status).toBe(200);
+    const acceptedNotif = aNotifs.body.data.items.find(
+      (n) => n.type === NOTIFICATION_TYPES.CONNECTION_ACCEPTED
+    );
+    expect(acceptedNotif).toBeDefined();
+    expect(acceptedNotif.data.sender.fullName).toContain('User notifyB');
+  });
+
+  it('automatically creates notification when playdate invitation is sent', async () => {
+    const { default: mongoose } = await import('mongoose');
+    const { default: Playdate } = await import('../../src/modules/playdate/playdate.model.js');
+    const { emitPlaydateEvent, PLAYDATE_EVENTS } = await import(
+      '../../src/modules/playdate/playdate.events.js'
+    );
+
+    const childIdA = new mongoose.Types.ObjectId();
+    const childIdB = new mongoose.Types.ObjectId();
+    const playdate = await Playdate.create({
+      hostParentId: userA.parentId,
+      hostChildId: childIdA,
+      activity: 'Buổi chơi xếp hình',
+      scheduledDate: new Date(Date.now() + 86400000),
+      time: '15:00',
+      location: { name: 'Công viên trung tâm', address: 'Công viên trung tâm' },
+      participants: [{ parentId: userB.parentId, childId: childIdB, status: 'pending' }],
+    });
+
+    await emitPlaydateEvent(PLAYDATE_EVENTS.INVITED, {
+      playdateId: playdate._id.toString(),
+      hostParentId: userA.parentId,
+      participantParentIds: [userB.parentId],
+    });
+
+    const bNotifs = await request(app).get('/api/v1/notifications').set(auth(userB.token));
+    expect(bNotifs.status).toBe(200);
+    const inviteNotif = bNotifs.body.data.items.find(
+      (n) => n.type === NOTIFICATION_TYPES.PLAYDATE_INVITE
+    );
+    expect(inviteNotif).toBeDefined();
+    expect(inviteNotif.body).toContain('Buổi chơi xếp hình');
+    expect(inviteNotif.data.playdate.activity).toBe('Buổi chơi xếp hình');
+  });
 });

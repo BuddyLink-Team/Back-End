@@ -8,10 +8,19 @@ export const notificationIdParamValidation = [
 ];
 
 export const getNotificationsValidation = [
-  query('type')
+  query(['type', 'types'])
     .optional()
-    .isIn(Object.values(NOTIFICATION_TYPES))
-    .withMessage('Invalid notification type'),
+    .custom((value) => {
+      const types = Array.isArray(value)
+        ? value
+        : String(value).split(',').map((t) => t.trim()).filter(Boolean);
+      const validTypes = Object.values(NOTIFICATION_TYPES);
+      const allValid = types.length > 0 && types.every((t) => validTypes.includes(t));
+      if (!allValid) {
+        throw new Error('Invalid notification type');
+      }
+      return true;
+    }),
   query('isRead')
     .optional()
     .isIn(['true', 'false', true, false])

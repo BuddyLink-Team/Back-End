@@ -2,12 +2,8 @@ import { EventEmitter } from 'node:events';
 import logger from '../../shared/logger/index.js';
 import { getIO } from '../../config/socket.js';
 import NotificationDTO from './notification.dto.js';
-import { NOTIFICATION_TYPES, NOTIFICATION_SOCKET_EVENTS } from './notification.constants.js';
-import notificationRepository from './notification.repository.js';
-import parentRepository from '../parent/parent.repository.js';
-import playdateRepository from '../playdate/playdate.repository.js';
-import { onConnectionEvent, CONNECTION_EVENTS } from '../connection/connection.events.js';
-import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
+import { NOTIFICATION_SOCKET_EVENTS } from './notification.constants.js';
+import registerNotificationListeners from './notification.listener.js';
 
 export const NOTIFICATION_EVENTS = Object.freeze({
   CREATED: 'notification.created',
@@ -89,118 +85,8 @@ export const registerNotificationEventListeners = () => {
     }
   });
 
-  // 4. Cross-module: Connection Request sent -> notify the recipient parent
-  onConnectionEvent(CONNECTION_EVENTS.REQUESTED, async ({ requesterParentId, recipientParentId, connectionId }) => {
-    try {
-      const [requester, recipient] = await Promise.all([
-        parentRepository.findById(requesterParentId),
-        parentRepository.findById(recipientParentId),
-      ]);
-
-      if (!recipient?.userId) return;
-
-      const requesterName = requester?.fullName || 'Một phụ huynh';
-      const notification = await notificationRepository.create({
-        recipientId: recipient.userId,
-        type: NOTIFICATION_TYPES.CONNECTION_REQUEST,
-        title: 'Lời mời kết nối mới',
-        body: `${requesterName} đã gửi lời mời kết nối đến bạn.`,
-        data: {
-          senderId: requesterParentId,
-          connectionId,
-        },
-      });
-
-      const populated = await notificationRepository.findById(notification._id);
-      const unreadCount = await notificationRepository.countUnread(recipient.userId);
-
-      await emitNotificationEvent(NOTIFICATION_EVENTS.CREATED, {
-        notification: populated || notification,
-        unreadCount,
-      });
-    } catch (err) {
-      logger.error(`[NotificationEvents] Connection requested notification failed: ${err.message}`);
-    }
-  });
-
-  // 5. Cross-module: Connection Request accepted -> notify the requester parent
-  onConnectionEvent(CONNECTION_EVENTS.ACCEPTED, async ({ requesterId, recipientId, connectionId }) => {
-    try {
-      if (!requesterId || !recipientId) return;
-
-      const [requester, recipient] = await Promise.all([
-        parentRepository.findById(requesterId),
-        parentRepository.findById(recipientId),
-      ]);
-
-      if (!requester?.userId) return;
-
-      const recipientName = recipient?.fullName || 'Một phụ huynh';
-      const notification = await notificationRepository.create({
-        recipientId: requester.userId,
-        type: NOTIFICATION_TYPES.CONNECTION_ACCEPTED,
-        title: 'Lời mời kết nối đã được chấp nhận',
-        body: `${recipientName} đã đồng ý kết nối với bạn. Giờ hai bạn đã có thể trò chuyện!`,
-        data: {
-          senderId: recipientId,
-          connectionId,
-        },
-      });
-
-      const populated = await notificationRepository.findById(notification._id);
-      const unreadCount = await notificationRepository.countUnread(requester.userId);
-
-      await emitNotificationEvent(NOTIFICATION_EVENTS.CREATED, {
-        notification: populated || notification,
-        unreadCount,
-      });
-    } catch (err) {
-      logger.error(`[NotificationEvents] Connection accepted notification failed: ${err.message}`);
-    }
-  });
-
-  // 6. Cross-module: Playdate Invitation sent -> notify invited participant parents
-  onPlaydateEvent(PLAYDATE_EVENTS.INVITED, async ({ playdateId, hostParentId, participantParentIds = [] }) => {
-    try {
-      const [host, playdate] = await Promise.all([
-        parentRepository.findById(hostParentId),
-        playdateRepository.findById(playdateId),
-      ]);
-
-      const hostName = host?.fullName || 'Một phụ huynh';
-      const activity = playdate?.activity || 'buổi hẹn chơi';
-
-      for (const pId of participantParentIds) {
-        try {
-          const participant = await parentRepository.findById(pId);
-          if (!participant?.userId) continue;
-
-          const notification = await notificationRepository.create({
-            recipientId: participant.userId,
-            type: NOTIFICATION_TYPES.PLAYDATE_INVITE,
-            title: 'Lời mời tham gia Playdate',
-            body: `${hostName} đã mời bạn và bé tham gia "${activity}".`,
-            data: {
-              senderId: hostParentId,
-              playdateId,
-            },
-          });
-
-          const populated = await notificationRepository.findById(notification._id);
-          const unreadCount = await notificationRepository.countUnread(participant.userId);
-
-          await emitNotificationEvent(NOTIFICATION_EVENTS.CREATED, {
-            notification: populated || notification,
-            unreadCount,
-          });
-        } catch (subErr) {
-          logger.error(`[NotificationEvents] Playdate invite notification failed for parent ${pId}: ${subErr.message}`);
-        }
-      }
-    } catch (err) {
-      logger.error(`[NotificationEvents] Playdate invited notification handler failed: ${err.message}`);
-    }
-  });
+  // Register cross-module listeners (connection, playdate, etc.)
+  registerNotificationListeners();
 };
 
 export default registerNotificationEventListeners;

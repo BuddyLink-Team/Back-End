@@ -90,11 +90,20 @@ class NotificationService {
    * @returns {Promise<{ notification: Object, unreadCount: number }>}
    */
   async markNotificationAsRead(notificationId, userId) {
-    const updated = await notificationRepository.markAsRead(notificationId, userId);
-    if (!updated) {
+    const existing = await notificationRepository.findById(notificationId);
+    if (!existing || existing.recipientId?.toString() !== userId.toString()) {
       throw new AppError('Notification not found', 404, 'NOTIFICATION_NOT_FOUND');
     }
 
+    if (existing.isRead) {
+      const unreadCount = await notificationRepository.countUnread(userId);
+      return {
+        notification: NotificationDTO.toResponse(existing),
+        unreadCount,
+      };
+    }
+
+    const updated = await notificationRepository.markAsRead(notificationId, userId);
     const unreadCount = await notificationRepository.countUnread(userId);
 
     await emitNotificationEvent(NOTIFICATION_EVENTS.READ, {
@@ -104,7 +113,7 @@ class NotificationService {
     });
 
     return {
-      notification: NotificationDTO.toResponse(updated),
+      notification: NotificationDTO.toResponse(updated || existing),
       unreadCount,
     };
   }
@@ -117,9 +126,11 @@ class NotificationService {
   async markAllAsRead(userId) {
     const { modifiedCount } = await notificationRepository.markAllAsRead(userId);
 
-    await emitNotificationEvent(NOTIFICATION_EVENTS.READ_ALL, {
-      recipientId: userId.toString(),
-    });
+    if (modifiedCount > 0) {
+      await emitNotificationEvent(NOTIFICATION_EVENTS.READ_ALL, {
+        recipientId: userId.toString(),
+      });
+    }
 
     return {
       updatedCount: modifiedCount,
