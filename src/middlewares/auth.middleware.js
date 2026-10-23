@@ -2,7 +2,11 @@ import jwt from "jsonwebtoken";
 import env from "../config/env.js";
 import userService from "../modules/user/user.service.js";
 import AppError from "../shared/exceptions/AppError.js";
-import { getAccessTokenFromRequest } from "../shared/helpers/token.helper.js";
+import {
+  getAccessTokenFromRequest,
+  getRequestAudience,
+  getTokenAudience,
+} from "../shared/helpers/token.helper.js";
 import { TOKEN_TYPES } from "../modules/auth/auth.constants.js";
 
 export const authenticate = async (req, _res, next) => {
@@ -29,6 +33,11 @@ export const authenticate = async (req, _res, next) => {
     const decoded = jwt.verify(token, jwtSecret);
 
     if (decoded.type && decoded.type !== TOKEN_TYPES.ACCESS) {
+      throw new AppError("Invalid access token", 401, "INVALID_ACCESS_TOKEN");
+    }
+
+    // Parent-app tokens are not accepted by the admin portal and vice versa
+    if (getTokenAudience(decoded) !== getRequestAudience(req)) {
       throw new AppError("Invalid access token", 401, "INVALID_ACCESS_TOKEN");
     }
 

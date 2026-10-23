@@ -2,6 +2,7 @@ import { describe, it, expect, jest } from '@jest/globals';
 import request from 'supertest';
 import bcrypt from 'bcryptjs';
 import app from '../../src/app.js';
+import adminApp from '../../src/admin-app.js';
 import User from '../../src/modules/user/user.model.js';
 import Parent from '../../src/modules/parent/parent.model.js';
 import AuthToken from '../../src/modules/auth/auth-token.model.js';
@@ -73,7 +74,7 @@ describe('Auth security hardening', () => {
     const user = await User.findOne({ email });
     const sessionsBefore = await RefreshToken.countDocuments({ userId: user._id });
 
-    const res = await request(app).post('/api/v1/auth/admin/login').send({ email, password: 'Password123!' });
+    const res = await request(adminApp).post('/api/v1/admin/auth/login').send({ email, password: 'Password123!' });
     expect(res.status).toBe(403);
 
     const sessionsAfter = await RefreshToken.countDocuments({ userId: user._id });

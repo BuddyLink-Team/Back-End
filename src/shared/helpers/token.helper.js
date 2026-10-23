@@ -2,7 +2,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import env from "../../config/env.js";
 import AppError from "../exceptions/AppError.js";
-import { AUTH_COOKIE_NAMES, TOKEN_TYPES } from "../../modules/auth/auth.constants.js";
+import { AUTH_COOKIE_NAMES, TOKEN_AUDIENCES, TOKEN_TYPES } from "../../modules/auth/auth.constants.js";
 
 const parseExpiresInToMs = (value, fallbackMs) => {
   if (!value) return fallbackMs;
@@ -45,7 +45,7 @@ export const getRefreshTokenMaxAge = () => {
   return parseExpiresInToMs(getRefreshTokenExpiresIn(), 7 * 24 * 60 * 60 * 1000);
 };
 
-export const createAccessToken = (user) => {
+export const createAccessToken = (user, audience = TOKEN_AUDIENCES.APP) => {
   const secret = env.JWT.SECRET || process.env.JWT_SECRET;
   if (!secret) {
     throw new AppError("Missing JWT_SECRET in environment variables", 500, "SERVER_CONFIGURATION_ERROR");
@@ -56,6 +56,7 @@ export const createAccessToken = (user) => {
       sub: user._id.toString(),
       role: user.role,
       type: TOKEN_TYPES.ACCESS,
+      aud: audience,
     },
     secret,
     {
@@ -64,7 +65,7 @@ export const createAccessToken = (user) => {
   );
 };
 
-export const createRefreshTokenValue = (user) => {
+export const createRefreshTokenValue = (user, audience = TOKEN_AUDIENCES.APP) => {
   const secret = env.JWT.REFRESH_SECRET || process.env.JWT_REFRESH_SECRET;
   if (!secret) {
     throw new AppError("Missing JWT_REFRESH_SECRET in environment variables", 500, "SERVER_CONFIGURATION_ERROR");
@@ -75,6 +76,7 @@ export const createRefreshTokenValue = (user) => {
       sub: user._id.toString(),
       role: user.role,
       type: TOKEN_TYPES.REFRESH,
+      aud: audience,
       jti: crypto.randomUUID(),
     },
     secret,
@@ -83,6 +85,12 @@ export const createRefreshTokenValue = (user) => {
     },
   );
 };
+
+// Tokens issued before audiences existed belong to the parent app
+export const getTokenAudience = (decoded) => decoded?.aud || TOKEN_AUDIENCES.APP;
+
+// The audience of the app serving the request (the admin app sets "tokenAudience")
+export const getRequestAudience = (req) => req.app?.get("tokenAudience") || TOKEN_AUDIENCES.APP;
 
 /**
  * Clear auth cookies set by earlier versions (tokens are now returned in the JSON body).

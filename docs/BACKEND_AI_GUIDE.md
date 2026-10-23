@@ -187,6 +187,11 @@ If role restriction required:
 
 - MUST use `role.middleware.js` (e.g. `authorizeRoles('PARENT')`, `authorizeRoles('ADMIN')`)
 
+Admin portal:
+
+- Admin endpoints MUST be added to `src/modules/admin/admin.route.js`, which is mounted only in `src/admin-app.js` (`/api/v1/admin`, own port/service). NEVER mount admin routes in `src/app.js`.
+- Tokens are bound to the app that issued them (`aud`: `app` | `admin`). NEVER bypass the audience check in `authenticate` or `refreshToken`.
+
 ---
 
 # 11. CROSS-MODULE & INTEGRATION RULES

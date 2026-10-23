@@ -5,6 +5,8 @@ import logger from '../shared/logger/index.js';
 import registerChatSocket from '../sockets/chat.socket.js';
 import parentService from '../modules/parent/parent.service.js';
 import userService from '../modules/user/user.service.js';
+import { TOKEN_AUDIENCES } from '../modules/auth/auth.constants.js';
+import { getTokenAudience } from '../shared/helpers/token.helper.js';
 
 let io = null;
 
@@ -31,6 +33,10 @@ export const initSocket = (httpServer) => {
       }
 
       const decoded = jwt.verify(token, secret);
+      // Realtime is part of the parent app only: admin portal tokens are rejected
+      if (getTokenAudience(decoded) !== TOKEN_AUDIENCES.APP) {
+        return next(new Error('Authentication error: Invalid token'));
+      }
       const userId = decoded.sub || decoded.id;
 
       // Verify user existence, active status, and non-deleted

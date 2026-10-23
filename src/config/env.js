@@ -7,6 +7,11 @@ const env = {
   PORT: parseInt(process.env.PORT, 10) || 5000,
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
 
+  // Admin portal API. When ADMIN_PORT is set, `npm run dev`/`npm start` also serve it on that port
+  // (local setup). In production it runs as its own service (`npm run start:admin`) and ADMIN_PORT stays unset.
+  ADMIN_PORT: parseInt(process.env.ADMIN_PORT, 10) || null,
+  ADMIN_CLIENT_URL: process.env.ADMIN_CLIENT_URL || 'http://localhost:5174',
+
   // Business timezone used for daily/monthly quota periods (users are in Vietnam)
   APP_TIMEZONE: process.env.APP_TIMEZONE || 'Asia/Ho_Chi_Minh',
 

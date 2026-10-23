@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, jest } from "@jest/globals";
 import request from "supertest";
 import bcrypt from "bcryptjs";
 import app from "../../src/app.js";
+import adminApp from "../../src/admin-app.js";
 import User from "../../src/modules/user/user.model.js";
 import storageAdapter from "../../src/integrations/storage/storage.adapter.js";
 import { JPEG_BUFFER } from "../helpers/imageHelper.js";
@@ -34,7 +35,7 @@ describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
       isActive: true,
     });
 
-    const adminLogin = await request(app).post("/api/v1/auth/admin/login").send({
+    const adminLogin = await request(adminApp).post("/api/v1/admin/auth/login").send({
       email: adminEmail,
       password: initialPassword,
     });
@@ -54,8 +55,8 @@ describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
     });
 
     it("should return admin profile when called by admin", async () => {
-      const res = await request(app)
-        .get("/api/v1/user/me")
+      const res = await request(adminApp)
+        .get("/api/v1/admin/user/me")
         .set("Authorization", `Bearer ${adminToken}`);
 
       expect(res.status).toBe(200);
@@ -82,8 +83,8 @@ describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
     });
 
     it("should update admin phone number", async () => {
-      const res = await request(app)
-        .put("/api/v1/user/me")
+      const res = await request(adminApp)
+        .put("/api/v1/admin/user/me")
         .set("Authorization", `Bearer ${adminToken}`)
         .send({
           phone: "+84912345678",
@@ -138,8 +139,8 @@ describe("Unified User Profile & Password Flow (/api/v1/user)", () => {
 
     it("should change password for admin", async () => {
       const newPassword = "NewAdminPassword789!";
-      const res = await request(app)
-        .put("/api/v1/user/me/password")
+      const res = await request(adminApp)
+        .put("/api/v1/admin/user/me/password")
         .set("Authorization", `Bearer ${adminToken}`)
         .send({
           currentPassword: initialPassword,

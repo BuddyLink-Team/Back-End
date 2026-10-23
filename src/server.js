@@ -1,5 +1,6 @@
 import http from 'http';
 import app from './app.js';
+import adminApp from './admin-app.js';
 import env from './config/env.js';
 import connectDatabase from './config/database.js';
 import { initSocket } from './config/socket.js';
@@ -60,6 +61,13 @@ const startServer = async () => {
     server.listen(env.PORT, () => {
       logger.info(`BuddyLink server running in ${env.NODE_ENV} mode at http://localhost:${env.PORT}`);
     });
+
+    // 6. Admin API on its own port (local setup; in production it is a separate service)
+    if (env.ADMIN_PORT) {
+      http.createServer(adminApp).listen(env.ADMIN_PORT, () => {
+        logger.info(`BuddyLink admin server running at http://localhost:${env.ADMIN_PORT}`);
+      });
+    }
   } catch (error) {
     logger.error(`Failed to start server: ${error.message}`);
     process.exit(1);

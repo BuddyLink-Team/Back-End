@@ -13,12 +13,14 @@ import { verifyFirebasePhoneToken } from '../../integrations/firebase/firebase.a
 import AppError from '../../shared/exceptions/AppError.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import {
+  TOKEN_AUDIENCES,
   TOKEN_TYPES,
   OTP_CONFIG,
 } from './auth.constants.js';
 import {
   createAccessToken,
   createRefreshTokenValue,
+  getTokenAudience,
   hashToken,
 } from '../../shared/helpers/token.helper.js';
 import { normalizePhone } from '../../shared/helpers/phone.helper.js';
@@ -42,9 +44,9 @@ class AuthService {
   /**
    * Helper to generate pairs of accessToken and refreshToken
    */
-  async _generateTokenPair(user) {
-    const accessToken = createAccessToken(user);
-    const refreshTokenValue = createRefreshTokenValue(user);
+  async _generateTokenPair(user, audience = TOKEN_AUDIENCES.APP) {
+    const accessToken = createAccessToken(user, audience);
+    const refreshTokenValue = createRefreshTokenValue(user, audience);
     const refreshTokenHash = hashToken(refreshTokenValue);
 
     // Calculate expiry date for refresh token
@@ -176,12 +178,17 @@ class AuthService {
   /**
    * Issue a session for an authenticated user and build the login response
    */
-  async _buildLoginResult(user) {
+  async _buildLoginResult(user, audience = TOKEN_AUDIENCES.APP) {
+    // Admins only sign in through the admin portal
+    if (audience === TOKEN_AUDIENCES.APP && user.role === USER_ROLES.ADMIN) {
+      throw new AppError('Admin accounts must sign in through the admin portal', 403, 'ADMIN_PORTAL_REQUIRED');
+    }
+
     const parent = user.role === USER_ROLES.PARENT
       ? await parentService.getParentByUserId(user._id)
       : null;
 
-    const tokens = await this._generateTokenPair(user);
+    const tokens = await this._generateTokenPair(user, audience);
 
     return {
       dto: AuthResponseDTO.toResponse({ user, parent, tokens }),
@@ -275,6 +282,10 @@ class AuthService {
         throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
       }
 
+      if (user.role === USER_ROLES.ADMIN) {
+        throw new AppError('Admin accounts must sign in through the admin portal', 403, 'ADMIN_PORTAL_REQUIRED');
+      }
+
       parent = await parentService.getParentByUserId(user._id);
 
       // Link Google to an existing local account
@@ -308,7 +319,7 @@ class AuthService {
   }
 
   /**
-   * Universal Login (Email + Password) for both Parent and Admin
+   * Parent app login (Email + Password); admins use loginAdmin on the admin portal
    */
   async login({ email, password }) {
     const user = await this._authenticateWithPassword({ email, password });
@@ -323,7 +334,7 @@ class AuthService {
     if (user.role !== USER_ROLES.ADMIN) {
       throw new AppError('Access denied: Admin privileges required', 403, 'FORBIDDEN');
     }
-    return this._buildLoginResult(user);
+    return this._buildLoginResult(user, TOKEN_AUDIENCES.ADMIN);
   }
 
   /**
@@ -528,16 +539,16 @@ class AuthService {
    * Revoke every session of a user (e.g. after a password change) and issue a fresh pair
    * so the device that made the change stays signed in.
    */
-  async rotateAllSessions(userId) {
+  async rotateAllSessions(userId, audience = TOKEN_AUDIENCES.APP) {
     const user = await userService.getUserById(userId);
     await authRepository.revokeAllUserRefreshTokens(user._id);
-    return this._generateTokenPair(user);
+    return this._generateTokenPair(user, audience);
   }
 
   /**
    * Refresh Token with Token Rotation
    */
-  async refreshToken(rawRefreshToken) {
+  async refreshToken(rawRefreshToken, audience = TOKEN_AUDIENCES.APP) {
     if (!rawRefreshToken) {
       throw new AppError('Refresh token required', 401, 'REFRESH_TOKEN_REQUIRED');
     }
@@ -547,6 +558,11 @@ class AuthService {
     try {
       decoded = jwt.verify(rawRefreshToken, secret);
     } catch {
+      throw new AppError('Invalid or expired refresh token', 401, 'INVALID_REFRESH_TOKEN');
+    }
+
+    // A session only refreshes on the app it was issued for
+    if (getTokenAudience(decoded) !== audience) {
       throw new AppError('Invalid or expired refresh token', 401, 'INVALID_REFRESH_TOKEN');
     }
 
@@ -565,7 +581,7 @@ class AuthService {
       throw new AppError('User not found or account inactive', 401, 'USER_INACTIVE');
     }
 
-    const newTokens = await this._generateTokenPair(user);
+    const newTokens = await this._generateTokenPair(user, audience);
 
     return {
       dto: TokenPairDTO.toResponse(newTokens),

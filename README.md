@@ -20,8 +20,10 @@ Modular Monolith backend for **BuddyLink** (Parenting & Child Playdate Matchmaki
 
 ```text
 src/
-├── app.js               # Express app configuration & middleware pipeline
-├── server.js            # HTTP Server & Socket.io entry point
+├── app.js               # Parent app API (Express config & middleware pipeline)
+├── admin-app.js         # Admin portal API (only /api/v1/admin routes)
+├── server.js            # HTTP Server & Socket.io entry point (+ admin API on ADMIN_PORT locally)
+├── admin-server.js      # Standalone admin API entry (its own service in production)
 ├── config/              # Environment variables, database, socket setups
 ├── middlewares/         # Auth, validation, roles, and error handlers
 ├── modules/             # Business modules (User, Playdate, Chat, AI, etc.)
@@ -54,18 +56,22 @@ Key environment variables:
 - `PORT`: Server port (default: `5000`)
 - `NODE_ENV`: `development` | `production` | `test`
 - `CLIENT_URL`: Frontend origin URL (e.g. `http://localhost:5173`)
+- `ADMIN_PORT`: Admin API port for local development (e.g. `5001`); leave unset in production
+- `ADMIN_CLIENT_URL`: Admin frontend origin URL (e.g. `http://localhost:5174`)
 - `MONGODB_URI`: MongoDB connection string
 - `JWT_SECRET` & `JWT_REFRESH_SECRET`: Secrets for signing tokens
 
 ### 4. Run Application
-- **Development mode (with auto-reload)**:
+- **Development mode (with auto-reload)**: parent API on `PORT` (5000) and admin API on `ADMIN_PORT` (5001)
   ```bash
   npm run dev
   ```
 - **Production mode**:
   ```bash
-  npm start
+  npm start            # parent API (+ jobs, Socket.io)
+  npm run start:admin  # admin API as its own service (listens on PORT)
   ```
+- **Deploy (Render + Vercel)**: see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - **Run Tests**:
   ```bash
   npm test

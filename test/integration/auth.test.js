@@ -2,6 +2,7 @@ import { describe, it, expect } from "@jest/globals";
 import request from "supertest";
 import bcrypt from "bcryptjs";
 import app from "../../src/app.js";
+import adminApp from "../../src/admin-app.js";
 import User from "../../src/modules/user/user.model.js";
 import Subscription from "../../src/modules/subscription/subscription.model.js";
 import SubscriptionPlan from "../../src/modules/subscription/subscription-plan.model.js";
@@ -255,7 +256,7 @@ describe("Authentication & Onboarding Integration Flow", () => {
 
   it("8. Admin Login: should reject parent role and allow admin role", async () => {
     // 8.1 Reject Parent trying to login as admin
-    const rejectRes = await request(app).post("/api/v1/auth/admin/login").send({
+    const rejectRes = await request(adminApp).post("/api/v1/admin/auth/login").send({
       email: testEmail,
       password: "NewSecretPassword456!",
     });
@@ -275,8 +276,8 @@ describe("Authentication & Onboarding Integration Flow", () => {
       isActive: true,
     });
 
-    const adminLoginRes = await request(app)
-      .post("/api/v1/auth/admin/login")
+    const adminLoginRes = await request(adminApp)
+      .post("/api/v1/admin/auth/login")
       .send({
         email: adminEmail,
         password: adminPass,

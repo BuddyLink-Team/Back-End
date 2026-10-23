@@ -2,6 +2,7 @@ import authService from './auth.service.js';
 import {
   clearAuthCookies,
   getRefreshTokenFromRequest,
+  getRequestAudience,
 } from '../../shared/helpers/token.helper.js';
 import { successResponse } from '../../shared/response/index.js';
 
@@ -122,7 +123,7 @@ class AuthController {
   async refreshToken(req, res, next) {
     try {
       const token = getRefreshTokenFromRequest(req);
-      const { dto } = await authService.refreshToken(token);
+      const { dto } = await authService.refreshToken(token, getRequestAudience(req));
 
       return successResponse(res, dto, 'Tokens refreshed successfully', 200);
     } catch (error) {

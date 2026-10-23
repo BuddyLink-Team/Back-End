@@ -2,6 +2,7 @@ import userService from './user.service.js';
 import authService from '../auth/auth.service.js';
 import { successResponse } from '../../shared/response/index.js';
 import { TokenPairDTO } from '../auth/auth.dto.js';
+import { getRequestAudience } from '../../shared/helpers/token.helper.js';
 
 class UserController {
   /**
@@ -53,7 +54,7 @@ class UserController {
       });
 
       // Sign out every other device (they may hold a stolen session) and keep this one signed in
-      const tokens = await authService.rotateAllSessions(req.userId);
+      const tokens = await authService.rotateAllSessions(req.userId, getRequestAudience(req));
 
       return successResponse(
         res,

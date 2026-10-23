@@ -38,9 +38,11 @@ src/
 │   ├── gamification/   # Streaks and badges
 │   ├── safety/         # Reports, blocks, child safety
 │   ├── rating-feedback/# Reviews and feedback after playdates
-│   └── admin/          # Admin management
-├── app.js
-├── server.js
+│   └── admin/          # Admin portal routes (mounted only in admin-app.js)
+├── app.js              # Parent app API
+├── admin-app.js        # Admin portal API (own port / own service)
+├── server.js           # Parent API entry (+ admin API on ADMIN_PORT locally)
+├── admin-server.js     # Standalone admin API entry
 test/
 ├── globalSetup.js      # Spin up MongoMemoryServer
 ├── globalTeardown.js   # Stop MongoMemoryServer

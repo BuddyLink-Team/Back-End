@@ -31,6 +31,10 @@ PORT=5000
 
 CLIENT_URL=http://localhost:5173
 
+ADMIN_PORT=5001
+
+ADMIN_CLIENT_URL=http://localhost:5174
+
 mongodb+srv://buddylink_admin:<db_password>@cluster0.wg1nfcj.mongodb.net/buddylink_db
 
 JWT_SECRET=your_jwt_secret
@@ -189,8 +193,11 @@ npm run dev
 Backend runs at:
 
 ```text
-http://localhost:5000
+http://localhost:5000/api/v1         # Parent app API (+ Socket.io)
+http://localhost:5001/api/v1/admin   # Admin portal API (ADMIN_PORT)
 ```
+
+The admin API only starts when `ADMIN_PORT` is set. See [Admin portal API](#admin-portal-api) below.
 
 ---
 
@@ -216,16 +223,50 @@ Expected output:
 
 ```text
 MongoDB Connected
-Server running on port 5000
+BuddyLink server running in development mode at http://localhost:5000
+BuddyLink admin server running at http://localhost:5001
 ```
 
 You can also verify data using MongoDB Compass.
 
 ---
 
+# Admin Portal API
+
+The admin portal has its own API, separate from the parent app:
+
+| | Parent app API | Admin portal API |
+|---|---|---|
+| Express app | `src/app.js` | `src/admin-app.js` |
+| Base path | `/api/v1` | `/api/v1/admin` |
+| Local port | `PORT` (5000) | `ADMIN_PORT` (5001) |
+| CORS origin | `CLIENT_URL` | `ADMIN_CLIENT_URL` |
+| Production | Render service `npm start` | Separate Render service `npm run start:admin` |
+
+- Admin routes live in `src/modules/admin/admin.route.js` and are mounted **only** in `admin-app.js`. Never mount them in `app.js`.
+- Tokens carry an audience (`aud`): `app` for the parent app, `admin` for the admin portal (`TOKEN_AUDIENCES` in `auth.constants.js`). `authenticate` and refresh only accept tokens issued for the app serving the request, so a parent token gets 401 on the admin API and an admin token gets 401 on the parent API (and on Socket.io).
+- Admin accounts cannot sign in on the parent app (`/auth/login`, `/auth/google` answer `403 ADMIN_PORTAL_REQUIRED`).
+- Admin endpoints so far: `POST /auth/login` (rate limited: 10 / 15 min), `POST /auth/refresh-token`, `POST /auth/logout`, `GET /auth/me`, `/user/*` (own profile & password). Everything after login requires `authenticate` + `authorizeRoles('admin')`.
+- Background jobs, seeding and Socket.io only run in `src/server.js` (parent API). `src/admin-server.js` only connects MongoDB and serves the admin API.
+
+---
+
 # Deploy on Render & PayOS Webhook
 
 Render's free instances **sleep after 15 minutes without requests** and take ~30-60 s to start again (the first request wakes them).
+
+> Full step-by-step guide (Render + Vercel, env variables, checklist): [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Two web services
+
+Render exposes one port per service, so the admin API is its own Web Service from the same repo:
+
+| Service | Start command | Environment |
+|---|---|---|
+| Parent API | `npm start` | Current variables. **Do not set `ADMIN_PORT`.** |
+| Admin API | `npm run start:admin` | Same `MONGODB_URI` / `JWT_*` as the parent API, `ADMIN_CLIENT_URL=<admin frontend URL>`, `TRUST_PROXY=1` |
+
+Both services listen on the `PORT` Render provides.
 
 ## Register the PayOS webhook
 

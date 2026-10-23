@@ -6,6 +6,13 @@ export const TOKEN_TYPES = Object.freeze({
   EMAIL_VERIFY: "email_verify",
 });
 
+// Which app a token was issued for: the parent app or the admin portal (separate port/service).
+// A token is only accepted by the app it was issued for.
+export const TOKEN_AUDIENCES = Object.freeze({
+  APP: "app",
+  ADMIN: "admin",
+});
+
 export const AUTH_COOKIE_NAMES = Object.freeze({
   ACCESS_TOKEN: "accessToken",
   REFRESH_TOKEN: "refreshToken",

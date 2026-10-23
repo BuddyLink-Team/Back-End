@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "start:admin": "node src/admin-server.js",
     "dev:memory": "node scripts/dev-memory.js",
     "places:sync": "node scripts/sync-places.js",
     "badges:upload": "node scripts/upload-badge-icons.js",

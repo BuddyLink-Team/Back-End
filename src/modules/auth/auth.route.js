@@ -22,7 +22,6 @@ const router = Router();
 router.post('/register', validate(registerValidation), authController.register);
 router.post('/google', validate(googleAuthValidation), authController.googleAuth);
 router.post('/login', validate(loginValidation), authController.login);
-router.post('/admin/login', validate(loginValidation), authController.loginAdmin);
 router.post('/forgot-password', otpSendLimiter, validate(forgotPasswordValidation), authController.forgotPassword);
 router.post('/reset-password', otpVerifyLimiter, validate(resetPasswordValidation), authController.resetPassword);
 router.post('/refresh-token', validate(refreshTokenValidation), authController.refreshToken);

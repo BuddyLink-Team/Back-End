@@ -21,6 +21,13 @@ export const apiLimiter = buildLimiter({
   skip: (req) => req.originalUrl?.includes('/subscriptions/payments/verify/'),
 });
 
+// Admin portal sign-in (password guessing against the most privileged accounts)
+export const adminLoginLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many sign-in attempts, please try again later.',
+});
+
 // Endpoints that send a one-time code (SMS/email cost + spam to the recipient)
 export const otpSendLimiter = buildLimiter({
   windowMs: OTP_RATE_LIMIT.WINDOW_MS,
