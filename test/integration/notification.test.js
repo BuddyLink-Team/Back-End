@@ -19,6 +19,18 @@ const register = async (label) => {
 
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
+// Cross-module notifications are created in the background (the triggering request does not
+// wait for them), so poll until the notification of the given type shows up
+const waitForNotification = async (token, type, { timeoutMs = 3000, intervalMs = 50 } = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await request(app).get('/api/v1/notifications').set(auth(token));
+    const found = res.body.data?.items?.find((n) => n.type === type);
+    if (found || Date.now() > deadline) return found;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+};
+
 describe('Notifications module API (/api/v1/notifications)', () => {
   let userA;
   let userB;
@@ -133,9 +145,7 @@ describe('Notifications module API (/api/v1/notifications)', () => {
     expect([200, 201]).toContain(connRes.status);
 
     // User B should now have a connection_request notification
-    const bNotifs = await request(app).get('/api/v1/notifications').set(auth(userB.token));
-    expect(bNotifs.status).toBe(200);
-    const reqNotif = bNotifs.body.data.items.find((n) => n.type === NOTIFICATION_TYPES.CONNECTION_REQUEST);
+    const reqNotif = await waitForNotification(userB.token, NOTIFICATION_TYPES.CONNECTION_REQUEST);
     expect(reqNotif).toBeDefined();
     expect(reqNotif.data.sender.fullName).toContain('User notifyA');
   });
@@ -176,11 +186,7 @@ describe('Notifications module API (/api/v1/notifications)', () => {
       recipientId: userB.parentId,
     });
 
-    const aNotifs = await request(app).get('/api/v1/notifications').set(auth(userA.token));
-    expect(aNotifs.status).toBe(200);
-    const acceptedNotif = aNotifs.body.data.items.find(
-      (n) => n.type === NOTIFICATION_TYPES.CONNECTION_ACCEPTED
-    );
+    const acceptedNotif = await waitForNotification(userA.token, NOTIFICATION_TYPES.CONNECTION_ACCEPTED);
     expect(acceptedNotif).toBeDefined();
     expect(acceptedNotif.data.sender.fullName).toContain('User notifyB');
   });
@@ -210,11 +216,7 @@ describe('Notifications module API (/api/v1/notifications)', () => {
       participantParentIds: [userB.parentId],
     });
 
-    const bNotifs = await request(app).get('/api/v1/notifications').set(auth(userB.token));
-    expect(bNotifs.status).toBe(200);
-    const inviteNotif = bNotifs.body.data.items.find(
-      (n) => n.type === NOTIFICATION_TYPES.PLAYDATE_INVITE
-    );
+    const inviteNotif = await waitForNotification(userB.token, NOTIFICATION_TYPES.PLAYDATE_INVITE);
     expect(inviteNotif).toBeDefined();
     expect(inviteNotif.body).toContain('Buổi chơi xếp hình');
     expect(inviteNotif.data.playdate.activity).toBe('Buổi chơi xếp hình');

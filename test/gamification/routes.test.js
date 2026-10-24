@@ -54,8 +54,13 @@ async function buildRoute() {
     'role.middleware.js': { authorizeRoles: () => 'parent-role' },
     'validate.middleware.js': { validate: () => 'validate' },
     'index.js': { USER_ROLES: { PARENT: 'PARENT', ADMIN: 'ADMIN' } },
-    'rating-feedback.controller.js': { default: { createRating: () => {}, getPendingRatings: () => {} } },
-    'rating-feedback.validation.js': { createRatingValidation: ['validate-rules'] },
+    'rating-feedback.controller.js': {
+      default: { createRating: () => {}, getPendingRatings: () => {}, getPlaydateRatings: () => {} },
+    },
+    'rating-feedback.validation.js': {
+      createRatingValidation: ['validate-rules'],
+      playdateRatingsValidation: ['validate-rules'],
+    },
   };
   const module = new vm.SourceTextModule(
     await readFile(new URL('../../src/modules/rating-feedback/rating-feedback.route.js', import.meta.url), 'utf8'),
@@ -78,7 +83,10 @@ async function buildRoute() {
 test('rating routes require authentication and parent role, with POST validation', async () => {
   const { routes, middleware } = await buildRoute();
   assert.deepEqual(middleware, ['authenticate', 'parent-role']);
-  assert.equal(routes.find(r => r.method === 'GET').path, '/ratings/pending');
+  const gets = routes.filter(r => r.method === 'GET');
+  assert.equal(gets[0].path, '/ratings/pending');
+  assert.equal(gets[1].path, '/:id/ratings');
+  assert.equal(gets[1].handlers[0], 'validate');
   const post = routes.find(r => r.method === 'POST');
   assert.equal(post.path, '/:id/ratings');
   assert.equal(post.handlers[0], 'validate');

@@ -3,7 +3,6 @@ import logger from '../../shared/logger/index.js';
 import { getIO } from '../../config/socket.js';
 import NotificationDTO from './notification.dto.js';
 import { NOTIFICATION_SOCKET_EVENTS } from './notification.constants.js';
-import registerNotificationListeners from './notification.listener.js';
 
 export const NOTIFICATION_EVENTS = Object.freeze({
   CREATED: 'notification.created',
@@ -37,7 +36,9 @@ export const emitNotificationEvent = async (event, payload) => {
 let isRegistered = false;
 
 /**
- * Register notification event listeners (realtime socket broadcasts & cross-module subscriptions)
+ * Register notification event listeners (realtime socket broadcasts).
+ * Cross-module triggers live in notification.listener.js, registered from app.js, so this file
+ * never imports the service (the service imports this file).
  */
 export const registerNotificationEventListeners = () => {
   if (isRegistered) return;
@@ -84,9 +85,6 @@ export const registerNotificationEventListeners = () => {
       logger.error(`[NotificationEvents] Socket emit failed for notification read-all: ${err.message}`);
     }
   });
-
-  // Register cross-module listeners (connection, playdate, etc.)
-  registerNotificationListeners();
 };
 
 export default registerNotificationEventListeners;
