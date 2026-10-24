@@ -21,8 +21,8 @@ class DiscoveryController {
    */
   async swipeProfile(req, res, next) {
     try {
-      const { targetChildId, isLike } = req.body;
-      const result = await discoveryService.swipeProfile(req.userId, targetChildId, isLike);
+      const { targetChildId, isLike, forChildId } = req.body;
+      const result = await discoveryService.swipeProfile(req.userId, targetChildId, isLike, forChildId);
       return successResponse(res, result, 'Swipe recorded successfully', 201);
     } catch (error) {
       return next(error);

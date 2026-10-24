@@ -10,6 +10,7 @@ import userService from './modules/user/user.service.js';
 import placesService from './modules/places/places.service.js';
 import { startSubscriptionExpiryJob } from './jobs/subscription-expiry.job.js';
 import { startPlaydateAutoCloseJob, runPlaydateAutoClose } from './jobs/playdate-auto-close.job.js';
+import { startPlaydateReminderJob } from './jobs/playdate-reminder.job.js';
 import mailAdapter from './integrations/mail/mail.adapter.js';
 import gamificationService from './modules/gamification/gamification.service.js';
 import { startGamificationJob, runGamificationJob } from './jobs/gamification.job.js';
@@ -46,6 +47,8 @@ const startServer = async () => {
     // Close the playdates of past days now (in case the server was down at midnight), then daily at 00:00
     await runPlaydateAutoClose();
     startPlaydateAutoCloseJob();
+    // Playdate reminders (24h / 1h before the start), every 15 minutes
+    startPlaydateReminderJob();
 
     // Unique indexes that guard badge unlocks and ratings, then the badge catalog
     await Promise.all([UserBadge.init(), RatingFeedback.init()]);

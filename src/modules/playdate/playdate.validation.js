@@ -1,7 +1,18 @@
 import { body, param, query } from 'express-validator';
+import { PLAYDATE_RULES, SUGGESTION_LIMITS } from './playdate.constants.js';
+import { PLACE_TYPES } from '../places/places.constants.js';
 
-// A playdate starts at a single 24-hour time 'HH:mm' (no end time)
+// A playdate starts at a 24-hour time 'HH:mm' and lasts durationMinutes
 const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+const durationRule = (field) =>
+  body(field)
+    .optional()
+    .isInt({ min: PLAYDATE_RULES.MIN_DURATION_MINUTES, max: PLAYDATE_RULES.MAX_DURATION_MINUTES })
+    .withMessage(
+      `Duration must be between ${PLAYDATE_RULES.MIN_DURATION_MINUTES} and ${PLAYDATE_RULES.MAX_DURATION_MINUTES} minutes`
+    )
+    .toInt();
 
 /**
  * Validation rules for GET /playdates
@@ -73,6 +84,7 @@ export const createPlaydateValidation = [
     .withMessage('Time is required')
     .matches(TIME_REGEX)
     .withMessage('Time must be in 24-hour HH:mm format'),
+  durationRule('durationMinutes'),
   body('activity')
     .trim()
     .notEmpty()
@@ -163,6 +175,7 @@ export const createRescheduleValidation = [
     .withMessage('New start time is required')
     .matches(TIME_REGEX)
     .withMessage('New start time must be in 24-hour HH:mm format'),
+  durationRule('newDurationMinutes'),
   body('newLocation.name')
     .optional()
     .trim()
@@ -200,6 +213,72 @@ export const voteRescheduleValidation = [
  * Validation rules for the invitable friends list
  */
 export const getInvitableFriendsValidation = [
+  query('childId').optional().isMongoId().withMessage('Invalid child profile ID'),
   query('search').optional().isString().trim().isLength({ max: 100 }).withMessage('search must be at most 100 characters'),
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit must be between 1 and 100'),
 ];
+
+// childId (own child, required) + participantChildIds (comma-separated children of friends)
+const suggestionGroupRules = [
+  query('childId')
+    .notEmpty()
+    .withMessage('childId is required')
+    .isMongoId()
+    .withMessage('Invalid child profile ID'),
+  query('participantChildIds')
+    .optional()
+    .isString()
+    .custom((value) => {
+      const ids = value.split(',').map((id) => id.trim()).filter(Boolean);
+      return ids.length <= SUGGESTION_LIMITS.MAX_PARTICIPANT_CHILDREN && ids.every((id) => /^[a-f\d]{24}$/i.test(id));
+    })
+    .withMessage(`participantChildIds must be up to ${SUGGESTION_LIMITS.MAX_PARTICIPANT_CHILDREN} comma-separated child IDs`),
+];
+
+/**
+ * Validation rules for GET /playdates/suggestions/time-slots
+ */
+export const timeSlotSuggestionsValidation = [
+  ...suggestionGroupRules,
+  query('from').optional().isISO8601().withMessage('from must be a valid ISO8601 date'),
+  query('to').optional().isISO8601().withMessage('to must be a valid ISO8601 date'),
+  query('durationMinutes')
+    .optional()
+    .isInt({ min: PLAYDATE_RULES.MIN_DURATION_MINUTES, max: PLAYDATE_RULES.MAX_DURATION_MINUTES })
+    .withMessage(
+      `Duration must be between ${PLAYDATE_RULES.MIN_DURATION_MINUTES} and ${PLAYDATE_RULES.MAX_DURATION_MINUTES} minutes`
+    ),
+];
+
+/**
+ * Validation rules for GET /playdates/suggestions/places
+ */
+export const placeSuggestionsValidation = [
+  ...suggestionGroupRules,
+  query('type')
+    .optional()
+    .isIn(Object.values(PLACE_TYPES))
+    .withMessage(`type must be one of ${Object.values(PLACE_TYPES).join(', ')}`),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: SUGGESTION_LIMITS.MAX_PLACES })
+    .withMessage(`limit must be between 1 and ${SUGGESTION_LIMITS.MAX_PLACES}`),
+];
+
+/**
+ * Validation rules for GET /playdates/busy-times
+ */
+export const busyTimesValidation = [
+  ...suggestionGroupRules,
+  query('date')
+    .notEmpty()
+    .withMessage('date is required')
+    .isISO8601()
+    .withMessage('date must be a valid ISO8601 date'),
+  query('excludePlaydateId').optional().isMongoId().withMessage('Invalid playdate ID'),
+];
+
+/**
+ * Validation rules for GET /playdates/suggestions/activities
+ */
+export const activitySuggestionsValidation = [...suggestionGroupRules];

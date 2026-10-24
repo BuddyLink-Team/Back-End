@@ -1,4 +1,5 @@
 import { ChildResponseDTO } from '../child/child.dto.js';
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 
 const toId = (value) => (value?._id || value)?.toString() ?? null;
 
@@ -26,6 +27,36 @@ const toParentCard = (parent) => {
   };
 };
 
+// Child shown in a pair: age only, never the date of birth
+const toPairChild = (child) => ({
+  id: toId(child),
+  displayName: child.displayName,
+  age: calculateAgeYears(child.dateOfBirth),
+  gender: child.gender || null,
+});
+
+/**
+ * Child pairs relative to the viewer (myChild / partnerChild). Expects populated pairs
+ * (ConnectionService.populateChildPairs); pairs that are not populated are left out.
+ */
+const toChildPairs = (childPairs, viewerId) => {
+  if (!viewerId) return [];
+  return (childPairs || [])
+    .filter((pair) => pair.childIds?.length === 2 && pair.childIds.every((child) => child?.parentId))
+    .map((pair) => {
+      const myChild = pair.childIds.find((child) => toId(child.parentId) === viewerId);
+      const partnerChild = pair.childIds.find((child) => child !== myChild);
+      if (!myChild || !partnerChild) return null;
+      return {
+        myChild: toPairChild(myChild),
+        partnerChild: toPairChild(partnerChild),
+        source: pair.source,
+        matchScore: pair.matchScore ?? null,
+      };
+    })
+    .filter(Boolean);
+};
+
 export class ConnectionDTO {
   /**
    * @param {Object} connection - Connection document (requesterId / recipientId populated or not)
@@ -48,6 +79,7 @@ export class ConnectionDTO {
       // incoming: the viewer received the request; outgoing: the viewer sent it
       direction: viewerId ? (isRequester ? 'outgoing' : 'incoming') : null,
       partner: viewerId ? toParentCard(partner) : null,
+      childPairs: toChildPairs(connection.childPairs, viewerId),
       connectedAt: connection.connectedAt || null,
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt,

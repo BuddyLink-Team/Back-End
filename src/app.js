@@ -26,6 +26,7 @@ import { registerChatEventListeners } from "./modules/chat/chat.events.js";
 import { registerGamificationEventListeners } from "./modules/gamification/gamification.events.js";
 import { registerNotificationEventListeners } from "./modules/notification/notification.events.js";
 import { registerNotificationListeners } from "./modules/notification/notification.listener.js";
+import { registerConnectionListeners } from "./modules/connection/connection.listener.js";
 
 import gamificationRoutes from './modules/gamification/gamification.route.js';
 import ratingFeedbackRoutes from './modules/rating-feedback/rating-feedback.route.js';
@@ -73,6 +74,7 @@ registerChatEventListeners();
 registerGamificationEventListeners();
 registerNotificationEventListeners();
 registerNotificationListeners();
+registerConnectionListeners();
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/user", userRoutes);

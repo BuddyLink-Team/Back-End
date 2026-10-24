@@ -6,6 +6,8 @@ import Parent from '../../src/modules/parent/parent.model.js';
 import Child from '../../src/modules/child/child.model.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import discoveryService from '../../src/modules/discovery/discovery.service.js';
+import { calcDistanceScore } from '../../src/modules/discovery/matching.rules.js';
+import Swipe from '../../src/modules/discovery/discovery.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { QUOTA_PERIOD_TYPES } from '../../src/modules/subscription/subscription.constants.js';
@@ -435,6 +437,13 @@ describe('Discovery & Smart Matching Integration Flow', () => {
           },
         },
       });
+      // A swipe is made for one of the parent's own children
+      await Child.create({
+        parentId: quotaTestParentId,
+        displayName: 'Quota Kid',
+        dateOfBirth: new Date('2020-01-01'),
+        gender: 'boy',
+      });
     });
 
     it('should not consume quota when a swipe is rejected', async () => {
@@ -706,9 +715,9 @@ describe('Discovery radius accuracy', () => {
     const wide = findChild(await discover(50), farChildId);
     expect(wide.matchScore).toBeGreaterThan(narrow.matchScore);
 
-    expect(discoveryService._calcDistanceScore(30, 50)).toBe(8);
-    expect(discoveryService._calcDistanceScore(30, 31)).toBe(1);
-    expect(discoveryService._calcDistanceScore(30, undefined)).toBe(0);
+    expect(calcDistanceScore(30, 50)).toBe(8);
+    expect(calcDistanceScore(30, 31)).toBe(1);
+    expect(calcDistanceScore(30, undefined)).toBe(0);
   });
 
   it('reports ~30 km for the far parent when the radius covers it', async () => {
@@ -749,7 +758,7 @@ describe('Discovery candidate pool and selected child', () => {
   const findChild = (res, childId) => res.body.data.profiles.find((p) => p.childId.toString() === childId);
 
   it('still shows farther parents once the nearest candidates are all swiped', async () => {
-    const searcher = await createParentAt('searcher', BASE);
+    const searcher = await createParentAt('searcher', BASE, [{ displayName: 'Searcher Kid' }]);
     const near = await createParentAt('near', [104.0, 19.01], [{ displayName: 'Near Kid' }]);
     const far = await createParentAt('far', [104.0, 19.05], [{ displayName: 'Far Kid' }]);
 
@@ -799,5 +808,165 @@ describe('Discovery candidate pool and selected child', () => {
       .set('Authorization', `Bearer ${searcher.token}`);
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('CHILD_NOT_FOUND');
+  });
+});
+
+// ============================================
+// Swipes per own child (BUD-48 child pairing)
+// ============================================
+
+describe('Discovery swipes per own child', () => {
+  const password = 'Password123!';
+
+  const createParent = async (label, children = [], coordinates = [101.0, 16.0]) => {
+    const reg = await request(app).post('/api/v1/auth/register').send({
+      fullName: `Pair ${label}`,
+      email: `pair-${label}-${Date.now()}-${Math.random()}@example.com`,
+      password,
+    });
+    const token = reg.body.data.tokens.accessToken;
+    const me = await request(app).get('/api/v1/parent/me').set('Authorization', `Bearer ${token}`);
+    const parentId = me.body.data.id || me.body.data._id;
+    await Parent.findByIdAndUpdate(parentId, {
+      $set: { 'location.coordinates': { type: 'Point', coordinates } },
+    });
+    const childIds = [];
+    for (const child of children) {
+      const created = await Child.create({ parentId, dateOfBirth: new Date('2020-01-01'), gender: 'girl', ...child });
+      childIds.push(created._id.toString());
+    }
+    return { token, parentId, childIds };
+  };
+
+  const swipe = (token, body) =>
+    request(app).post('/api/v1/discovery/swipe').set('Authorization', `Bearer ${token}`).send(body);
+
+  it('requires forChildId when the parent has several children', async () => {
+    const swiper = await createParent('two-kids', [{ displayName: 'Kid 1' }, { displayName: 'Kid 2' }]);
+    const target = await createParent('target-two', [{ displayName: 'Target' }], [101.0, 16.01]);
+
+    const res = await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: false });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('CHILD_REQUIRED_FOR_SWIPE');
+  });
+
+  it('rejects a swipe from a parent without children', async () => {
+    const swiper = await createParent('no-kids');
+    const target = await createParent('target-none', [{ displayName: 'Target' }], [101.0, 16.01]);
+
+    const res = await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: false });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('CHILD_REQUIRED_FOR_SWIPE');
+  });
+
+  it('uses the only child automatically', async () => {
+    const swiper = await createParent('one-kid', [{ displayName: 'Only Kid' }]);
+    const target = await createParent('target-one', [{ displayName: 'Target' }], [101.0, 16.01]);
+
+    const res = await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: false });
+    expect(res.status).toBe(201);
+    expect(res.body.data.forChildId.toString()).toBe(swiper.childIds[0]);
+
+    const stored = await Swipe.findById(res.body.data.swipeId).lean();
+    expect(stored.forChildId.toString()).toBe(swiper.childIds[0]);
+  });
+
+  it('rejects a forChildId that is not one of the parent children', async () => {
+    const swiper = await createParent('foreign', [{ displayName: 'Own' }]);
+    const target = await createParent('target-foreign', [{ displayName: 'Target' }], [101.0, 16.01]);
+
+    const res = await swipe(swiper.token, {
+      targetChildId: target.childIds[0],
+      isLike: false,
+      forChildId: target.childIds[0],
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('CHILD_NOT_FOUND');
+  });
+
+  it('lets a parent like the same child once for each own child and records both pairs', async () => {
+    const swiper = await createParent('multi-like', [
+      { displayName: 'Bin', interests: ['Lego'] },
+      { displayName: 'Bông', interests: ['Music'] },
+    ]);
+    const target = await createParent('target-multi', [{ displayName: 'Na', interests: ['Lego'] }], [101.0, 16.01]);
+    const [binId, bongId] = swiper.childIds;
+
+    const first = await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: true, forChildId: binId });
+    const second = await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: true, forChildId: bongId });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body.data.connection.connectionId).toBe(first.body.data.connection.connectionId);
+
+    const duplicate = await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: true, forChildId: binId });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error.code).toBe('DUPLICATE_SWIPE');
+
+    const connection = await Connection.findById(first.body.data.connection.connectionId).lean();
+    expect(connection.childPairs).toHaveLength(2);
+    const pairKeys = connection.childPairs.map((pair) => pair.pairKey);
+    expect(pairKeys).toContain([binId, target.childIds[0]].sort().join('_'));
+    expect(pairKeys).toContain([bongId, target.childIds[0]].sort().join('_'));
+    connection.childPairs.forEach((pair) => {
+      expect(pair.source).toBe('discovery');
+      expect(typeof pair.matchScore).toBe('number');
+    });
+  });
+
+  it('hides a card only for the own child it was swiped for', async () => {
+    const swiper = await createParent('exclude', [{ displayName: 'Kid A' }, { displayName: 'Kid B' }], [100.0, 15.0]);
+    const target = await createParent('target-exclude', [{ displayName: 'Target' }], [100.0, 15.01]);
+    const [kidA, kidB] = swiper.childIds;
+
+    await swipe(swiper.token, { targetChildId: target.childIds[0], isLike: false, forChildId: kidA });
+
+    const discoverFor = (childId) =>
+      request(app).get(`/api/v1/discovery?childId=${childId}`).set('Authorization', `Bearer ${swiper.token}`);
+    const ids = (res) => res.body.data.profiles.map((p) => p.childId.toString());
+
+    expect(ids(await discoverFor(kidA))).not.toContain(target.childIds[0]);
+    expect(ids(await discoverFor(kidB))).toContain(target.childIds[0]);
+
+    // No child selected with several children: every swipe of the parent is hidden
+    const all = await request(app).get('/api/v1/discovery').set('Authorization', `Bearer ${swiper.token}`);
+    expect(ids(all)).not.toContain(target.childIds[0]);
+  });
+
+  it('treats a legacy swipe without a child as swiped for every child', async () => {
+    const swiper = await createParent('legacy', [{ displayName: 'Kid A' }, { displayName: 'Kid B' }], [99.0, 14.0]);
+    const target = await createParent('target-legacy', [{ displayName: 'Target' }], [99.0, 14.01]);
+    await Swipe.create({
+      swiperParentId: swiper.parentId,
+      targetChildId: target.childIds[0],
+      targetParentId: target.parentId,
+      isLike: false,
+      forChildId: null,
+    });
+
+    const res = await swipe(swiper.token, {
+      targetChildId: target.childIds[0],
+      isLike: false,
+      forChildId: swiper.childIds[1],
+    });
+    expect(res.status).toBe(409);
+
+    const discover = await request(app)
+      .get(`/api/v1/discovery?childId=${swiper.childIds[1]}`)
+      .set('Authorization', `Bearer ${swiper.token}`);
+    expect(discover.body.data.profiles.map((p) => p.childId.toString())).not.toContain(target.childIds[0]);
+  });
+
+  it('adds the pair of a mutual like to the same connection', async () => {
+    const a = await createParent('mutual-pair-a', [{ displayName: 'An' }], [98.0, 13.0]);
+    const b = await createParent('mutual-pair-b', [{ displayName: 'Bé' }], [98.0, 13.01]);
+
+    await swipe(a.token, { targetChildId: b.childIds[0], isLike: true });
+    const res = await swipe(b.token, { targetChildId: a.childIds[0], isLike: true });
+    expect(res.body.data.connection.isMatched).toBe(true);
+
+    // Same two children liked from both sides: still a single pair
+    const connection = await Connection.findById(res.body.data.connection.connectionId).lean();
+    expect(connection.status).toBe('accepted');
+    expect(connection.childPairs).toHaveLength(1);
   });
 });

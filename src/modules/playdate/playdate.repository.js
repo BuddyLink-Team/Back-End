@@ -72,7 +72,9 @@ class PlaydateRepository {
    * @param {Object} queryOptions
    * @returns {Promise<{ playdates: Array, pagination: Object }>}
    */
-  async findForParent(parentId, { status, search, fromDate, toDate, page = 1, limit = 50 } = {}) {
+  async findForParent(rawParentId, { status, search, fromDate, toDate, page = 1, limit = 50 } = {}) {
+    // The list is read with an aggregation, which does not cast ids like find() does
+    const parentId = new mongoose.Types.ObjectId(rawParentId);
     const parentMatch = {
       $or: [
         { hostParentId: parentId },
@@ -132,24 +134,40 @@ class PlaydateRepository {
 
     const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
 
-    const sortOrder = (status === 'completed' || status === 'cancelled')
-      ? { scheduledDate: -1, createdAt: -1 }
-      : { scheduledDate: 1, createdAt: 1 };
-
     const parsedLimit = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || 50));
     const parsedPage = Math.max(PAGINATION.DEFAULT_PAGE, parseInt(page, 10) || PAGINATION.DEFAULT_PAGE);
     const skip = (parsedPage - 1) * parsedLimit;
 
-    const [total, playdates] = await Promise.all([
+    // Order: upcoming playdates first, the soonest first (date AND start time); then the past ones
+    // (completed / cancelled), the most recent first. Same rule on every tab.
+    const startMinutes = {
+      $add: [
+        { $multiply: [{ $convert: { input: { $substrBytes: ['$time', 0, 2] }, to: 'int', onError: 0, onNull: 0 } }, 60] },
+        { $convert: { input: { $substrBytes: ['$time', 3, 2] }, to: 'int', onError: 0, onNull: 0 } },
+      ],
+    };
+    const [total, ordered] = await Promise.all([
       Playdate.countDocuments(query),
-      Playdate.find(query)
-        .sort(sortOrder)
-        .skip(skip)
-        .limit(parsedLimit)
-        .populate('hostParentId', 'fullName avatarUrl userId verification location')
-        .populate('hostChildId', 'displayName dateOfBirth gender interests favoriteActivities personality')
-        .populate('participants.parentId', 'fullName avatarUrl userId verification location')
-        .populate('participants.childId', 'displayName dateOfBirth gender interests favoriteActivities personality'),
+      Playdate.aggregate([
+        { $match: query },
+        {
+          $addFields: {
+            _isPast: { $cond: [{ $eq: ['$status', PLAYDATE_STATUS.UPCOMING] }, 0, 1] },
+            _startMs: { $add: [{ $toLong: '$scheduledDate' }, { $multiply: [startMinutes, 60000] }] },
+          },
+        },
+        { $addFields: { _sortKey: { $cond: [{ $eq: ['$_isPast', 0] }, '$_startMs', { $multiply: ['$_startMs', -1] }] } } },
+        { $sort: { _isPast: 1, _sortKey: 1, _id: 1 } },
+        { $skip: skip },
+        { $limit: parsedLimit },
+        { $project: { _isPast: 0, _startMs: 0, _sortKey: 0 } },
+      ]),
+    ]);
+    const playdates = await Playdate.populate(ordered, [
+      { path: 'hostParentId', select: 'fullName avatarUrl userId verification location' },
+      { path: 'hostChildId', select: 'displayName dateOfBirth gender interests favoriteActivities personality' },
+      { path: 'participants.parentId', select: 'fullName avatarUrl userId verification location' },
+      { path: 'participants.childId', select: 'displayName dateOfBirth gender interests favoriteActivities personality' },
     ]);
 
     const totalPages = Math.ceil(total / parsedLimit) || 1;
@@ -338,6 +356,66 @@ class PlaydateRepository {
     return Playdate.find({ status: PLAYDATE_STATUS.UPCOMING, scheduledDate: { $lt: cutoff } })
       .select('_id participants scheduledDate')
       .lean();
+  }
+
+  /**
+   * Upcoming playdates of some children (as the host child, or an accepted participant child)
+   * scheduled between two dates
+   * @param {Array<string|ObjectId>} childIds
+   * @param {{ from: Date, to: Date, excludePlaydateId?: string|ObjectId }} window - scheduledDate range
+   * @returns {Promise<Array<Object>>}
+   */
+  async findUpcomingForChildren(childIds, { from, to, excludePlaydateId } = {}) {
+    if (!childIds.length) return [];
+    return Playdate.find({
+      status: PLAYDATE_STATUS.UPCOMING,
+      scheduledDate: { $gte: from, $lte: to },
+      ...(excludePlaydateId ? { _id: { $ne: excludePlaydateId } } : {}),
+      $or: [
+        { hostChildId: { $in: childIds } },
+        { participants: { $elemMatch: { childId: { $in: childIds }, status: PARTICIPANT_STATUS.ACCEPTED } } },
+      ],
+    })
+      .select('_id hostParentId hostChildId participants scheduledDate time durationMinutes')
+      .lean();
+  }
+
+  /**
+   * Upcoming playdates scheduled between two dates, with what a reminder needs
+   * @param {Date} from
+   * @param {Date} to
+   * @returns {Promise<Array<Object>>}
+   */
+  async findUpcomingScheduledBetween(from, to) {
+    return Playdate.find({ status: PLAYDATE_STATUS.UPCOMING, scheduledDate: { $gte: from, $lte: to } })
+      .select('_id hostParentId participants scheduledDate time activity location reminders')
+      .lean();
+  }
+
+  /**
+   * Atomically mark a reminder as sent. Only one caller wins, so a reminder is never sent twice
+   * (even with several server instances).
+   * @param {string|ObjectId} id
+   * @param {'h24'|'h1'} kind
+   * @param {Date} now
+   * @returns {Promise<Object|null>} The playdate when this caller claimed the reminder, otherwise null
+   */
+  async claimReminder(id, kind, now) {
+    const field = `reminders.${kind}SentAt`;
+    return Playdate.findOneAndUpdate(
+      { _id: id, status: PLAYDATE_STATUS.UPCOMING, [field]: null },
+      { $set: { [field]: now } },
+      { new: true }
+    ).lean();
+  }
+
+  /**
+   * Mark the 24h reminder as done without sending it (the 1h reminder already went out)
+   * @param {string|ObjectId} id
+   * @param {Date} now
+   */
+  async skipH24Reminder(id, now) {
+    return Playdate.updateOne({ _id: id, 'reminders.h24SentAt': null }, { $set: { 'reminders.h24SentAt': now } });
   }
 
   /**

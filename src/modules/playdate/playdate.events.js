@@ -9,9 +9,13 @@ export const PLAYDATE_EVENTS = Object.freeze({
   // Host or accepted participants changed (created, RSVP accepted/declined)
   MEMBERS_CHANGED: 'playdate.membersChanged',
   // Playdate became completed (by the host or the daily auto-close job)
+  // Payload: { playdateId, parentIds, childPairs: [{ parentIds: [host, participant], childIds: [hostChild, child] }] }
   COMPLETED: 'playdate.completed',
   // Playdate invitations sent to participants
   INVITED: 'playdate.invited',
+  // A reminder (24h or 1h before the start) is due
+  // Payload: { playdateId, kind: 'h24'|'h1', activity, time, date: 'dd/MM', placeName, recipientParentIds }
+  REMINDER_DUE: 'playdate.reminderDue',
 });
 
 const emitter = new EventEmitter();

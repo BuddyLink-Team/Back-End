@@ -1,0 +1,452 @@
+{
+  "info": {
+    "name": "BuddyLink - Child Pairing & Playdate Planning (BUD-48)",
+    "_postman_id": "bud-48-child-pairing-planning",
+    "description": "Child pairing and playdate planning endpoints.\n\n## Setup\nRun the setup folder of \"BuddyLink - Discovery API (BUD-13)\" first (Parent A / B with a child and a location), then copy its variables here:\nparent_a_token, parent_b_token, parent_a_id, parent_b_id, child_a_id, child_b_id.\nSet playdate_date to a future date (YYYY-MM-DD).\n\n## Flow\n1. Parent A likes child B for child A (forChildId) -> pending connection with a child pair\n2. Parent B accepts -> both see the pair on the connection card\n3. Parent A plans a playdate for child A: friends ranked for the child, time / place / activity suggestions\n4. Create the playdate (duration + end time), then the same time again -> 409 SCHEDULE_CONFLICT",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000/api/v1"
+    },
+    {
+      "key": "parent_a_token",
+      "value": ""
+    },
+    {
+      "key": "parent_b_token",
+      "value": ""
+    },
+    {
+      "key": "parent_a_id",
+      "value": ""
+    },
+    {
+      "key": "parent_b_id",
+      "value": ""
+    },
+    {
+      "key": "child_a_id",
+      "value": ""
+    },
+    {
+      "key": "child_b_id",
+      "value": ""
+    },
+    {
+      "key": "connection_id",
+      "value": ""
+    },
+    {
+      "key": "playdate_date",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Child pairing",
+      "item": [
+        {
+          "name": "Swipe Like for own child (forChildId)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetChildId\": \"{{child_b_id}}\",\n  \"isLike\": true,\n  \"forChildId\": \"{{child_a_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/discovery/swipe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "discovery",
+                "swipe"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Swipe is for child A', () => pm.expect(res.data.forChildId).to.eql(pm.collectionVariables.get('child_a_id')));",
+                  "pm.collectionVariables.set('connection_id', res.data.connection.connectionId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET outgoing requests (child pairs)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/connections?status=pending&direction=outgoing",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "connections"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "direction",
+                  "value": "outgoing"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const card = res.data.items.find((c) => c.id === pm.collectionVariables.get('connection_id'));",
+                  "pm.test('Card has the child pair', () => pm.expect(card.childPairs[0].myChild.id).to.eql(pm.collectionVariables.get('child_a_id')));",
+                  "pm.test('Age only, no date of birth', () => pm.expect(JSON.stringify(card.childPairs)).to.not.include('dateOfBirth'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Parent B accepts the request",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_b_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/connections/{{connection_id}}/accept",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "connections",
+                "{{connection_id}}",
+                "accept"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Plan a playdate for child A",
+      "item": [
+        {
+          "name": "GET friends ranked for child A",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/playdates/friends?childId={{child_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "playdates",
+                "friends"
+              ],
+              "query": [
+                {
+                  "key": "childId",
+                  "value": "{{child_a_id}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Matched before others', () => { pm.expect(res.data).to.have.keys('matched', 'others'); });",
+                  "pm.test('Child B is a matched playmate', () => pm.expect(res.data.matched.map((m) => m.child.id)).to.include(pm.collectionVariables.get('child_b_id')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET time slot suggestions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/playdates/suggestions/time-slots?childId={{child_a_id}}&participantChildIds={{child_b_id}}&durationMinutes=90",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "playdates",
+                "suggestions",
+                "time-slots"
+              ],
+              "query": [
+                {
+                  "key": "childId",
+                  "value": "{{child_a_id}}"
+                },
+                {
+                  "key": "participantChildIds",
+                  "value": "{{child_b_id}}"
+                },
+                {
+                  "key": "durationMinutes",
+                  "value": "90"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('At most 3 slots', () => pm.expect(res.data.slots.length).to.be.at.most(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET place suggestions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/playdates/suggestions/places?childId={{child_a_id}}&participantChildIds={{child_b_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "playdates",
+                "suggestions",
+                "places"
+              ],
+              "query": [
+                {
+                  "key": "childId",
+                  "value": "{{child_a_id}}"
+                },
+                {
+                  "key": "participantChildIds",
+                  "value": "{{child_b_id}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('No coordinates exposed', () => pm.expect(JSON.stringify(res.data)).to.not.include('coordinates'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET activity suggestions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/playdates/suggestions/activities?childId={{child_a_id}}&participantChildIds={{child_b_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "playdates",
+                "suggestions",
+                "activities"
+              ],
+              "query": [
+                {
+                  "key": "childId",
+                  "value": "{{child_a_id}}"
+                },
+                {
+                  "key": "participantChildIds",
+                  "value": "{{child_b_id}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Each activity has a reason', () => res.data.activities.forEach((a) => pm.expect(a.reason).to.be.a('string')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST playdate (90 minutes)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostChildId\": \"{{child_a_id}}\",\n  \"scheduledDate\": \"{{playdate_date}}\",\n  \"time\": \"09:00\",\n  \"durationMinutes\": 90,\n  \"activity\": \"Buổi chơi xếp hình Lego & giao lưu\",\n  \"location\": {\n    \"name\": \"Công viên Gia Định\",\n    \"address\": \"Hoàng Minh Giám, Gò Vấp\"\n  },\n  \"participants\": [\n    {\n      \"parentId\": \"{{parent_b_id}}\",\n      \"childId\": \"{{child_b_id}}\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/playdates",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "playdates"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('End time computed', () => pm.expect(res.data.endTime).to.eql('10:30'));",
+                  "pm.test('Warnings listed', () => pm.expect(res.data.warnings).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST overlapping playdate (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostChildId\": \"{{child_a_id}}\",\n  \"scheduledDate\": \"{{playdate_date}}\",\n  \"time\": \"10:00\",\n  \"durationMinutes\": 90,\n  \"activity\": \"Buổi chơi xếp hình Lego & giao lưu\",\n  \"location\": {\n    \"name\": \"Công viên Gia Định\",\n    \"address\": \"Hoàng Minh Giám, Gò Vấp\"\n  },\n  \"participants\": [\n    {\n      \"parentId\": \"{{parent_b_id}}\",\n      \"childId\": \"{{child_b_id}}\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/playdates",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "playdates"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('SCHEDULE_CONFLICT', () => pm.expect(res.error.code).to.eql('SCHEDULE_CONFLICT'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

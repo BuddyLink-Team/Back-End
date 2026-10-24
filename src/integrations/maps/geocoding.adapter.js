@@ -1,5 +1,6 @@
 import axios from 'axios';
 import logger from '../../shared/logger/index.js';
+import { publicDnsHttpsAgent } from './public-dns.agent.js';
 
 /**
  * Fallback center coordinates of major Vietnamese provinces/cities.
@@ -25,12 +26,59 @@ const DEFAULT_CITY_COORDINATES = {
   'huế': [107.5909, 16.4637],
 };
 
+const NOMINATIM_URL = 'https://nominatim.openstreetmap.org';
+const DEFAULT_POINT = [106.6297, 10.8231]; // TP.HCM
+// Nominatim allows 1 request per second
+const NOMINATIM_INTERVAL_MS = 1100;
+
+// Address types of a ward / commune boundary (Điện Bàn is a "town", most city wards are "suburb")
+const WARD_ADDRESS_TYPES = new Set(['suburb', 'quarter', 'neighbourhood', 'village', 'town', 'hamlet', 'city_district', 'municipality']);
+
+const isAdministrative = (item) => item?.class === 'boundary' && item?.type === 'administrative';
+const isWardBoundary = (item) => isAdministrative(item) && WARD_ADDRESS_TYPES.has(item.addresstype);
+const toPoint = (item) => {
+  const point = [parseFloat(item.lon), parseFloat(item.lat)];
+  return point.every(Number.isFinite) ? point : null;
+};
+const normalize = (text = '') => text.trim().toLowerCase();
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 class GeocodingAdapter {
+  constructor() {
+    // Public DNS: some router / ISP resolvers do not resolve nominatim.openstreetmap.org
+    this.client = axios.create({
+      baseURL: NOMINATIM_URL,
+      headers: {
+        'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
+        'Accept-Language': 'vi',
+      },
+      httpsAgent: publicDnsHttpsAgent,
+    });
+    // Pause before a second Nominatim request of the same lookup (tests set it to 0)
+    this.requestIntervalMs = NOMINATIM_INTERVAL_MS;
+  }
+
   /**
-   * Resolve [lng, lat] from a ward/district and a province/city name.
-   * Uses the OpenStreetMap Nominatim API (free, no API key or billing required).
+   * Nominatim search results (address details included), Vietnam only
+   * @param {string} query
+   * @returns {Promise<Array<Object>>}
+   */
+  async _search(query) {
+    const response = await this.client.get('/search', {
+      params: { q: query, format: 'json', limit: 5, addressdetails: 1, countrycodes: 'vn' },
+      timeout: 6000,
+    });
+    return Array.isArray(response.data) ? response.data : [];
+  }
+
+  /**
+   * Resolve [lng, lat] from a ward and a province/city name: the center of the ward's administrative
+   * boundary (OpenStreetMap Nominatim, free, no API key). Wards follow the units in force since 07/2025.
+   * - A ward name from before the 07/2025 merge matches no boundary: Nominatim then finds something inside
+   *   it (e.g. a police station), whose address names the new ward; the new ward's center is used.
+   * - Without a ward (or when nothing is found) the city center is used, and a warning is logged.
    *
-   * @param {string} area - Ward / district
+   * @param {string} area - Ward / commune
    * @param {string} city - Province / city
    * @returns {Promise<[number, number]>} [longitude, latitude]
    */
@@ -40,57 +88,55 @@ class GeocodingAdapter {
     const query = [cleanArea, cleanCity, 'Việt Nam'].filter(Boolean).join(', ');
 
     if (!cleanArea && !cleanCity) {
-      return [106.6297, 10.8231]; // Default TP.HCM
+      return DEFAULT_POINT;
     }
 
     try {
-      logger.info(`[Geocoding] Querying OpenStreetMap Nominatim for "${query}"`);
+      const results = await this._search(query);
 
-      const response = await axios.get('https://nominatim.openstreetmap.org/search', {
-        params: {
-          q: query,
-          format: 'json',
-          limit: 1,
-          addressdetails: 1,
-        },
-        headers: {
-          'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
-          'Accept-Language': 'vi',
-        },
-        timeout: 6000,
-      });
+      if (!cleanArea) {
+        // City only: the center of the city / province boundary
+        const cityBoundary = results.find(isAdministrative);
+        if (cityBoundary && toPoint(cityBoundary)) return toPoint(cityBoundary);
+      } else {
+        const ward = results.find(isWardBoundary);
+        if (ward && toPoint(ward)) {
+          logger.info(`[Geocoding] "${query}" -> ward "${ward.name}" [${toPoint(ward)}]`);
+          return toPoint(ward);
+        }
 
-      if (response.data && response.data.length > 0) {
-        const item = response.data[0];
-        const lat = parseFloat(item.lat);
-        const lon = parseFloat(item.lon);
-
-        if (!isNaN(lat) && !isNaN(lon)) {
-          logger.info(
-            `[Geocoding Success] "${query}" -> [lng: ${lon}, lat: ${lat}] (matched: ${item.display_name})`
+        // Former ward name: use the new ward its results now belong to
+        const newWardName = results
+          .map((item) => item.address?.suburb || item.address?.quarter || item.address?.city_district)
+          .find((name) => name && normalize(name) !== normalize(cleanArea));
+        if (newWardName) {
+          await wait(this.requestIntervalMs);
+          const newWard = (await this._search([newWardName, cleanCity, 'Việt Nam'].filter(Boolean).join(', '))).find(
+            isWardBoundary
           );
-          return [lon, lat];
+          if (newWard && toPoint(newWard)) {
+            logger.info(`[Geocoding] "${cleanArea}" is now part of "${newWard.name}" -> [${toPoint(newWard)}]`);
+            return toPoint(newWard);
+          }
         }
       }
 
-      logger.warn(`[Geocoding Warn] No OSM result for "${query}", using fallback coordinates`);
+      logger.warn(`[Geocoding Warn] No ward boundary found for "${query}", using the city center`);
     } catch (error) {
-      logger.warn(
-        `[Geocoding Warn] OpenStreetMap request failed: ${error.message}. Using fallback coordinates`
-      );
+      logger.warn(`[Geocoding Warn] OpenStreetMap request failed for "${query}": ${error.message}. Using the city center`);
     }
 
     // Fallback: match by city/province name in the predefined coordinates map
     const normalizedCity = cleanCity.toLowerCase();
     for (const [key, coords] of Object.entries(DEFAULT_CITY_COORDINATES)) {
       if (normalizedCity.includes(key)) {
-        logger.info(`[Geocoding Fallback] Using fallback coordinates for "${cleanCity}": [${coords}]`);
+        logger.warn(`[Geocoding Fallback] "${query}" placed at the center of "${key}": distances from it are approximate`);
         return coords;
       }
     }
 
-    // Default to Ho Chi Minh City coordinates if no match is found
-    return [106.6297, 10.8231];
+    logger.warn(`[Geocoding Fallback] Unknown city "${cleanCity}", "${query}" placed at the default point (TP.HCM)`);
+    return DEFAULT_POINT;
   }
 
   /**
@@ -103,12 +149,8 @@ class GeocodingAdapter {
    */
   async reverseGeocode(lng, lat) {
     try {
-      const response = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+      const response = await this.client.get('/reverse', {
         params: { lat, lon: lng, format: 'json', zoom: 18, addressdetails: 1 },
-        headers: {
-          'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
-          'Accept-Language': 'vi',
-        },
         timeout: 6000,
       });
       const address = response.data?.address || {};
@@ -134,12 +176,8 @@ class GeocodingAdapter {
    *   bbox is [south, west, north, east], null when nothing is found
    */
   async getBoundingBox(name) {
-    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
+    const response = await this.client.get('/search', {
       params: { q: name, format: 'json', limit: 1, countrycodes: 'vn' },
-      headers: {
-        'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
-        'Accept-Language': 'vi',
-      },
       timeout: 10000,
     });
     const item = response.data?.[0];

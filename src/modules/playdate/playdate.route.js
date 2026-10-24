@@ -13,6 +13,10 @@ import {
   respondPlaydateValidation,
   createRescheduleValidation,
   voteRescheduleValidation,
+  timeSlotSuggestionsValidation,
+  placeSuggestionsValidation,
+  activitySuggestionsValidation,
+  busyTimesValidation,
 } from './playdate.validation.js';
 
 const router = Router();
@@ -29,6 +33,13 @@ router.post('/', validate(createPlaydateValidation), playdateController.createPl
 
 // GET /api/v1/playdates/friends (Invitable connected friends)
 router.get('/friends', validate(getInvitableFriendsValidation), playdateController.getInvitableFriends);
+
+// GET /api/v1/playdates/suggestions/* (planning helpers; must stay before /:id)
+router.get('/suggestions/time-slots', validate(timeSlotSuggestionsValidation), playdateController.getTimeSlotSuggestions);
+router.get('/suggestions/places', validate(placeSuggestionsValidation), playdateController.getPlaceSuggestions);
+router.get('/suggestions/activities', validate(activitySuggestionsValidation), playdateController.getActivitySuggestions);
+// GET /api/v1/playdates/busy-times (children's other playdates on a day; before /:id)
+router.get('/busy-times', validate(busyTimesValidation), playdateController.getBusyTimes);
 
 // GET /api/v1/playdates/:id
 router.get('/:id', validate(playdateIdParamValidation), playdateController.getPlaydateById);

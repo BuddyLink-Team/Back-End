@@ -70,3 +70,40 @@ export const getScheduledStart = (scheduledDate, time, timeZone = DEFAULT_TIME_Z
  */
 export const getStartOfZonedDay = (now = new Date(), timeZone = DEFAULT_TIME_ZONE) =>
   zonedWallTimeToDate(getZonedParts(now, timeZone), 0, 0, timeZone);
+
+const MINUTE_MS = 60 * 1000;
+
+/**
+ * Instant when a playdate ends: its start plus its duration.
+ * @param {Date|string} scheduledDate
+ * @param {string} time - "HH:mm"
+ * @param {number} durationMinutes
+ * @param {string} [timeZone]
+ * @returns {Date}
+ */
+export const getScheduledEnd = (scheduledDate, time, durationMinutes, timeZone = DEFAULT_TIME_ZONE) =>
+  new Date(getScheduledStart(scheduledDate, time, timeZone).getTime() + durationMinutes * MINUTE_MS);
+
+/**
+ * Whether two half-open intervals [start, end) overlap.
+ * Touching edges (10:00-12:00 and 12:00-14:00) do NOT overlap.
+ * @param {Date|number} startA
+ * @param {Date|number} endA
+ * @param {Date|number} startB
+ * @param {Date|number} endB
+ * @returns {boolean}
+ */
+export const intervalsOverlap = (startA, endA, startB, endB) => startA < endB && startB < endA;
+
+/**
+ * Wall-clock time "HH:mm" plus some minutes, wrapping past midnight ("23:00" + 120 -> "01:00").
+ * @param {string} time - "HH:mm"
+ * @param {number} minutes
+ * @returns {string}
+ */
+export const addMinutesToTime = (time, minutes) => {
+  const match = String(time || '').match(/^(\d{2}):(\d{2})/);
+  if (!match) return null;
+  const total = (((Number(match[1]) * 60 + Number(match[2]) + minutes) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};

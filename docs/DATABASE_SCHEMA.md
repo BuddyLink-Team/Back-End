@@ -15,7 +15,8 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 - `parents`: Collection riêng biệt lưu trữ thông tin nghiệp vụ phụ huynh, khu vực địa lý, **preferences**, cấu hình quyền riêng tư, xác thực và chuỗi streak.
 - `auth_tokens`: Collection quản lý mã OTP và token xác thực dùng 1 lần (Phone OTP, Password Reset, Email Verification) tự hủy theo TTL Index.
 - `refresh_tokens`: Collection quản lý phiên đăng nhập và cấp lại access token an toàn.
-- Bỏ `activityCategory` và `endTime` trong `playdates`, đồng thời bỏ `newEndTime` trong `reschedule_requests` để tối giản và linh hoạt theo lịch thực tế của gia đình.
+- Bỏ `activityCategory` và `endTime` trong `playdates`, đồng thời bỏ `newEndTime` trong `reschedule_requests` để tối giản và linh hoạt theo lịch thực tế của gia đình. Thời lượng lưu bằng `durationMinutes` (BUD-48); giờ kết thúc (`endTime`) chỉ được tính ra trong response, không lưu.
+- Kết nối vẫn ở cấp **phụ huynh**; các cặp bé được ghép (`childPairs`) là metadata trên `connections` (BUD-48).
 - Sơ đồ quan hệ thực thể (ERD) được phân tách chi tiết theo 7 Module nghiệp vụ độc lập bằng cú pháp **Mermaid ERD**, dễ dàng theo dõi và export hình ảnh.
 - Script khởi tạo toàn bộ 23 Collections, Indexes và Skeleton Documents nạp sẵn vào MongoDB được lưu độc lập tại file [`scripts/init-mongo.js`](scripts/init-mongo.js).
 
@@ -207,6 +208,7 @@ erDiagram
     SWIPES {
         ObjectId _id PK
         ObjectId swiperParentId FK "Ref: parents._id"
+        ObjectId forChildId FK "Ref: children._id (bé của người vuốt; null ở swipe cũ)"
         ObjectId targetChildId FK "Ref: children._id"
         ObjectId targetParentId FK "Ref: parents._id"
         boolean isLike "true: Like, false: Pass"
@@ -223,6 +225,7 @@ erDiagram
         date connectedAt
         date declinedAt
         date removedAt
+        array childPairs "Array of { childIds [min, max], pairKey, source, matchScore, createdAt }"
         date createdAt
         date updatedAt
     }
@@ -251,6 +254,7 @@ erDiagram
         array participants "Array of { parentId, childId, status, invitedAt, respondedAt }"
         date scheduledDate "Ngày tổ chức"
         string time "Giờ bắt đầu, ví dụ: 09:00"
+        int durationMinutes "Thời lượng 30 - 480 phút, mặc định 120"
         string activity "Hoạt động: Dã ngoại, vẽ tranh, đá bóng..."
         object location "name, address, placeId, coordinates [lng, lat]"
         string note "Ghi chú cho các gia đình"
@@ -258,6 +262,7 @@ erDiagram
         object cancellation "cancelledBy, reason, cancelledAt"
         date completedAt
         ObjectId chatConversationId FK "Ref: conversations._id (1:1)"
+        object reminders "h24SentAt, h1SentAt (job nhắc lịch)"
         date createdAt
         date updatedAt
     }
@@ -268,6 +273,7 @@ erDiagram
         ObjectId requestedBy FK "Ref: parents._id đề xuất"
         date newDate "Ngày mới đề xuất"
         string newStartTime "Giờ mới đề xuất (không có newEndTime)"
+        int newDurationMinutes "Thời lượng mới (30 - 480 phút)"
         object newLocation "name, address, placeId, coordinates"
         string reason "Lý do đổi lịch"
         string status "pending | accepted | declined | cancelled"
@@ -701,6 +707,7 @@ _Ánh xạ: Mục 4.1, 14.1._
 interface ISwipe {
   _id: ObjectId;
   swiperParentId: ObjectId; // Tham chiếu parents._id
+  forChildId: ObjectId | null; // Bé của người vuốt mà lượt vuốt dành cho (BUD-48); null ở swipe cũ = tính cho mọi bé
   targetChildId: ObjectId; // Tham chiếu children._id
   targetParentId: ObjectId; // Tham chiếu parents._id của bé
   isLike: boolean; // true: Like, false: Pass
@@ -710,7 +717,7 @@ interface ISwipe {
 
 _Indexes:_
 
-- `{ swiperParentId: 1, targetChildId: 1 }` (unique)
+- `{ swiperParentId: 1, forChildId: 1, targetChildId: 1 }` (unique - mỗi bé của phụ huynh vuốt một bé khác đúng 1 lần; thay cho index cũ `{ swiperParentId: 1, targetChildId: 1 }`, được xóa bởi `scripts/migrate-bud48-child-pairs.js`)
 - `{ swiperParentId: 1, createdAt: 1 }`
 
 ---
@@ -730,6 +737,14 @@ interface IConnection {
   connectedAt?: Date;
   declinedAt?: Date;
   removedAt?: Date;
+  // Các cặp bé được ghép trên kết nối này (BUD-48). Bé đã lưu trữ (archived) bị lọc khi đọc.
+  childPairs: Array<{
+    childIds: [ObjectId, ObjectId]; // Sort [minId, maxId], mỗi bé thuộc 1 phụ huynh của kết nối
+    pairKey: string; // `${minChildId}_${maxChildId}`, không trùng trong 1 kết nối ($push có điều kiện $ne)
+    source: "discovery" | "playdate" | "manual"; // Like ở Discovery | đã chơi chung 1 playdate hoàn thành
+    matchScore: number | null; // Điểm ghép cặp lúc Like (0 - 100)
+    createdAt: Date;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -742,6 +757,7 @@ _Indexes:_
 - `{ parents: 1, status: 1 }` (Tìm danh sách bạn bè / trạng thái quan hệ 2 chiều cực nhanh)
 - `{ recipientId: 1, status: 1 }` (Lấy danh sách lời mời kết nối đang chờ duyệt)
 - `{ requesterId: 1, createdAt: 1 }` (Kiểm tra quota gửi request trong tháng)
+- `{ "childPairs.pairKey": 1 }` (Tìm kết nối theo cặp bé)
 
 ---
 
@@ -819,6 +835,7 @@ interface IPlaydate {
 
   scheduledDate: Date; // Ngày tổ chức
   time: string; // Giờ bắt đầu (ví dụ: "09:00", "15:30")
+  durationMinutes: number; // 30 - 480, mặc định 120; playdate cũ không có -> đọc là 120. Dùng phát hiện trùng lịch
   activity: string; // Hoạt động: Picnic, công viên, vẽ tranh, đá bóng...
 
   location: {
@@ -842,6 +859,13 @@ interface IPlaydate {
 
   completedAt?: Date; // Host bấm hoàn thành khi đến giờ, hoặc job 0h tự hoàn thành buổi đã qua ngày có người Accept
   chatConversationId?: ObjectId; // Tham chiếu conversations._id (Chat riêng cho Playdate)
+
+  // Job nhắc lịch (15 phút/lần) đánh dấu nguyên tử trước khi gửi -> mỗi lời nhắc chỉ gửi 1 lần.
+  // Tạo playdate < 24h trước giờ bắt đầu: h24SentAt được đặt ngay (bỏ nhắc 24h). Đổi lịch: tính lại.
+  reminders: {
+    h24SentAt: Date | null;
+    h1SentAt: Date | null;
+  };
 
   createdAt: Date;
   updatedAt: Date;
@@ -869,6 +893,7 @@ interface IRescheduleRequest {
 
   newDate: Date; // Ngày mới đề xuất
   newStartTime: string; // Giờ mới đề xuất
+  newDurationMinutes?: number | null; // Thời lượng mới (mặc định: giữ thời lượng hiện tại của playdate)
   newLocation?: {
     name: string;
     address: string;

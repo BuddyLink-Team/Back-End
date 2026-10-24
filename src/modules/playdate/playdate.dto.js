@@ -1,3 +1,9 @@
+import { addMinutesToTime } from '../../shared/helpers/date.helper.js';
+import { PLAYDATE_RULES } from './playdate.constants.js';
+
+// Old playdates / requests were stored without a duration
+const durationOf = (value) => value ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
+
 /**
  * Playdate Data Transfer Object
  */
@@ -12,12 +18,15 @@ export class PlaydateResponseDTO {
     const isHost = Boolean(parentIdStr && hostParentIdStr === parentIdStr);
 
     let myParticipantStatus = isHost ? 'host' : null;
+    // The viewer's own child in this playdate (host child, or the invited one)
+    let myChildId = isHost ? (playdate.hostChildId?._id || playdate.hostChildId)?.toString() : null;
     if (!isHost && Array.isArray(playdate.participants)) {
       const match = playdate.participants.find(
         (p) => (p.parentId?._id || p.parentId)?.toString() === parentIdStr
       );
       if (match) {
         myParticipantStatus = match.status;
+        myChildId = (match.childId?._id || match.childId)?.toString() || null;
       }
     }
 
@@ -96,6 +105,8 @@ export class PlaydateResponseDTO {
       participants,
       scheduledDate: playdate.scheduledDate,
       time: playdate.time,
+      durationMinutes: durationOf(playdate.durationMinutes),
+      endTime: addMinutesToTime(playdate.time, durationOf(playdate.durationMinutes)),
       activity: playdate.activity,
       location: playdate.location,
       note: playdate.note || '',
@@ -103,6 +114,7 @@ export class PlaydateResponseDTO {
       displayStatus,
       isHost,
       myParticipantStatus,
+      myChildId,
       cancellation: playdate.cancellation || null,
       completedAt: playdate.completedAt || null,
       chatConversationId: playdate.chatConversationId?.toString() || null,
@@ -171,6 +183,11 @@ export class RescheduleResponseDTO {
       myVote: myResponse ? myResponse.status : null,
       newDate: request.newDate,
       newStartTime: request.newStartTime,
+      // null on requests that keep the playdate's duration
+      newDurationMinutes: request.newDurationMinutes ?? null,
+      newEndTime: request.newDurationMinutes
+        ? addMinutesToTime(request.newStartTime, request.newDurationMinutes)
+        : null,
       newLocation: request.newLocation || null,
       reason: request.reason || '',
       status: request.status,

@@ -6,13 +6,59 @@ import connectionService from '../connection/connection.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
-import { getScheduledStart, getStartOfZonedDay } from '../../shared/helpers/date.helper.js';
+import {
+  getScheduledStart,
+  getScheduledEnd,
+  getStartOfZonedDay,
+  getZonedParts,
+  intervalsOverlap,
+} from '../../shared/helpers/date.helper.js';
 import { PlaydateResponseDTO, RescheduleResponseDTO } from './playdate.dto.js';
-import { PLAYDATE_STATUS, PARTICIPANT_STATUS, RESCHEDULE_STATUS, INVITABLE_FRIENDS_LIMIT } from './playdate.constants.js';
+import {
+  PLAYDATE_STATUS,
+  PARTICIPANT_STATUS,
+  RESCHEDULE_STATUS,
+  INVITABLE_FRIENDS_LIMIT,
+  PLAYDATE_RULES,
+  PLAYDATE_WARNING_CODES,
+  PLAYDATE_REMINDER,
+  REMINDER_KINDS,
+} from './playdate.constants.js';
+import { calculateChildPairScore } from '../discovery/matching.rules.js';
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { PAGINATION } from '../../shared/constants/index.js';
 import { emitPlaydateEvent, PLAYDATE_EVENTS } from './playdate.events.js';
 
 const toId = (ref) => (ref?._id || ref)?.toString();
+const MINUTE_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+// scheduledDate is the calendar day; the start can be up to a day later and lasts up to 8h
+const CONFLICT_WINDOW_MS = 2 * DAY_MS;
+
+const durationOf = (playdate) => playdate?.durationMinutes ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
+const endOf = (start, durationMinutes) => new Date(start.getTime() + durationMinutes * MINUTE_MS);
+
+/**
+ * Reminder state for a (new) start time: a playdate less than 24h away never gets the 24h reminder
+ * @param {Date} start
+ * @param {Date} [now]
+ */
+const initialReminders = (start, now = new Date()) => ({
+  h24SentAt: start.getTime() - now.getTime() < DAY_MS ? now : null,
+  h1SentAt: null,
+});
+
+// Friend shown in the invite list: only the area, never a family's exact address or coordinates
+const toFriendCard = (friendParent) => ({
+  id: friendParent._id.toString(),
+  fullName: friendParent.fullName,
+  avatarUrl: friendParent.avatarUrl || '',
+  isVerified: Boolean(friendParent.verification?.isVerifiedParent),
+  location: {
+    area: friendParent.location?.area || '',
+    city: friendParent.location?.city || '',
+  },
+});
 
 class PlaydateService {
   /**
@@ -66,13 +112,79 @@ class PlaydateService {
    * @private
    */
   async _notifyCompleted(playdate) {
-    const parentIds = [
-      toId(playdate.hostParentId),
-      ...(playdate.participants || [])
-        .filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED)
-        .map((p) => toId(p.parentId)),
-    ];
-    await emitPlaydateEvent(PLAYDATE_EVENTS.COMPLETED, { playdateId: toId(playdate._id), parentIds });
+    const accepted = (playdate.participants || []).filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED);
+    const parentIds = [toId(playdate.hostParentId), ...accepted.map((p) => toId(p.parentId))];
+    // Host child <-> each accepted child played together (connection records them as child pairs)
+    const childPairs = accepted.map((p) => ({
+      parentIds: [toId(playdate.hostParentId), toId(p.parentId)],
+      childIds: [toId(playdate.hostChildId), toId(p.childId)],
+    }));
+    await emitPlaydateEvent(PLAYDATE_EVENTS.COMPLETED, { playdateId: toId(playdate._id), parentIds, childPairs });
+  }
+
+  /**
+   * When some children are busy: their upcoming playdates (as host child or accepted participant)
+   * around a time window, one entry per child and playdate
+   * @param {Array<string|ObjectId>} childIds
+   * @param {Date} from
+   * @param {Date} to
+   * @param {string|ObjectId} [excludePlaydateId] - The playdate being rescheduled / answered
+   * @returns {Promise<Array<{ childId: string, playdateId: string, start: Date, end: Date }>>}
+   */
+  async getBusyIntervals(childIds, from, to, excludePlaydateId = null) {
+    const ids = [...new Set(childIds.filter(Boolean).map(String))];
+    if (!ids.length) return [];
+
+    const playdates = await playdateRepository.findUpcomingForChildren(ids, {
+      from: new Date(from.getTime() - CONFLICT_WINDOW_MS),
+      to: new Date(to.getTime() + CONFLICT_WINDOW_MS),
+      excludePlaydateId,
+    });
+
+    return playdates.flatMap((playdate) => {
+      const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+      const end = endOf(start, durationOf(playdate));
+      const involved = new Set([
+        toId(playdate.hostChildId),
+        ...(playdate.participants || [])
+          .filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED)
+          .map((p) => toId(p.childId)),
+      ]);
+      return ids.filter((id) => involved.has(id)).map((childId) => ({ childId, playdateId: toId(playdate._id), start, end }));
+    });
+  }
+
+  /**
+   * Upcoming playdates overlapping [start, end) for some children (host child or accepted participant)
+   * @param {Array<string|ObjectId>} childIds
+   * @param {Date} start
+   * @param {Date} end
+   * @param {string|ObjectId} [excludePlaydateId] - The playdate being rescheduled / answered
+   * @returns {Promise<Array<{ childId: string, playdateId: string }>>}
+   * @private
+   */
+  async _findConflicts(childIds, start, end, excludePlaydateId = null) {
+    const busy = await this.getBusyIntervals(childIds, start, end, excludePlaydateId);
+    return busy
+      .filter((interval) => intervalsOverlap(start, end, interval.start, interval.end))
+      .map(({ childId, playdateId }) => ({ childId, playdateId }));
+  }
+
+  /**
+   * Fail with 409 when the caller's own child already has an overlapping playdate.
+   * The caller is a member of that playdate (their child is in it), so its id may be shared.
+   * @private
+   */
+  async _assertNoConflict(childId, start, end, excludePlaydateId = null) {
+    const conflicts = await this._findConflicts([childId], start, end, excludePlaydateId);
+    if (conflicts.length > 0) {
+      throw new AppError(
+        'Your child already has a playdate at this time',
+        409,
+        PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
+        conflicts.map(({ playdateId }) => ({ playdateId }))
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -281,12 +393,77 @@ class PlaydateService {
   }
 
   /**
-   * Connected friends (and their children) that can be invited to a playdate, sorted by name
-   * @param {string} userId
-   * @param {{ search?: string, limit?: number|string }} [options] - search: friend name; limit: default 50
+   * Send the reminders that are due (run every 15 minutes by the reminder job):
+   * - 1h reminder when the playdate starts within the next hour (+ one job interval);
+   * - 24h reminder when it starts within the next 24h, but not within that hour.
+   * Each reminder is claimed atomically before it is sent, so it goes out exactly once.
+   * The host and every accepted participant are notified (notification module listener).
+   * @param {Date} [now]
+   * @returns {Promise<{ h24: number, h1: number }>}
    */
-  async getInvitableFriends(userId, { search, limit } = {}) {
-    const parentId = await this._getParentId(userId);
+  async sendDueReminders(now = new Date()) {
+    const slackMs = PLAYDATE_REMINDER.JOB_INTERVAL_MINUTES * MINUTE_MS;
+    const h1Window = 60 * MINUTE_MS + slackMs;
+    const h24Window = DAY_MS + slackMs;
+    const candidates = await playdateRepository.findUpcomingScheduledBetween(
+      new Date(now.getTime() - CONFLICT_WINDOW_MS),
+      new Date(now.getTime() + CONFLICT_WINDOW_MS)
+    );
+    const result = { [REMINDER_KINDS.H24]: 0, [REMINDER_KINDS.H1]: 0 };
+
+    for (const playdate of candidates) {
+      const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+      const timeLeft = start.getTime() - now.getTime();
+      if (timeLeft <= 0) continue;
+
+      let kind = null;
+      if (timeLeft <= h1Window && !playdate.reminders?.h1SentAt) kind = REMINDER_KINDS.H1;
+      else if (timeLeft > h1Window && timeLeft <= h24Window && !playdate.reminders?.h24SentAt) kind = REMINDER_KINDS.H24;
+      if (!kind) continue;
+
+      const claimed = await playdateRepository.claimReminder(playdate._id, kind, now);
+      if (!claimed) continue; // another run sent it
+      // Too late for the 24h reminder: never send it after the 1h one
+      if (kind === REMINDER_KINDS.H1) await playdateRepository.skipH24Reminder(playdate._id, now);
+
+      const day = getZonedParts(start);
+      await emitPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, {
+        playdateId: toId(playdate._id),
+        kind,
+        activity: playdate.activity,
+        time: playdate.time,
+        date: `${String(day.day).padStart(2, '0')}/${String(day.month).padStart(2, '0')}`,
+        placeName: playdate.location?.name || '',
+        recipientParentIds: this.getAcceptedParentIds(playdate),
+      });
+      result[kind] += 1;
+    }
+
+    return result;
+  }
+
+  /**
+   * Connected friends (and their children) that can be invited to a playdate, sorted by name.
+   * With a childId: the friends' children ranked for that child instead (see _getPlaymatesForChild).
+   * @param {string} userId
+   * @param {{ search?: string, limit?: number|string, childId?: string }} [options]
+   *   - search: friend name; limit: max friends (default 50); childId: own child the playdate is for
+   */
+  async getInvitableFriends(userId, { search, limit, childId } = {}) {
+    const parent = await parentService.getParentByUserId(userId);
+    if (!parent) {
+      throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
+    }
+    const parentId = parent._id;
+
+    let ownChild = null;
+    if (childId) {
+      ownChild = (await childService.getActiveChildrenByParentId(parentId)).find((c) => c._id.toString() === childId);
+      if (!ownChild) {
+        throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
+      }
+    }
+
     const [connections, blockedIds] = await Promise.all([
       connectionService.getAcceptedConnections(parentId),
       safetyService.getBlockedParentIds(parentId),
@@ -306,16 +483,12 @@ class PlaydateService {
     // Children of every friend in one query
     const childrenByParent = await childService.getActiveChildrenByParentIds(friendParents.map((f) => f._id));
 
+    if (ownChild) {
+      return this._getPlaymatesForChild(parent, ownChild, friendParents, childrenByParent, connections);
+    }
+
     return friendParents.map((friendParent) => ({
-      id: friendParent._id.toString(),
-      fullName: friendParent.fullName,
-      avatarUrl: friendParent.avatarUrl || '',
-      isVerified: Boolean(friendParent.verification?.isVerifiedParent),
-      // Only the area: never expose a family's exact address or coordinates
-      location: {
-        area: friendParent.location?.area || '',
-        city: friendParent.location?.city || '',
-      },
+      ...toFriendCard(friendParent),
       children: (childrenByParent.get(friendParent._id.toString()) || []).map((c) => ({
         id: c._id.toString(),
         displayName: c.displayName,
@@ -324,6 +497,59 @@ class PlaydateService {
         interests: c.interests || [],
       })),
     }));
+  }
+
+  /**
+   * Friends' children ranked for one own child: children already paired with it first ("matched"),
+   * then every other child ("others"), each sorted by match score. Age gaps only warn.
+   * @private
+   */
+  _getPlaymatesForChild(parent, ownChild, friendParents, childrenByParent, connections) {
+    // Pairs of this child on any accepted connection: partner child id -> pair
+    const ownChildId = ownChild._id.toString();
+    const pairsByPartner = new Map();
+    connections.forEach((connection) => {
+      (connection.childPairs || []).forEach((pair) => {
+        const ids = pair.childIds.map(String);
+        if (!ids.includes(ownChildId)) return;
+        pairsByPartner.set(ids.find((id) => id !== ownChildId), pair);
+      });
+    });
+
+    const ownAge = calculateAgeYears(ownChild.dateOfBirth);
+    const matched = [];
+    const others = [];
+
+    friendParents.forEach((friendParent) => {
+      (childrenByParent.get(friendParent._id.toString()) || []).forEach((child) => {
+        const childId = child._id.toString();
+        const age = calculateAgeYears(child.dateOfBirth);
+        const pair = pairsByPartner.get(childId);
+        const warnings = [];
+        if (ownAge !== null && age !== null && Math.abs(ownAge - age) > PLAYDATE_RULES.MAX_AGE_GAP_YEARS) {
+          warnings.push({ code: PLAYDATE_WARNING_CODES.AGE_GAP, ageGapYears: Math.abs(ownAge - age) });
+        }
+
+        const entry = {
+          parent: toFriendCard(friendParent),
+          // Age only: never the date of birth
+          child: {
+            id: childId,
+            displayName: child.displayName,
+            age,
+            gender: child.gender,
+            interests: child.interests || [],
+          },
+          matchScore: calculateChildPairScore(ownChild, parent, child, friendParent),
+          source: pair?.source || null,
+          warnings,
+        };
+        (pair ? matched : others).push(entry);
+      });
+    });
+
+    const byScore = (a, b) => b.matchScore - a.matchScore;
+    return { matched: matched.sort(byScore), others: others.sort(byScore) };
   }
 
   /**
@@ -339,7 +565,10 @@ class PlaydateService {
     }
 
     // 2. The playdate must start in the future
-    if (getScheduledStart(data.scheduledDate, data.time) <= new Date()) {
+    const durationMinutes = data.durationMinutes ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
+    const start = getScheduledStart(data.scheduledDate, data.time);
+    const end = getScheduledEnd(data.scheduledDate, data.time, durationMinutes);
+    if (start <= new Date()) {
       throw new AppError('The playdate must start in the future', 400, 'PLAYDATE_IN_PAST');
     }
 
@@ -375,7 +604,16 @@ class PlaydateService {
       }
     }
 
-    // 4. Check the creation quota first, consume it only once the playdate exists
+    // 4. The host's child cannot be in two playdates at once; invited children only get a warning
+    //    (they are checked again when their parent accepts). Nothing is created or sent before this.
+    await this._assertNoConflict(data.hostChildId, start, end);
+    const invitedConflicts = await this._findConflicts(uniqueParticipants.map((p) => toId(p.childId)), start, end);
+    const warnings = [...new Set(invitedConflicts.map((c) => c.childId))].map((childId) => ({
+      code: PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
+      childId,
+    }));
+
+    // 5. Check the creation quota first, consume it only once the playdate exists
     await subscriptionService.checkAndConsumeQuota(hostParentId, 'playdateCreate', false);
 
     const { hostChildId, scheduledDate, time, activity, location, note } = data;
@@ -384,6 +622,8 @@ class PlaydateService {
       hostChildId,
       scheduledDate,
       time,
+      durationMinutes,
+      reminders: initialReminders(start),
       activity,
       location,
       note: note || '',
@@ -404,7 +644,7 @@ class PlaydateService {
       throw error;
     }
 
-    // 5. Group chat starts with the host; invitees join once they accept
+    // 6. Group chat starts with the host; invitees join once they accept
     await this._notifyMembersChanged(playdate._id);
 
     if (uniqueParticipants.length > 0) {
@@ -416,7 +656,7 @@ class PlaydateService {
     }
 
     const populated = await playdateRepository.findById(playdate._id);
-    return PlaydateResponseDTO.toResponse(populated, hostParentId);
+    return { ...PlaydateResponseDTO.toResponse(populated, hostParentId), warnings };
   }
 
   /**
@@ -477,8 +717,12 @@ class PlaydateService {
 
     const isAccepting = status === PARTICIPANT_STATUS.ACCEPTED;
 
-    // Participation quota (Free plan: 3/month): check now, consume once the answer is saved
     if (isAccepting) {
+      // The invited child cannot join two playdates at once (declining is always allowed)
+      const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+      await this._assertNoConflict(toId(participant.childId), start, endOf(start, durationOf(playdate)), id);
+
+      // Participation quota (Free plan: 3/month): check now, consume once the answer is saved
       await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', false);
     }
 
@@ -514,8 +758,16 @@ class PlaydateService {
    * Apply an accepted schedule to the playdate
    * @private
    */
-  async _applySchedule(playdateId, { newDate, newStartTime, newLocation }) {
-    const updateFields = { scheduledDate: newDate, time: newStartTime };
+  async _applySchedule(playdateId, { newDate, newStartTime, newDurationMinutes, newLocation }) {
+    const updateFields = {
+      scheduledDate: newDate,
+      time: newStartTime,
+      // New start: reminders are sent again for it
+      reminders: initialReminders(getScheduledStart(newDate, newStartTime)),
+    };
+    if (newDurationMinutes) {
+      updateFields.durationMinutes = newDurationMinutes;
+    }
     if (newLocation?.name && newLocation?.address) {
       updateFields.location = newLocation;
     }
@@ -526,7 +778,7 @@ class PlaydateService {
    * Propose a reschedule for an upcoming playdate (Host only, Section 6.2).
    * Every accepted participant must agree; with no accepted participant the change applies at once.
    */
-  async createRescheduleRequest(userId, id, { newDate, newStartTime, newLocation, reason = '' }) {
+  async createRescheduleRequest(userId, id, { newDate, newStartTime, newDurationMinutes, newLocation, reason = '' }) {
     const parentId = await this._getParentId(userId);
     const playdate = await this._findPlaydateOrFail(id);
 
@@ -547,13 +799,19 @@ class PlaydateService {
       throw new AppError('The new schedule must be in the future', 400, 'RESCHEDULE_IN_PAST');
     }
 
-    const isSameTime = newStart.getTime() === getScheduledStart(playdate.scheduledDate, playdate.time).getTime();
+    const duration = newDurationMinutes ?? durationOf(playdate);
+    const isSameTime =
+      newStart.getTime() === getScheduledStart(playdate.scheduledDate, playdate.time).getTime() &&
+      duration === durationOf(playdate);
     const isSameLocation =
       !hasNewLocation ||
       (newLocation.name === playdate.location?.name && newLocation.address === playdate.location?.address);
     if (isSameTime && isSameLocation) {
       throw new AppError('The proposed schedule is the same as the current one', 400, 'RESCHEDULE_NO_CHANGE');
     }
+
+    // The host's child must be free at the new time (this playdate itself does not count)
+    await this._assertNoConflict(toId(playdate.hostChildId), newStart, endOf(newStart, duration), id);
 
     // Each reschedule is its own request: a new proposal replaces the pending one
     await rescheduleRepository.cancelPendingByPlaydateId(id);
@@ -565,6 +823,7 @@ class PlaydateService {
     const schedule = {
       newDate: new Date(newDate),
       newStartTime,
+      newDurationMinutes: duration,
       newLocation: hasNewLocation ? newLocation : playdate.location,
     };
 
@@ -614,6 +873,14 @@ class PlaydateService {
     const existingReq = await rescheduleRepository.findOne(query);
     if (!existingReq) {
       throw new AppError('No pending reschedule request found to vote on', 404, 'RESCHEDULE_NOT_FOUND');
+    }
+
+    // Accepting: the voter's child must be free at the new time (declining is always allowed)
+    const voterChild = (playdate.participants || []).find((p) => toId(p.parentId) === parentId.toString());
+    if (status === PARTICIPANT_STATUS.ACCEPTED && voterChild) {
+      const newStart = getScheduledStart(existingReq.newDate, existingReq.newStartTime);
+      const newDuration = existingReq.newDurationMinutes ?? durationOf(playdate);
+      await this._assertNoConflict(toId(voterChild.childId), newStart, endOf(newStart, newDuration), id);
     }
 
     // Atomic update of the individual participant's vote

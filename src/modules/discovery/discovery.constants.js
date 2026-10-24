@@ -18,5 +18,6 @@ export const DISCOVERY_DEFAULTS = Object.freeze({
   MAX_NEARBY_PARENTS: 1000,
   // Nearest discoverable children (not swiped, matching filters) scored per request
   CANDIDATE_POOL_SIZE: 100,
-  EARTH_RADIUS_KM: 6371,
+  // Same radius as MongoDB $geoNear (spherical), so app-side distances match the discovery ones
+  EARTH_RADIUS_KM: 6378.1,
 });

@@ -16,13 +16,13 @@ class ConnectionRepository {
   }
 
   /**
-   * All accepted connections of a parent, with both parents populated
+   * All accepted connections of a parent (with their child pairs), both parents populated
    * @param {string|ObjectId} parentId
    * @returns {Promise<Array<Object>>}
    */
   async findAcceptedForParent(parentId) {
     return Connection.find({ parents: parentId, status: CONNECTION_STATUS.ACCEPTED })
-      .populate('parents', 'fullName avatarUrl userId verification location')
+      .populate('parents', 'fullName avatarUrl userId verification location preferences')
       .lean();
   }
 
@@ -65,15 +65,32 @@ class ConnectionRepository {
    * Create a pending connection request
    * @param {string|ObjectId} requesterId
    * @param {string|ObjectId} recipientId
+   * @param {Array<Object>} [childPairs] - Child pairs known when the request is sent
    * @returns {Promise<Object>}
    */
-  async createRequest(requesterId, recipientId) {
+  async createRequest(requesterId, recipientId, childPairs = []) {
     return Connection.create({
       parents: [requesterId, recipientId],
       requesterId,
       recipientId,
       status: CONNECTION_STATUS.PENDING,
+      childPairs,
     });
+  }
+
+  /**
+   * Add a child pair to a connection. Atomic and without duplicates: only pushes when no pair
+   * with the same pairKey is on the connection yet.
+   * @param {string|ObjectId} connectionId
+   * @param {Object} pair - { childIds, pairKey, source, matchScore }
+   * @returns {Promise<Object|null>} Updated connection, or null when the pair already existed
+   */
+  async addChildPair(connectionId, pair) {
+    return Connection.findOneAndUpdate(
+      { _id: connectionId, 'childPairs.pairKey': { $ne: pair.pairKey } },
+      { $push: { childPairs: pair } },
+      { new: true }
+    ).lean();
   }
 
   /**

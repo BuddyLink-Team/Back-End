@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { publicDnsHttpsAgent } from './public-dns.agent.js';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import { wait } from '../../shared/helpers/async.helper.js';
@@ -127,6 +128,7 @@ class OverpassAdapter {
               'User-Agent': 'BuddyLinkApp/1.0 (contact@buddylink.vn)',
             },
             timeout: timeoutMs,
+            httpsAgent: publicDnsHttpsAgent,
           });
           // A query that ran out of time still answers 200 with a "remark"
           if (response.data?.remark && !response.data.elements?.length) throw new Error(response.data.remark);

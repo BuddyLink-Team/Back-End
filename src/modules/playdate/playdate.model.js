@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { PLAYDATE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
+import { PLAYDATE_STATUS, PARTICIPANT_STATUS, PLAYDATE_RULES } from './playdate.constants.js';
 
 const playdateParticipantSchema = new mongoose.Schema(
   {
@@ -53,6 +53,13 @@ const playdateSchema = new mongoose.Schema(
       type: String,
       required: true, // "09:00", "15:30"
     },
+    // Old playdates have none: read with `?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES`
+    durationMinutes: {
+      type: Number,
+      default: PLAYDATE_RULES.DEFAULT_DURATION_MINUTES,
+      min: PLAYDATE_RULES.MIN_DURATION_MINUTES,
+      max: PLAYDATE_RULES.MAX_DURATION_MINUTES,
+    },
     activity: {
       type: String,
       required: true,
@@ -94,6 +101,11 @@ const playdateSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Conversation',
       default: null,
+    },
+    // When each reminder was sent (claimed atomically by the reminder job); reset on reschedule
+    reminders: {
+      h24SentAt: { type: Date, default: null },
+      h1SentAt: { type: Date, default: null },
     },
   },
   {
