@@ -10,6 +10,8 @@ export const PLAYDATE_EVENTS = Object.freeze({
   MEMBERS_CHANGED: 'playdate.membersChanged',
   // Playdate became completed (by the host or the daily auto-close job)
   COMPLETED: 'playdate.completed',
+  // Playdate invitations sent to participants
+  INVITED: 'playdate.invited',
 });
 
 const emitter = new EventEmitter();

@@ -8,6 +8,8 @@ import logger from '../../shared/logger/index.js';
 export const CONNECTION_EVENTS = Object.freeze({
   // A connection request became accepted
   ACCEPTED: 'connection.accepted',
+  // A connection request was sent
+  REQUESTED: 'connection.requested',
 });
 
 const emitter = new EventEmitter();
