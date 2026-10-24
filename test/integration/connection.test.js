@@ -2,6 +2,10 @@ import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
 import Parent from '../../src/modules/parent/parent.model.js';
+import Child from '../../src/modules/child/child.model.js';
+import Connection from '../../src/modules/connection/connection.model.js';
+import Notification from '../../src/modules/notification/notification.model.js';
+import connectionService from '../../src/modules/connection/connection.service.js';
 
 const register = async (label) => {
   const res = await request(app).post('/api/v1/auth/register').send({
@@ -208,5 +212,110 @@ describe('Connections management (/api/v1/connections)', () => {
 
     const invalidRes = await request(app).patch('/api/v1/connections/not-an-id/accept').set(auth(alice.token));
     expect(invalidRes.status).toBe(400);
+  });
+});
+
+describe('Connection child pairs (BUD-48)', () => {
+  const createChild = (parentId, displayName, extra = {}) =>
+    Child.create({ parentId, displayName, dateOfBirth: new Date('2020-01-01'), gender: 'girl', ...extra });
+
+  const like = (from, targetChildId, forChildId) =>
+    request(app)
+      .post('/api/v1/discovery/swipe')
+      .set(auth(from.token))
+      .send({ targetChildId, isLike: true, ...(forChildId ? { forChildId } : {}) });
+
+  it('creates the pair on a new request and adds pairs to a pending or accepted connection', async () => {
+    const [mai, lan] = await Promise.all([register('pair-mai'), register('pair-lan')]);
+    const [maiKid1, maiKid2, lanKid] = await Promise.all([
+      createChild(mai.parentId, 'Bin'),
+      createChild(mai.parentId, 'Bông'),
+      createChild(lan.parentId, 'Na'),
+    ]);
+
+    // New request
+    const first = await like(mai, lanKid._id.toString(), maiKid1._id.toString());
+    const connectionId = first.body.data.connection.connectionId;
+    let connection = await Connection.findById(connectionId).lean();
+    expect(connection.status).toBe('pending');
+    expect(connection.childPairs).toHaveLength(1);
+
+    // Pending request, another own child
+    await like(mai, lanKid._id.toString(), maiKid2._id.toString());
+    connection = await Connection.findById(connectionId).lean();
+    expect(connection.childPairs).toHaveLength(2);
+
+    // Accepted connection, a pair liked back from the other side
+    await request(app).patch(`/api/v1/connections/${connectionId}/accept`).set(auth(lan.token));
+    const likeBack = await like(lan, maiKid2._id.toString());
+    expect(likeBack.body.data.connection.connectionId.toString()).toBe(connectionId.toString());
+    connection = await Connection.findById(connectionId).lean();
+    expect(connection.status).toBe('accepted');
+    // Na <-> Bông already existed: no duplicate
+    expect(connection.childPairs).toHaveLength(2);
+  });
+
+  it('never stores the same pair twice under concurrent requests', async () => {
+    const [minh, hoa] = await Promise.all([register('pair-minh'), register('pair-hoa')]);
+    const [minhKid, hoaKid] = await Promise.all([createChild(minh.parentId, 'Tí'), createChild(hoa.parentId, 'Tèo')]);
+    const connection = await Connection.create({
+      parents: [minh.parentId, hoa.parentId],
+      requesterId: minh.parentId,
+      recipientId: hoa.parentId,
+      status: 'accepted',
+    });
+
+    await Promise.all(
+      Array.from({ length: 5 }, () =>
+        connectionService.addChildPair(connection._id, {
+          childIdA: minhKid._id,
+          childIdB: hoaKid._id,
+          source: 'discovery',
+        })
+      )
+    );
+    const stored = await Connection.findById(connection._id).lean();
+    expect(stored.childPairs).toHaveLength(1);
+  });
+
+  it('lists child pairs relative to the viewer, with age and without date of birth', async () => {
+    const [an, binh] = await Promise.all([register('pair-an'), register('pair-binh')]);
+    const [anKid, binhKid, archivedKid] = await Promise.all([
+      createChild(an.parentId, 'Bin'),
+      createChild(binh.parentId, 'Na'),
+      createChild(binh.parentId, 'Old'),
+    ]);
+    await like(an, binhKid._id.toString());
+    await like(an, archivedKid._id.toString());
+    await Child.updateOne({ _id: archivedKid._id }, { $set: { isArchived: true } });
+
+    const outgoing = await request(app).get('/api/v1/connections?status=pending&direction=outgoing').set(auth(an.token));
+    const card = outgoing.body.data.items.find((item) => item.partner.id === binh.parentId);
+    // The pair with the archived child is hidden
+    expect(card.childPairs).toHaveLength(1);
+    expect(card.childPairs[0].myChild).toMatchObject({ id: anKid._id.toString(), displayName: 'Bin' });
+    expect(card.childPairs[0].partnerChild).toMatchObject({ id: binhKid._id.toString(), displayName: 'Na' });
+    expect(typeof card.childPairs[0].myChild.age).toBe('number');
+    expect(card.childPairs[0].source).toBe('discovery');
+    expect(JSON.stringify(card.childPairs)).not.toContain('dateOfBirth');
+
+    const incoming = await request(app).get('/api/v1/connections?status=pending&direction=incoming').set(auth(binh.token));
+    const incomingCard = incoming.body.data.items.find((item) => item.partner.id === an.parentId);
+    expect(incomingCard.childPairs[0].myChild.displayName).toBe('Na');
+    expect(incomingCard.childPairs[0].partnerChild.displayName).toBe('Bin');
+  });
+
+  it('mentions the matched children in the connection request notification', async () => {
+    const [ha, khoa] = await Promise.all([register('pair-ha'), register('pair-khoa')]);
+    const [haKid, khoaKid] = await Promise.all([createChild(ha.parentId, 'Su'), createChild(khoa.parentId, 'Mít')]);
+    await like(ha, khoaKid._id.toString(), haKid._id.toString());
+
+    const khoaParent = await Parent.findById(khoa.parentId).lean();
+    let notification = null;
+    for (let i = 0; i < 20 && !notification; i += 1) {
+      notification = await Notification.findOne({ recipientId: khoaParent.userId, type: 'connection_request' }).lean();
+      if (!notification) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(notification.body).toContain('Su ↔ bé Mít');
   });
 });

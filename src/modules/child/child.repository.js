@@ -70,6 +70,16 @@ class ChildRepository {
   }
 
   /**
+   * Active children by ID, in one query
+   * @param {Array<string|ObjectId>} childIds
+   * @returns {Promise<Array<Object>>}
+   */
+  async findActiveByIds(childIds) {
+    if (!childIds.length) return [];
+    return Child.find({ _id: { $in: childIds }, isArchived: false }).lean();
+  }
+
+  /**
    * IDs of the parents having an active child whose name contains the text
    * @param {string} search
    * @returns {Promise<Array<ObjectId>>}

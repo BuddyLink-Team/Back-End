@@ -59,4 +59,8 @@ export const swipeValidation = [
     .withMessage('isLike is required')
     .isBoolean()
     .withMessage('isLike must be a boolean value'),
+  body('forChildId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid child profile ID'),
 ];

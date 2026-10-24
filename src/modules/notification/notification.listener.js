@@ -2,6 +2,7 @@ import logger from '../../shared/logger/index.js';
 import notificationService from './notification.service.js';
 import { NOTIFICATION_TYPES } from './notification.constants.js';
 import parentService from '../parent/parent.service.js';
+import childService from '../child/child.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import { onConnectionEvent, CONNECTION_EVENTS } from '../connection/connection.events.js';
 import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
@@ -19,11 +20,22 @@ const runInBackground = (label, job) => {
   job().catch((err) => logger.error(`[NotificationListeners] ${label} failed: ${err.message}`));
 };
 
+// "Na ↔ bé Bin của bạn" when the request came from a discovery Like on a child, otherwise ''
+const describeChildPair = async (childPair) => {
+  if (!childPair?.forChildId || !childPair?.targetChildId) return '';
+  const children = await childService.getActiveChildrenByIds([childPair.forChildId, childPair.targetChildId]);
+  const nameOf = (id) => children.find((child) => child._id.toString() === id.toString())?.displayName;
+  const requesterChildName = nameOf(childPair.forChildId);
+  const recipientChildName = nameOf(childPair.targetChildId);
+  return requesterChildName && recipientChildName ? `${requesterChildName} ↔ bé ${recipientChildName} của bạn` : '';
+};
+
 // Connection request sent -> notify the recipient parent
-const notifyConnectionRequested = async ({ requesterParentId, recipientParentId }) => {
-  const [requester, recipient] = await Promise.all([
+const notifyConnectionRequested = async ({ requesterParentId, recipientParentId, childPair }) => {
+  const [requester, recipient, pairText] = await Promise.all([
     parentService.getParentById(requesterParentId),
     parentService.getParentById(recipientParentId),
+    describeChildPair(childPair),
   ]);
   if (!recipient?.userId) return;
 
@@ -32,7 +44,9 @@ const notifyConnectionRequested = async ({ requesterParentId, recipientParentId 
     recipientId: recipient.userId,
     type: NOTIFICATION_TYPES.CONNECTION_REQUEST,
     title: 'Lời mời kết nối mới',
-    body: `${requesterName} đã gửi lời mời kết nối đến bạn.`,
+    body: pairText
+      ? `${requesterName} đã gửi lời mời kết nối đến bạn: ${pairText}.`
+      : `${requesterName} đã gửi lời mời kết nối đến bạn.`,
     data: { senderId: requesterParentId },
   });
 };
@@ -91,6 +105,35 @@ const notifyPlaydateInvited = async ({ playdateId, hostParentId, participantPare
   });
 };
 
+// Playdate starts in 24h / 1h -> notify the host and every accepted participant
+const notifyPlaydateReminder = async ({ playdateId, kind, activity, time, date, placeName, recipientParentIds = [] }) => {
+  const isSoon = kind === 'h1';
+  const where = placeName ? ` tại ${placeName}` : '';
+  const title = isSoon ? 'Playdate sắp bắt đầu' : 'Nhắc lịch Playdate';
+  const body = isSoon
+    ? `"${activity}" sẽ bắt đầu lúc ${time}${where}. Chuẩn bị lên đường nhé!`
+    : `"${activity}" diễn ra lúc ${time} ngày ${date}${where}.`;
+
+  const results = await Promise.allSettled(
+    recipientParentIds.map(async (parentId) => {
+      const parent = await parentService.getParentById(parentId);
+      if (!parent?.userId) return;
+      await notificationService.createNotification({
+        recipientId: parent.userId,
+        type: NOTIFICATION_TYPES.PLAYDATE_REMINDER,
+        title,
+        body,
+        data: { playdateId },
+      });
+    })
+  );
+  results
+    .filter((result) => result.status === 'rejected')
+    .forEach((result) =>
+      logger.error(`[NotificationListeners] Playdate reminder failed for playdate ${playdateId}: ${result.reason?.message}`)
+    );
+};
+
 let isRegistered = false;
 
 /**
@@ -109,6 +152,9 @@ export const registerNotificationListeners = () => {
   );
   onPlaydateEvent(PLAYDATE_EVENTS.INVITED, (payload) =>
     runInBackground('Playdate invited notification', () => notifyPlaydateInvited(payload))
+  );
+  onPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, (payload) =>
+    runInBackground('Playdate reminder notification', () => notifyPlaydateReminder(payload))
   );
 };
 

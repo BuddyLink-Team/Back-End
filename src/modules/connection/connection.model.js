@@ -1,5 +1,37 @@
 import mongoose from 'mongoose';
-import { CONNECTION_STATUS } from './connection.constants.js';
+import { CONNECTION_STATUS, CHILD_PAIR_SOURCES } from './connection.constants.js';
+
+// Two children (one of each parent) matched on this connection
+const childPairSchema = new mongoose.Schema(
+  {
+    // Sorted [minId, maxId]
+    childIds: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: 'Child',
+      required: true,
+      validate: [(val) => val.length === 2, 'A child pair must contain exactly 2 children'],
+    },
+    // "minChildId_maxChildId" (buildChildPairKey)
+    pairKey: {
+      type: String,
+      required: true,
+    },
+    source: {
+      type: String,
+      enum: Object.values(CHILD_PAIR_SOURCES),
+      required: true,
+    },
+    matchScore: {
+      type: Number,
+      default: null,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: false }
+);
 
 const connectionSchema = new mongoose.Schema(
   {
@@ -43,6 +75,10 @@ const connectionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    childPairs: {
+      type: [childPairSchema],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -75,6 +111,7 @@ connectionSchema.index(
 connectionSchema.index({ parents: 1, status: 1 });
 connectionSchema.index({ recipientId: 1, status: 1 });
 connectionSchema.index({ requesterId: 1, createdAt: 1 });
+connectionSchema.index({ 'childPairs.pairKey': 1 });
 
 const Connection = mongoose.models.Connection || mongoose.model('Connection', connectionSchema);
 

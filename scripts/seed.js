@@ -27,6 +27,7 @@ import Child from '../src/modules/child/child.model.js';
 import { CHILD_ACTIVITIES } from '../src/modules/child/child.constants.js';
 import Connection from '../src/modules/connection/connection.model.js';
 import Swipe from '../src/modules/discovery/discovery.model.js';
+import { buildChildPairKey } from '../src/modules/connection/connection.constants.js';
 import PlacesCache from '../src/modules/places/places-cache.model.js';
 import Conversation from '../src/modules/chat/conversation.model.js';
 import Message from '../src/modules/chat/message.model.js';
@@ -93,30 +94,32 @@ const toDateOnly = (date) => new Date(Date.UTC(date.getFullYear(), date.getMonth
 // ---------------------------------------------------------------------------
 
 // 23 wards of Đà Nẵng after the 2025 administrative reorganization, approximate centers [lng, lat]
+// Ward centers: center of the ward boundary in OpenStreetMap (Nominatim), the same point the app geocodes
+// a parent's location to (geocoding.adapter.js), so seeded distances match real ones
 const WARDS = [
-  { name: 'Phường Hải Châu', center: [108.2208, 16.0678], streets: ['Lê Duẩn', 'Trần Phú', 'Phan Châu Trinh', 'Bạch Đằng', 'Lý Tự Trọng'], weight: 4 },
-  { name: 'Phường Hòa Cường', center: [108.2185, 16.0415], streets: ['Núi Thành', '2 Tháng 9', 'Xô Viết Nghệ Tĩnh', 'Lê Thanh Nghị', 'Huỳnh Tấn Phát'], weight: 4 },
-  { name: 'Phường Thanh Khê', center: [108.1905, 16.0648], streets: ['Điện Biên Phủ', 'Hà Huy Tập', 'Lê Độ', 'Thái Thị Bôi', 'Trường Chinh'], weight: 3 },
-  { name: 'Phường An Khê', center: [108.1748, 16.0571], streets: ['Hà Huy Tập', 'Nguyễn Tri Phương', 'Trần Cao Vân', 'Phạm Nhữ Tăng'], weight: 3 },
-  { name: 'Phường An Hải', center: [108.2381, 16.0642], streets: ['Ngô Quyền', 'Phạm Văn Đồng', 'Hồ Nghinh', 'Nguyễn Văn Thoại', 'Hà Bổng'], weight: 4 },
-  { name: 'Phường Sơn Trà', center: [108.2422, 16.0884], streets: ['Ngô Quyền', 'Yết Kiêu', 'Lê Văn Thứ', 'Hoàng Sa', 'Nguyễn Phan Vinh'], weight: 3 },
-  { name: 'Phường Ngũ Hành Sơn', center: [108.2552, 16.0003], streets: ['Lê Văn Hiến', 'Trường Sa', 'Mai Đăng Chơn', 'Nguyễn Đình Chiểu', 'Chương Dương'], weight: 3 },
-  { name: 'Phường Hòa Khánh', center: [108.1452, 16.0712], streets: ['Tôn Đức Thắng', 'Âu Cơ', 'Nguyễn Lương Bằng', 'Hồ Tùng Mậu'], weight: 3 },
-  { name: 'Phường Hải Vân', center: [108.1302, 16.1201], streets: ['Nguyễn Văn Cừ', 'Nguyễn Tất Thành', 'Lạc Long Quân'], weight: 1 },
-  { name: 'Phường Liên Chiểu', center: [108.1501, 16.0902], streets: ['Nguyễn Tất Thành', 'Nguyễn Sinh Sắc', 'Kinh Dương Vương', 'Nguyễn Chánh'], weight: 2 },
-  { name: 'Phường Cẩm Lệ', center: [108.2051, 16.0152], streets: ['Ông Ích Đường', 'Cách Mạng Tháng 8', 'Trần Đình Tri', 'Nguyễn Hữu Thọ'], weight: 3 },
-  { name: 'Phường Hòa Xuân', center: [108.2251, 16.0031], streets: ['Minh Mạng', 'Nguyễn Phước Lan', 'Võ Chí Công', 'Lê Quang Đạo'], weight: 2 },
-  { name: 'Phường Hội An', center: [108.3279, 15.8794], streets: ['Trần Hưng Đạo', 'Lý Thường Kiệt', 'Hai Bà Trưng', 'Phan Chu Trinh'], weight: 2 },
-  { name: 'Phường Hội An Đông', center: [108.3602, 15.8851], streets: ['Cửa Đại', 'Lạc Long Quân', 'Âu Cơ'], weight: 1 },
-  { name: 'Phường Hội An Tây', center: [108.3101, 15.8802], streets: ['Lý Thái Tổ', 'Hùng Vương', 'Nguyễn Tất Thành'], weight: 1 },
-  { name: 'Phường Điện Bàn', center: [108.2503, 15.8902], streets: ['Trần Nhân Tông', 'Hùng Vương', 'Mẹ Thứ'], weight: 1 },
-  { name: 'Phường Điện Bàn Đông', center: [108.2802, 15.9301], streets: ['Lạc Long Quân', 'Võ Chí Công', 'Trường Sa'], weight: 1 },
-  { name: 'Phường Điện Bàn Bắc', center: [108.2301, 15.9502], streets: ['Quốc lộ 1A', 'Nguyễn Văn Trỗi', 'Phạm Như Xương'], weight: 1 },
-  { name: 'Phường An Thắng', center: [108.2203, 15.8601], streets: ['Hùng Vương', 'Trần Hưng Đạo', 'Nguyễn Văn Linh'], weight: 1 },
-  { name: 'Phường Tam Kỳ', center: [108.4741, 15.5736], streets: ['Phan Chu Trinh', 'Hùng Vương', 'Trần Cao Vân', 'Nguyễn Hoàng'], weight: 1 },
-  { name: 'Phường Quảng Phú', center: [108.4602, 15.6003], streets: ['Huỳnh Thúc Kháng', 'Nguyễn Văn Trỗi', 'Lê Thánh Tông'], weight: 1 },
-  { name: 'Phường Hương Trà', center: [108.4903, 15.5602], streets: ['Bạch Đằng', 'Trần Quý Cáp', 'Lý Thường Kiệt'], weight: 1 },
-  { name: 'Phường Bàn Thạch', center: [108.5002, 15.5903], streets: ['Duy Tân', 'Phan Bội Châu', 'Tôn Đức Thắng'], weight: 1 },
+  { name: 'Phường Hải Châu', center: [108.2195, 16.0590], streets: ['Lê Duẩn', 'Trần Phú', 'Phan Châu Trinh', 'Bạch Đằng', 'Lý Tự Trọng'], weight: 4 },
+  { name: 'Phường Hòa Cường', center: [108.2175, 16.0416], streets: ['Núi Thành', '2 Tháng 9', 'Xô Viết Nghệ Tĩnh', 'Lê Thanh Nghị', 'Huỳnh Tấn Phát'], weight: 4 },
+  { name: 'Phường Thanh Khê', center: [108.1966, 16.0684], streets: ['Điện Biên Phủ', 'Hà Huy Tập', 'Lê Độ', 'Thái Thị Bôi', 'Trường Chinh'], weight: 3 },
+  { name: 'Phường An Khê', center: [108.1855, 16.0500], streets: ['Hà Huy Tập', 'Nguyễn Tri Phương', 'Trần Cao Vân', 'Phạm Nhữ Tăng'], weight: 3 },
+  { name: 'Phường An Hải', center: [108.2364, 16.0701], streets: ['Ngô Quyền', 'Phạm Văn Đồng', 'Hồ Nghinh', 'Nguyễn Văn Thoại', 'Hà Bổng'], weight: 4 },
+  { name: 'Phường Sơn Trà', center: [108.2486, 16.1022], streets: ['Ngô Quyền', 'Yết Kiêu', 'Lê Văn Thứ', 'Hoàng Sa', 'Nguyễn Phan Vinh'], weight: 3 },
+  { name: 'Phường Ngũ Hành Sơn', center: [108.2532, 16.0108], streets: ['Lê Văn Hiến', 'Trường Sa', 'Mai Đăng Chơn', 'Nguyễn Đình Chiểu', 'Chương Dương'], weight: 3 },
+  { name: 'Phường Hòa Khánh', center: [108.1546, 16.0503], streets: ['Tôn Đức Thắng', 'Âu Cơ', 'Nguyễn Lương Bằng', 'Hồ Tùng Mậu'], weight: 3 },
+  { name: 'Phường Hải Vân', center: [108.1149, 16.1348], streets: ['Nguyễn Văn Cừ', 'Nguyễn Tất Thành', 'Lạc Long Quân'], weight: 1 },
+  { name: 'Phường Liên Chiểu', center: [108.1392, 16.0767], streets: ['Nguyễn Tất Thành', 'Nguyễn Sinh Sắc', 'Kinh Dương Vương', 'Nguyễn Chánh'], weight: 2 },
+  { name: 'Phường Cẩm Lệ', center: [108.2013, 16.0153], streets: ['Ông Ích Đường', 'Cách Mạng Tháng 8', 'Trần Đình Tri', 'Nguyễn Hữu Thọ'], weight: 3 },
+  { name: 'Phường Hòa Xuân', center: [108.2204, 16.0049], streets: ['Minh Mạng', 'Nguyễn Phước Lan', 'Võ Chí Công', 'Lê Quang Đạo'], weight: 2 },
+  { name: 'Phường Hội An', center: [108.3325, 15.8794], streets: ['Trần Hưng Đạo', 'Lý Thường Kiệt', 'Hai Bà Trưng', 'Phan Chu Trinh'], weight: 2 },
+  { name: 'Phường Hội An Đông', center: [108.3640, 15.8786], streets: ['Cửa Đại', 'Lạc Long Quân', 'Âu Cơ'], weight: 1 },
+  { name: 'Phường Hội An Tây', center: [108.3109, 15.8974], streets: ['Lý Thái Tổ', 'Hùng Vương', 'Nguyễn Tất Thành'], weight: 1 },
+  { name: 'Phường Điện Bàn', center: [108.2493, 15.8892], streets: ['Trần Nhân Tông', 'Hùng Vương', 'Mẹ Thứ'], weight: 1 },
+  { name: 'Phường Điện Bàn Đông', center: [108.2703, 15.9316], streets: ['Lạc Long Quân', 'Võ Chí Công', 'Trường Sa'], weight: 1 },
+  { name: 'Phường Điện Bàn Bắc', center: [108.1944, 15.9319], streets: ['Quốc lộ 1A', 'Nguyễn Văn Trỗi', 'Phạm Như Xương'], weight: 1 },
+  { name: 'Phường An Thắng', center: [108.2254, 15.9060], streets: ['Hùng Vương', 'Trần Hưng Đạo', 'Nguyễn Văn Linh'], weight: 1 },
+  { name: 'Phường Tam Kỳ', center: [108.4822, 15.5638], streets: ['Phan Chu Trinh', 'Hùng Vương', 'Trần Cao Vân', 'Nguyễn Hoàng'], weight: 1 },
+  { name: 'Phường Quảng Phú', center: [108.4963, 15.5984], streets: ['Huỳnh Thúc Kháng', 'Nguyễn Văn Trỗi', 'Lê Thánh Tông'], weight: 1 },
+  { name: 'Phường Hương Trà', center: [108.5097, 15.5594], streets: ['Bạch Đằng', 'Trần Quý Cáp', 'Lý Thường Kiệt'], weight: 1 },
+  { name: 'Phường Bàn Thạch', center: [108.4672, 15.5852], streets: ['Duy Tân', 'Phan Bội Châu', 'Tôn Đức Thắng'], weight: 1 },
 ];
 
 const FAMILY_NAMES = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Phan', 'Võ', 'Đặng', 'Bùi', 'Đỗ', 'Ngô', 'Dương', 'Lý', 'Trương'];
@@ -216,10 +219,8 @@ const buildParents = (count) => {
     const ward = i < CORE_PARENT_COUNT ? pick(coreWards) : WARDS[(i - CORE_PARENT_COUNT) % WARDS.length];
     const street = pick(ward.streets);
     const houseNumber = chance(0.25) ? `K${int(10, 480)}/${int(1, 40)}` : String(int(2, 420));
-    const coordinates = [
-      Number((ward.center[0] + (random() - 0.5) * 0.016).toFixed(6)),
-      Number((ward.center[1] + (random() - 0.5) * 0.016).toFixed(6)),
-    ];
+    // A parent's saved location is the center of their ward (never their home)
+    const coordinates = [...ward.center];
 
     const isEmailVerified = chance(0.9);
     const isPhoneVerified = chance(0.7);
@@ -565,6 +566,8 @@ export async function seedDatabase({ log = console.log } = {}) {
     const recipient = parents[b];
     const requestedAt = daysAgo(int(15, 60), int(8, 22));
     const respondedAt = new Date(requestedAt.getTime() + int(2, 40) * 60 * 60 * 1000);
+    const requesterChild = firstChildOf(requester);
+    const recipientChild = firstChildOf(recipient);
     connections.push({
       parents: [requester._id, recipient._id],
       requesterId: requester._id,
@@ -574,23 +577,35 @@ export async function seedDatabase({ log = console.log } = {}) {
       declinedAt: status === 'declined' ? respondedAt : null,
       // A removed connection was accepted first, then ended a few days later
       removedAt: status === 'removed' ? new Date(respondedAt.getTime() + 5 * DAY) : null,
+      // The Like below paired the two first children (BUD-48 child pairing)
+      childPairs: [
+        {
+          childIds: [requesterChild._id.toString(), recipientChild._id.toString()].sort(),
+          pairKey: buildChildPairKey(requesterChild._id, recipientChild._id),
+          source: 'discovery',
+          matchScore: int(55, 95),
+          createdAt: requestedAt,
+        },
+      ],
       createdAt: requestedAt,
     });
-    // Like = connection request
-    swipes.push({ swiperParentId: requester._id, targetChildId: firstChildOf(recipient)._id, targetParentId: recipient._id, isLike: true, createdAt: requestedAt });
+    // Like = connection request, made for the requester's first child
+    swipes.push({ swiperParentId: requester._id, forChildId: requesterChild._id, targetChildId: recipientChild._id, targetParentId: recipient._id, isLike: true, createdAt: requestedAt });
     if (status === 'accepted' && chance(0.5)) {
-      swipes.push({ swiperParentId: recipient._id, targetChildId: firstChildOf(requester)._id, targetParentId: requester._id, isLike: true, createdAt: respondedAt });
+      swipes.push({ swiperParentId: recipient._id, forChildId: recipientChild._id, targetChildId: requesterChild._id, targetParentId: requester._id, isLike: true, createdAt: respondedAt });
     }
   }
   // Some passes
   for (const [a, b] of [[24, 25], [24, 26], [26, 27], [28, 29], [35, 36], [37, 38]]) {
-    swipes.push({ swiperParentId: parents[a]._id, targetChildId: firstChildOf(parents[b])._id, targetParentId: parents[b]._id, isLike: false, createdAt: daysAgo(int(1, 12), int(19, 23)) });
+    swipes.push({ swiperParentId: parents[a]._id, forChildId: firstChildOf(parents[a])._id, targetChildId: firstChildOf(parents[b])._id, targetParentId: parents[b]._id, isLike: false, createdAt: daysAgo(int(1, 12), int(19, 23)) });
   }
   const insertedConnections = [];
   for (const connection of connections) {
     // create() runs the pre('validate') hook that sorts parents and sets pairKey
     insertedConnections.push(await Connection.create(connection));
   }
+  // deleteMany keeps indexes: replace the legacy { swiperParentId, targetChildId } unique index (BUD-48)
+  await Swipe.syncIndexes();
   await Swipe.insertMany(swipes);
   const acceptedConnections = insertedConnections.filter((c) => c.status === 'accepted');
 

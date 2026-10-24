@@ -171,6 +171,16 @@ class ChildService {
   }
 
   /**
+   * Active children by ID (archived ones are left out), in one query
+   * @param {Array<string|ObjectId>} childIds
+   * @returns {Promise<Array<Object>>}
+   */
+  async getActiveChildrenByIds(childIds) {
+    const uniqueIds = [...new Set((childIds || []).filter(Boolean).map(String))];
+    return childRepository.findActiveByIds(uniqueIds);
+  }
+
+  /**
    * IDs of the parents having a child whose name contains the text
    * @param {string} search
    * @returns {Promise<Array<ObjectId>>}

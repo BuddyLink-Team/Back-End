@@ -5,9 +5,24 @@ import safetyService from '../safety/safety.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
-import { CONNECTION_STATUS } from './connection.constants.js';
+import { CONNECTION_STATUS, CHILD_PAIR_SOURCES, buildChildPairKey } from './connection.constants.js';
 import { PAGINATION } from '../../shared/constants/index.js';
 import { emitConnectionEvent, CONNECTION_EVENTS } from './connection.events.js';
+
+/**
+ * Child pair sub-document from two child ids
+ * @param {string|ObjectId} childIdA
+ * @param {string|ObjectId} childIdB
+ * @param {string} source - CHILD_PAIR_SOURCES
+ * @param {number|null} [matchScore]
+ */
+const toChildPair = (childIdA, childIdB, source, matchScore = null) => ({
+  childIds: [childIdA.toString(), childIdB.toString()].sort(),
+  pairKey: buildChildPairKey(childIdA, childIdB),
+  source,
+  matchScore: matchScore ?? null,
+  createdAt: new Date(),
+});
 
 class ConnectionService {
   /**
@@ -20,6 +35,16 @@ class ConnectionService {
     if (!parentIdA || !parentIdB) return false;
     const connection = await connectionRepository.findAcceptedBetween(parentIdA, parentIdB);
     return Boolean(connection);
+  }
+
+  /**
+   * The accepted connection between two parents, if any
+   * @param {string|ObjectId} parentIdA
+   * @param {string|ObjectId} parentIdB
+   * @returns {Promise<Object|null>}
+   */
+  async getAcceptedConnectionBetween(parentIdA, parentIdB) {
+    return connectionRepository.findAcceptedBetween(parentIdA, parentIdB);
   }
 
   /**
@@ -93,16 +118,45 @@ class ConnectionService {
   }
 
   /**
+   * Record that two children (one of each parent) are paired on a connection.
+   * No-op when the pair is already there; never consumes quota.
+   * @param {string|ObjectId} connectionId
+   * @param {{ childIdA: string|ObjectId, childIdB: string|ObjectId, source: string, matchScore?: number|null }} pair
+   * @returns {Promise<Object|null>} Updated connection, or null when the pair already existed
+   */
+  async addChildPair(connectionId, { childIdA, childIdB, source, matchScore = null }) {
+    return connectionRepository.addChildPair(connectionId, toChildPair(childIdA, childIdB, source, matchScore));
+  }
+
+  /**
+   * Add the discovery child pair (if any) to a connection, keeping the latest connection state
+   * @private
+   */
+  async _withDiscoveryPair(connection, childPair) {
+    if (!childPair || !connection) return connection;
+    const updated = await this.addChildPair(connection._id, {
+      childIdA: childPair.forChildId,
+      childIdB: childPair.targetChildId,
+      source: CHILD_PAIR_SOURCES.DISCOVERY,
+      matchScore: childPair.matchScore,
+    });
+    return updated || connection;
+  }
+
+  /**
    * Send a connection request, consuming one monthly connection request quota unit.
    * - If the recipient already sent a pending request to the requester, both parents want
    *   to connect: the pending request is accepted instead (mutual match, no quota used).
    * - Otherwise returns the existing connection when the pair is already pending/accepted.
+   * In every case the optional child pair is recorded on the connection (pairing never uses quota).
    *
    * @param {string|ObjectId} requesterParentId
    * @param {string|ObjectId} recipientParentId
+   * @param {{ forChildId: string|ObjectId, targetChildId: string|ObjectId, matchScore?: number }|null} [childPair]
+   *   - Requester's child and the recipient's child that were matched (discovery Like)
    * @returns {Promise<{connection: Object, isNew: boolean, isMatched: boolean}>}
    */
-  async sendConnectionRequest(requesterParentId, recipientParentId) {
+  async sendConnectionRequest(requesterParentId, recipientParentId, childPair = null) {
     const { existingConnection } = await this.validateConnectionRequest(
       requesterParentId,
       recipientParentId
@@ -115,17 +169,20 @@ class ConnectionService {
       if (isIncomingRequest) {
         const accepted = await connectionRepository.acceptPendingById(existingConnection._id);
         if (accepted) {
+          // Pair first, so listeners of the event already see it
+          const withPair = await this._withDiscoveryPair(accepted, childPair);
           await emitConnectionEvent(CONNECTION_EVENTS.ACCEPTED, {
             parentIds: accepted.parents.map((id) => id.toString()),
             requesterId: accepted.requesterId.toString(),
             recipientId: accepted.recipientId.toString(),
             connectionId: accepted._id.toString(),
           });
-          return { connection: accepted, isNew: false, isMatched: true };
+          return { connection: withPair, isNew: false, isMatched: true };
         }
       }
 
-      return { connection: existingConnection, isNew: false, isMatched: false };
+      const connection = await this._withDiscoveryPair(existingConnection, childPair);
+      return { connection, isNew: false, isMatched: false };
     }
 
     await subscriptionService.checkAndConsumeQuota(requesterParentId, 'connectionRequest', true);
@@ -133,21 +190,28 @@ class ConnectionService {
     try {
       const connection = await connectionRepository.createRequest(
         requesterParentId,
-        recipientParentId
+        recipientParentId,
+        childPair
+          ? [toChildPair(childPair.forChildId, childPair.targetChildId, CHILD_PAIR_SOURCES.DISCOVERY, childPair.matchScore)]
+          : []
       );
       await emitConnectionEvent(CONNECTION_EVENTS.REQUESTED, {
         connectionId: connection._id.toString(),
         requesterParentId: requesterParentId.toString(),
         recipientParentId: recipientParentId.toString(),
+        childPair: childPair
+          ? { forChildId: childPair.forChildId.toString(), targetChildId: childPair.targetChildId.toString() }
+          : null,
       });
       return { connection, isNew: true, isMatched: false };
     } catch (error) {
       // Concurrent request for the same pair hit the unique pairKey index
       if (error.code === 11000) {
-        const connection = await connectionRepository.findActiveBetween(
+        const existing = await connectionRepository.findActiveBetween(
           requesterParentId,
           recipientParentId
         );
+        const connection = await this._withDiscoveryPair(existing, childPair);
         return { connection, isNew: false, isMatched: false };
       }
       throw error;
@@ -242,7 +306,27 @@ class ConnectionService {
   }
 
   /**
-   * One page of a parent's connections, each side with its first active child (`child`) for the cards.
+   * Replace the child ids of every pair with the active child documents (one query for all the
+   * connections); pairs with an archived child are dropped.
+   * @param {Array<Object>} connections
+   * @returns {Promise<Array<Object>>}
+   */
+  async populateChildPairs(connections) {
+    const childIds = connections.flatMap((connection) => (connection.childPairs || []).flatMap((pair) => pair.childIds));
+    const activeChildren = await childService.getActiveChildrenByIds(childIds);
+    const childrenById = new Map(activeChildren.map((child) => [child._id.toString(), child]));
+
+    return connections.map((connection) => ({
+      ...connection,
+      childPairs: (connection.childPairs || [])
+        .map((pair) => ({ ...pair, childIds: pair.childIds.map((id) => childrenById.get(id.toString())) }))
+        .filter((pair) => pair.childIds.every(Boolean)),
+    }));
+  }
+
+  /**
+   * One page of a parent's connections with their active child pairs (`childPairs`).
+   * Each side also keeps its first active child (`child`), shown by the cards of connections without pairs.
    * Parents in a block relationship are hidden (a block forbids any interaction; unblocking shows them again).
    * @param {string|ObjectId} parentId
    * @param {Object} [filters]
@@ -280,8 +364,10 @@ class ConnectionService {
     const withChild = (party) =>
       party && { ...party, child: childrenByParent.get(party._id.toString())?.[0] || null };
 
+    const withPairs = await this.populateChildPairs(items);
+
     return {
-      items: items.map((connection) => ({
+      items: withPairs.map((connection) => ({
         ...connection,
         requesterId: withChild(connection.requesterId),
         recipientId: withChild(connection.recipientId),

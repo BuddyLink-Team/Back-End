@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, beforeEach } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
 import Parent from '../../src/modules/parent/parent.model.js';
@@ -84,8 +84,9 @@ describe('Playdate rules', () => {
     );
   });
 
+  // The same host child is reused: every playdate gets its own day so they never overlap (SCHEDULE_CONFLICT)
   it('never exposes a family exact address or coordinates', async () => {
-    const created = await createPlaydate(host, [guestA]);
+    const created = await createPlaydate(host, [guestA], { scheduledDate: isoDay(20) });
     expect(created.status).toBe(201);
 
     const detail = await request(app).get(`/api/v1/playdates/${created.body.data.id}`).set('Authorization', `Bearer ${guestA.token}`);
@@ -129,7 +130,7 @@ describe('Playdate rules', () => {
   });
 
   it('keeps the invitation pending when the participation quota is used up', async () => {
-    const created = await createPlaydate(host, [guestB]);
+    const created = await createPlaydate(host, [guestB], { scheduledDate: isoDay(21) });
     await UsageQuota.updateOne(
       { parentId: guestB.parentId, periodType: QUOTA_PERIOD_TYPES.MONTHLY, periodValue: subscriptionService.getPeriodValue(QUOTA_PERIOD_TYPES.MONTHLY) },
       { $set: { 'counters.playdatesParticipated': 3 } },
@@ -237,5 +238,107 @@ describe('Playdate rules', () => {
       expect(cancelled.cancellation.reason).toBe('No participant accepted the invitation');
       expect((await Playdate.findById(later._id).lean()).status).toBe('upcoming');
     });
+  });
+});
+
+describe('Playdate duration (BUD-48)', () => {
+  it('defaults to 2 hours, exposes the end time and rejects durations out of range', async () => {
+    const host = await registerParent('duration-host');
+
+    const created = await createPlaydate(host, [], { time: '23:00' });
+    expect(created.status).toBe(201);
+    expect(created.body.data.durationMinutes).toBe(120);
+    expect(created.body.data.endTime).toBe('01:00');
+    expect(created.body.data.warnings).toEqual([]);
+
+    for (const durationMinutes of [29, 481]) {
+      const res = await createPlaydate(host, [], { scheduledDate: isoDay(9), durationMinutes });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    }
+
+    const custom = await createPlaydate(host, [], { scheduledDate: isoDay(9), time: '10:00', durationMinutes: 90 });
+    expect(custom.body.data.durationMinutes).toBe(90);
+    expect(custom.body.data.endTime).toBe('11:30');
+  });
+});
+
+describe('Schedule conflicts (BUD-48)', () => {
+  let host;
+  let guest;
+
+  beforeEach(async () => {
+    host = await registerParent('conflict-host');
+    guest = await registerParent('conflict-guest');
+    await connect(host, guest);
+  });
+
+  it('blocks a second playdate of the host child at an overlapping time, but not a touching one', async () => {
+    expect((await createPlaydate(host, [], { time: '10:00' })).status).toBe(201);
+
+    const overlapping = await createPlaydate(host, [], { time: '11:00' });
+    expect(overlapping.status).toBe(409);
+    expect(overlapping.body.error.code).toBe('SCHEDULE_CONFLICT');
+    expect(overlapping.body.error.details[0].playdateId).toBeDefined();
+
+    // 10:00-12:00 then 12:00-14:00: edges touch, no conflict
+    expect((await createPlaydate(host, [], { time: '12:00' })).status).toBe(201);
+  });
+
+  it('only warns when an invited child is busy, and blocks that child on accept (decline stays possible)', async () => {
+    const otherHost = await registerParent('conflict-other-host');
+    await connect(otherHost, guest);
+    const busy = await createPlaydate(otherHost, [guest], { time: '10:00' });
+    await respond(guest, busy.body.data.id, 'accepted');
+
+    const created = await createPlaydate(host, [guest], { time: '11:00' });
+    expect(created.status).toBe(201);
+    expect(created.body.data.warnings).toEqual([{ code: 'SCHEDULE_CONFLICT', childId: guest.childId }]);
+
+    const accept = await respond(guest, created.body.data.id, 'accepted');
+    expect(accept.status).toBe(409);
+    expect(accept.body.error.code).toBe('SCHEDULE_CONFLICT');
+
+    const decline = await respond(guest, created.body.data.id, 'declined');
+    expect(decline.status).toBe(200);
+  });
+
+  it('checks the host child on reschedule, excluding the playdate being moved', async () => {
+    const first = await createPlaydate(host, [], { time: '09:00' });
+    await createPlaydate(host, [], { time: '14:00' });
+
+    // Moving 09:00 -> 10:00 overlaps only with itself: allowed (applied at once, nobody accepted)
+    const self = await reschedule(host, first.body.data.id, { newDate: isoDay(5), newStartTime: '10:00' });
+    expect(self.status).toBe(201);
+
+    const clash = await reschedule(host, first.body.data.id, { newDate: isoDay(5), newStartTime: '13:00' });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error.code).toBe('SCHEDULE_CONFLICT');
+
+    // A longer duration alone is a change too, and is checked the same way
+    const longer = await reschedule(host, first.body.data.id, { newDate: isoDay(5), newStartTime: '10:00', newDurationMinutes: 300 });
+    expect(longer.status).toBe(409);
+  });
+
+  it('blocks accepting a reschedule that clashes with the voter child, declining stays possible', async () => {
+    const created = await createPlaydate(host, [guest], { time: '09:00' });
+    await respond(guest, created.body.data.id, 'accepted');
+
+    const otherHost = await registerParent('conflict-vote-host');
+    await connect(otherHost, guest);
+    const busy = await createPlaydate(otherHost, [guest], { time: '15:00' });
+    await respond(guest, busy.body.data.id, 'accepted');
+
+    const proposal = await reschedule(host, created.body.data.id, { newDate: isoDay(5), newStartTime: '15:30' });
+    expect(proposal.status).toBe(201);
+    const requestId = proposal.body.data.rescheduleRequest.id;
+
+    const accept = await vote(guest, created.body.data.id, { requestId, status: 'accepted' });
+    expect(accept.status).toBe(409);
+    expect(accept.body.error.code).toBe('SCHEDULE_CONFLICT');
+
+    const decline = await vote(guest, created.body.data.id, { requestId, status: 'declined' });
+    expect(decline.status).toBe(200);
+    expect(decline.body.data.rescheduleRequest.status).toBe('declined');
   });
 });

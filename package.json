@@ -12,6 +12,8 @@
     "places:sync": "node scripts/sync-places.js",
     "badges:upload": "node scripts/upload-badge-icons.js",
     "seed:chat": "node scripts/seed-chat.js",
+    "migrate:bud48": "node scripts/migrate-bud48-child-pairs.js",
+    "geocode:parents": "node scripts/regeocode-parents.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch --verbose",
     "test:gamification": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/gamification",

@@ -1,4 +1,5 @@
 import playdateService from './playdate.service.js';
+import playdateSuggestionService from './playdate-suggestion.service.js';
 import { successResponse } from '../../shared/response/index.js';
 
 class PlaydateController {
@@ -146,6 +147,58 @@ class PlaydateController {
     try {
       const result = await playdateService.getRescheduleRequest(req.userId, req.params.id);
       return successResponse(res, result, 'Reschedule request retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/playdates/suggestions/time-slots
+   * Start times fitting the families' preferences, without schedule conflicts
+   */
+  async getTimeSlotSuggestions(req, res, next) {
+    try {
+      const result = await playdateSuggestionService.getTimeSlotSuggestions(req.userId, req.query);
+      return successResponse(res, result, 'Time slot suggestions retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/playdates/suggestions/places
+   * Places around the families, preferred place types first
+   */
+  async getPlaceSuggestions(req, res, next) {
+    try {
+      const result = await playdateSuggestionService.getPlaceSuggestions(req.userId, req.query);
+      return successResponse(res, result, 'Place suggestions retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/playdates/busy-times
+   * When the host child and the invited children are already busy on a day
+   */
+  async getBusyTimes(req, res, next) {
+    try {
+      const result = await playdateSuggestionService.getBusyTimes(req.userId, req.query);
+      return successResponse(res, result, 'Busy times retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/playdates/suggestions/activities
+   * Activities the children share an interest in
+   */
+  async getActivitySuggestions(req, res, next) {
+    try {
+      const result = await playdateSuggestionService.getActivitySuggestions(req.userId, req.query);
+      return successResponse(res, result, 'Activity suggestions retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }

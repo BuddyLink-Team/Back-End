@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { RESCHEDULE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
+import { RESCHEDULE_STATUS, PARTICIPANT_STATUS, PLAYDATE_RULES } from './playdate.constants.js';
 
 const rescheduleResponseSchema = new mongoose.Schema(
   {
@@ -42,6 +42,13 @@ const rescheduleRequestSchema = new mongoose.Schema(
     newStartTime: {
       type: String,
       required: true,
+    },
+    // null: keep the playdate's current duration
+    newDurationMinutes: {
+      type: Number,
+      default: null,
+      min: PLAYDATE_RULES.MIN_DURATION_MINUTES,
+      max: PLAYDATE_RULES.MAX_DURATION_MINUTES,
     },
     newLocation: {
       name: { type: String },
