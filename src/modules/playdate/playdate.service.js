@@ -750,6 +750,35 @@ class PlaydateService {
     return PlaydateResponseDTO.toResponse(populated, parentId);
   }
 
+  /**
+   * Leave an upcoming playdate (Participant only)
+   * @param {string} userId
+   * @param {string} id - Playdate ID
+   */
+  async leavePlaydate(userId, id) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Cannot leave a completed or cancelled playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    if (this._isHost(playdate, parentId)) {
+      throw new AppError('Host cannot leave their own playdate. Cancel the playdate instead.', 400, 'HOST_CANNOT_LEAVE');
+    }
+
+    const participant = (playdate.participants || []).find((p) => toId(p.parentId) === parentId.toString());
+    if (!participant) {
+      throw new AppError('You are not a participant of this playdate', 403, 'NOT_PARTICIPANT');
+    }
+
+    await playdateRepository.updateParticipantStatus(id, parentId, PARTICIPANT_STATUS.DECLINED);
+    await this._notifyMembersChanged(id);
+
+    const populated = await playdateRepository.findById(id);
+    return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
   // ---------------------------------------------------------------------------
   // Reschedule (PROJECT_OVERVIEW 6.2)
   // ---------------------------------------------------------------------------

@@ -163,12 +163,16 @@ describe('Connections management (/api/v1/connections)', () => {
     expect(blockedRes.status).toBe(403);
     expect(blockedRes.body.error.code).toBe('BLOCKED_INTERACTION');
 
-    // Unblocking shows the request again
-    await request(app).delete(`/api/v1/safety/block/${carol.parentId}`).set(auth(dave.token));
+    // Unblocking does not restore the connection (it was removed on block)
+    await request(app).delete(`/api/v1/safety/unblock/${carol.parentId}`).set(auth(dave.token));
     const afterUnblock = await request(app)
       .get('/api/v1/connections?status=pending&direction=incoming')
       .set(auth(carol.token));
-    expect(afterUnblock.body.data.items.find((c) => c.id === connectionId)).toBeDefined();
+    expect(afterUnblock.body.data.items.find((c) => c.id === connectionId)).toBeUndefined();
+
+    // After unblocking, sending a new connection request is allowed
+    const newReqRes = await sendRequest(carol, dave);
+    expect(newReqRes.status).toBe(201);
   });
 
   it('paginates and searches the connections by parent or child name', async () => {

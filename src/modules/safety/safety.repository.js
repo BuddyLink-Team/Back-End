@@ -113,6 +113,25 @@ class SafetyRepository {
     return Report.create(data);
   }
 
+  /**
+   * Find paginated list of blocked parents by blocker
+   * @param {string|ObjectId} blockerId
+   * @param {{ page: number, limit: number }} pagination
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findBlockedUsersByBlocker(blockerId, { page = 1, limit = 10 } = {}) {
+    const query = { blockerId };
+    const [items, total] = await Promise.all([
+      Block.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('blockedId', 'fullName avatarUrl userId')
+        .lean(),
+      Block.countDocuments(query),
+    ]);
+    return { items, total };
+  }
 }
 
 export const safetyRepository = new SafetyRepository();

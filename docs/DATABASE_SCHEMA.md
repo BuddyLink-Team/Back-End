@@ -1070,6 +1070,7 @@ interface IReport {
   targetType: "user" | "message" | "playdate";
   targetMessageId?: ObjectId; // Tham chiếu messages._id (nếu báo cáo tin nhắn)
   targetPlaydateId?: ObjectId; // Tham chiếu playdates._id (nếu báo cáo playdate)
+  category: "harassment" | "inappropriate_content" | "spam" | "fake_profile" | "child_safety" | "no_show" | "other"; // Danh mục vi phạm
   reason: string; // Lý do vi phạm
   description?: string; // Chi tiết phản ánh
   evidenceUrls?: string[]; // Ảnh chụp màn hình / bằng chứng

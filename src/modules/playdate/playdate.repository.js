@@ -316,6 +316,21 @@ class PlaydateRepository {
   }
 
   /**
+   * Update RSVP status of any participant (e.g. accepted participant leaving)
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   * @param {string} status - accepted | declined
+   * @returns {Promise<Object|null>}
+   */
+  async updateParticipantStatus(id, parentId, status) {
+    return Playdate.findOneAndUpdate(
+      { _id: id, 'participants.parentId': parentId },
+      { $set: { 'participants.$.status': status, 'participants.$.respondedAt': new Date() } },
+      { new: true },
+    ).lean();
+  }
+
+  /**
    * Revert a participant's RSVP back to pending (rollback when quota consumption fails)
    * @param {string|ObjectId} id
    * @param {string|ObjectId} parentId

@@ -71,6 +71,78 @@ export class ChatDTO {
     // Identify the other participant in direct conversations
     const partner = participants.find((p) => p.id !== currentParentIdStr) || participants[0] || null;
 
+    const blocks = conversation._blocks || [];
+    const partnerIdStr = partner?.id?.toString();
+
+    // Check all participants in this conversation
+    const blockedByMeParticipants = [];
+    const blockedMeParticipants = [];
+
+    participants.forEach((p) => {
+      if (!p || !p.id || p.id === currentParentIdStr) return;
+      const pIdStr = p.id.toString();
+      const byMe = blocks.some(
+        (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
+               (b.blockedId?._id || b.blockedId)?.toString() === pIdStr
+      );
+      if (byMe && !blockedByMeParticipants.some((item) => item.id === pIdStr)) {
+        blockedByMeParticipants.push(p);
+      }
+
+      const byPartner = blocks.some(
+        (b) => (b.blockerId?._id || b.blockerId)?.toString() === pIdStr &&
+               (b.blockedId?._id || b.blockedId)?.toString() === currentParentIdStr
+      );
+      if (byPartner && !blockedMeParticipants.some((item) => item.id === pIdStr)) {
+        blockedMeParticipants.push(p);
+      }
+    });
+
+    // Also check playdate host and participants if present in playdateId
+    if (conversation.playdateId && typeof conversation.playdateId === 'object') {
+      const pd = conversation.playdateId;
+      if (pd.hostParentId) {
+        const hostId = (pd.hostParentId._id || pd.hostParentId.id || pd.hostParentId).toString();
+        if (hostId !== currentParentIdStr && !blockedByMeParticipants.some((p) => p.id === hostId)) {
+          const byMe = blocks.some(
+            (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
+                   (b.blockedId?._id || b.blockedId)?.toString() === hostId
+          );
+          if (byMe) blockedByMeParticipants.push(this.formatParticipant(pd.hostParentId));
+        }
+      }
+      if (Array.isArray(pd.participants)) {
+        pd.participants.forEach((item) => {
+          const partParent = item.parentId;
+          if (!partParent) return;
+          const partId = (partParent._id || partParent.id || partParent).toString();
+          if (partId !== currentParentIdStr && !blockedByMeParticipants.some((p) => p.id === partId)) {
+            const byMe = blocks.some(
+              (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
+                     (b.blockedId?._id || b.blockedId)?.toString() === partId
+            );
+            if (byMe) blockedByMeParticipants.push(this.formatParticipant(partParent));
+          }
+        });
+      }
+    }
+
+    const isBlockedByMe = conversation.type === 'direct'
+      ? blocks.some(
+          (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
+                 (b.blockedId?._id || b.blockedId)?.toString() === partnerIdStr
+        )
+      : blockedByMeParticipants.length > 0;
+
+    const isBlockedByPartner = conversation.type === 'direct'
+      ? blocks.some(
+          (b) => (b.blockerId?._id || b.blockerId)?.toString() === partnerIdStr &&
+                 (b.blockedId?._id || b.blockedId)?.toString() === currentParentIdStr
+        )
+      : blockedMeParticipants.length > 0;
+
+    const isBlocked = isBlockedByMe || isBlockedByPartner;
+
     // Get unread count for current parent
     let unreadCount = 0;
     if (conversation.unreadCounts) {
@@ -86,6 +158,11 @@ export class ChatDTO {
       type: conversation.type,
       participants,
       partner,
+      blockedByMeParticipants,
+      blockedMeParticipants,
+      isBlockedByMe,
+      isBlockedByPartner,
+      isBlocked,
       playdate: this.formatPlaydate(conversation.playdateId),
       lastMessage: conversation.lastMessage
         ? {

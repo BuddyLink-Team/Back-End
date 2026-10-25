@@ -1,5 +1,5 @@
-import { body } from 'express-validator';
-import { REPORT_TARGET_TYPES, REPORT_LIMITS } from './safety.constants.js';
+import { body, query } from 'express-validator';
+import { REPORT_TARGET_TYPES, REPORT_LIMITS, REPORT_CATEGORIES } from './safety.constants.js';
 
 export const blockUserValidation = [
   body('blockedId')
@@ -43,12 +43,16 @@ export const createReportValidation = [
     .optional({ values: 'null' })
     .isMongoId()
     .withMessage('targetPlaydateId must be a valid MongoDB ObjectId'),
+  body('category')
+    .notEmpty()
+    .withMessage('category is required')
+    .isIn(Object.values(REPORT_CATEGORIES))
+    .withMessage(`category must be one of: ${Object.values(REPORT_CATEGORIES).join(', ')}`),
   body('reason')
+    .optional()
     .isString()
     .withMessage('reason must be a string')
     .trim()
-    .notEmpty()
-    .withMessage('reason is required')
     .isLength({ max: 200 })
     .withMessage('reason cannot exceed 200 characters'),
   body('description')
@@ -66,4 +70,15 @@ export const createReportValidation = [
   body('evidenceUrls.*')
     .isString()
     .withMessage('evidenceUrls items must be strings'),
+];
+
+export const getBlockedUsersValidation = [
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('page must be an integer greater than 0'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('limit must be between 1 and 100'),
 ];

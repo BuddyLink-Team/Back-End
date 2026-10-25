@@ -82,7 +82,14 @@ class ChatService {
    */
   async getUserConversations(parentOrUserId, filter = {}) {
     const parent = await this._resolveParent(parentOrUserId);
-    return chatRepository.findUserConversations(parent._id, filter);
+    const [conversations, blocks] = await Promise.all([
+      chatRepository.findUserConversations(parent._id, filter),
+      safetyService.findBlocksInvolving(parent._id),
+    ]);
+    return conversations.map((conv) => ({
+      ...conv,
+      _blocks: blocks,
+    }));
   }
 
   /**
@@ -95,14 +102,17 @@ class ChatService {
    */
   async getConversationById(parentOrUserId, conversationId, { withPlaydateDetails = true } = {}) {
     const parent = await this._resolveParent(parentOrUserId);
-    const conversation = await chatRepository.findConversationById(conversationId, { withPlaydateDetails });
+    const [conversation, blocks] = await Promise.all([
+      chatRepository.findConversationById(conversationId, { withPlaydateDetails }),
+      safetyService.findBlocksInvolving(parent._id),
+    ]);
 
     if (!conversation) {
       throw new AppError('Conversation not found', 404, 'CONVERSATION_NOT_FOUND');
     }
 
     await this._assertConversationAccess(conversation, parent._id);
-    return conversation;
+    return { ...conversation, _blocks: blocks };
   }
 
   /**
@@ -229,10 +239,12 @@ class ChatService {
       .filter((p) => p.toString() !== parent._id.toString())
       .map((p) => p.toString());
 
-    // Check if blocked in either direction
-    const isBlocked = await safetyService.isBlockedWithAny(parent._id, recipientIds);
-    if (isBlocked) {
-      throw new AppError('Cannot send messages because one of the users has blocked the other', 403, 'USER_BLOCKED');
+    // Check if blocked in either direction (direct conversations only)
+    if (conversation.type === CONVERSATION_TYPES.DIRECT) {
+      const isBlocked = await safetyService.isBlockedWithAny(parent._id, recipientIds);
+      if (isBlocked) {
+        throw new AppError('Cannot send messages because one of the users has blocked the other', 403, 'USER_BLOCKED');
+      }
     }
 
     // A direct chat continues only while the parents may still message each other (connection removed)

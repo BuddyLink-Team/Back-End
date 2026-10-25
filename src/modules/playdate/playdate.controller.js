@@ -99,6 +99,19 @@ class PlaydateController {
   }
 
   /**
+   * POST /api/v1/playdates/:id/leave
+   * Participant leaves an upcoming playdate
+   */
+  async leavePlaydate(req, res, next) {
+    try {
+      const playdate = await playdateService.leavePlaydate(req.userId, req.params.id);
+      return successResponse(res, playdate, 'Successfully left playdate', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
    * POST /api/v1/playdates/:id/reschedule
    * Propose a reschedule for an upcoming playdate
    */

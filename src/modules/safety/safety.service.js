@@ -1,8 +1,9 @@
 import safetyRepository from "./safety.repository.js";
 import parentService from "../parent/parent.service.js";
+import connectionService from "../connection/connection.service.js";
 import AppError from "../../shared/exceptions/AppError.js";
 import storageAdapter from "../../integrations/storage/storage.adapter.js";
-import { REPORT_TARGET_TYPES, REPORT_LIMITS } from "./safety.constants.js";
+import { REPORT_TARGET_TYPES, REPORT_LIMITS, REPORT_CATEGORIES } from "./safety.constants.js";
 class SafetyService {
   /**
    * Get all parentIds that the given parent has blocked or been blocked by.
@@ -55,11 +56,19 @@ class SafetyService {
       );
     }
 
-    return safetyRepository.upsertBlock(
+    const block = await safetyRepository.upsertBlock(
       currentParent._id,
       targetParent._id,
       reason || "Blocked by user",
     );
+
+    // On block, set the active connection between the two parents to removed
+    await connectionService.removeActiveConnectionBetween(
+      currentParent._id,
+      targetParent._id,
+    );
+
+    return block;
   }
 
   /**
@@ -98,6 +107,16 @@ class SafetyService {
   }
 
   /**
+   * Find all active blocks involving a parent (either as blocker or blocked)
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Array>}
+   */
+  async findBlocksInvolving(parentId) {
+    if (!parentId) return [];
+    return safetyRepository.findBlocksInvolving(parentId);
+  }
+
+  /**
    * Get all active blocks involving a parent
    */
   async getBlockedUserIds(parentId) {
@@ -126,6 +145,7 @@ class SafetyService {
       targetType = REPORT_TARGET_TYPES.USER,
       targetMessageId,
       targetPlaydateId,
+      category,
       reason,
       description,
       evidenceUrls,
@@ -139,8 +159,12 @@ class SafetyService {
       );
     }
 
-    if (!reason || !reason.trim()) {
-      throw new AppError("Report reason is required", 400, "REASON_REQUIRED");
+    if (!category || !Object.values(REPORT_CATEGORIES).includes(category)) {
+      throw new AppError(
+        "Violation category is required",
+        400,
+        "CATEGORY_REQUIRED",
+      );
     }
 
     const reportedParent = await parentService.getParentById(reportedUserId);
@@ -190,12 +214,54 @@ class SafetyService {
       targetType,
       targetMessageId: targetMessageId || null,
       targetPlaydateId: targetPlaydateId || null,
-      reason: reason.trim(),
+      category,
+      reason: (reason && reason.trim()) || category,
       description: description || "",
       evidenceUrls: evidence,
     });
 
     return report;
+  }
+
+  /**
+   * Get paginated list of parents blocked by the current parent
+   * @param {string|ObjectId} userIdOrParentId
+   * @param {{ page?: number|string, limit?: number|string }} [pagination]
+   * @returns {Promise<{ items: Array<Object>, pagination: Object }>}
+   */
+  async getBlockedUsers(userIdOrParentId, { page = 1, limit = 10 } = {}) {
+    const currentParent = await this._resolveParent(userIdOrParentId);
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
+
+    const { items, total } = await safetyRepository.findBlockedUsersByBlocker(currentParent._id, {
+      page: pageNum,
+      limit: limitNum,
+    });
+
+    const formattedItems = items.map((block) => {
+      const blockedParent = block.blockedId || {};
+      return {
+        id: block._id.toString(),
+        parentId: (blockedParent._id || block.blockedId).toString(),
+        displayName: blockedParent.fullName || "Người dùng BuddyLink",
+        fullName: blockedParent.fullName || "Người dùng BuddyLink",
+        avatar: blockedParent.avatarUrl || null,
+        avatarUrl: blockedParent.avatarUrl || null,
+        reason: block.reason || "",
+        blockedAt: block.createdAt,
+      };
+    });
+
+    return {
+      items: formattedItems,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    };
   }
 }
 

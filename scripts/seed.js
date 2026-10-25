@@ -847,13 +847,19 @@ export async function seedDatabase({ log = console.log } = {}) {
   // ---- Reports ------------------------------------------------------------------------------
   const cancelledPlaydate = playdates.find((p) => p.status === 'cancelled');
   const reportedMessage = await Message.findOne({ conversationId: directConversations[3]._id, type: 'text' }).sort({ createdAt: -1 });
-  const messageReporter = directConversations[3].participants.find((id) => !id.equals(reportedMessage.senderId));
   await Report.insertMany([
-    { reporterId: parents[30]._id, reportedUserId: parents[31]._id, targetType: 'user', reason: 'Quấy rối', description: 'Gửi lời mời kết nối nhiều lần và nhắn tin không phù hợp sau khi bị từ chối.', status: 'resolved', adminNotes: 'Đã cảnh cáo tài khoản, theo dõi thêm 30 ngày.', resolvedBy: admin._id, resolvedAt: daysAgo(8), createdAt: daysAgo(10) },
-    { reporterId: parents[33]._id, reportedUserId: parents[34]._id, targetType: 'user', reason: 'Thông tin hồ sơ không trung thực', description: 'Ảnh đại diện và độ tuổi của bé có vẻ không đúng thực tế.', status: 'reviewing', adminNotes: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.', createdAt: daysAgo(5) },
-    { reporterId: cancelledPlaydate.hostParentId, reportedUserId: cancelledPlaydate.cancellation.cancelledBy, targetType: 'playdate', targetPlaydateId: cancelledPlaydate._id, reason: 'Không đến buổi hẹn', description: 'Hủy sát giờ mà không báo trước, cả nhà đã ra tới công viên.', status: 'dismissed', adminNotes: 'Lý do hủy hợp lệ (bé bị ốm), không vi phạm.', resolvedBy: admin._id, resolvedAt: daysAgo(2), createdAt: daysAgo(3) },
-    { reporterId: messageReporter, reportedUserId: reportedMessage.senderId, targetType: 'message', targetMessageId: reportedMessage._id, reason: 'Báo cáo nhầm', description: 'Lỡ bấm báo cáo khi đang đọc tin nhắn, mong admin bỏ qua giúp.', status: 'dismissed', adminNotes: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.', resolvedBy: admin._id, resolvedAt: daysAgo(0, 9), createdAt: daysAgo(1, 21) },
-    { reporterId: parents[44]._id, reportedUserId: parents[45]._id, targetType: 'user', reason: 'Ngôn từ không phù hợp', description: 'Dùng từ ngữ thiếu lịch sự trong phần giới thiệu bản thân.', evidenceUrls: [SAMPLE_IMAGE_URL], status: 'pending', createdAt: daysAgo(0, 7, 45) },
+    { reporterId: parents[30]._id, reportedUserId: parents[31]._id, targetType: 'user', category: 'harassment', reason: 'Quấy rối', description: 'Gửi lời mời kết nối nhiều lần và nhắn tin không phù hợp sau khi bị từ chối.', status: 'resolved', adminNotes: 'Đã cảnh cáo tài khoản, theo dõi thêm 30 ngày.', resolvedBy: admin._id, resolvedAt: daysAgo(8), createdAt: daysAgo(10) },
+    { reporterId: parents[33]._id, reportedUserId: parents[34]._id, targetType: 'user', category: 'fake_profile', reason: 'Thông tin hồ sơ không trung thực', description: 'Ảnh đại diện và độ tuổi của bé có vẻ không đúng thực tế.', status: 'reviewing', adminNotes: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.', createdAt: daysAgo(5) },
+    { reporterId: cancelledPlaydate.hostParentId, reportedUserId: cancelledPlaydate.cancellation.cancelledBy, targetType: 'playdate', targetPlaydateId: cancelledPlaydate._id, category: 'no_show', reason: 'Không đến buổi hẹn', description: 'Hủy sát giờ mà không báo trước, cả nhà đã ra tới công viên.', status: 'dismissed', adminNotes: 'Lý do hủy hợp lệ (bé bị ốm), không vi phạm.', resolvedBy: admin._id, resolvedAt: daysAgo(2), createdAt: daysAgo(3) },
+    { reporterId: messageReporter, reportedUserId: reportedMessage.senderId, targetType: 'message', targetMessageId: reportedMessage._id, category: 'other', reason: 'Báo cáo nhầm', description: 'Lỡ bấm báo cáo khi đang đọc tin nhắn, mong admin bỏ qua giúp.', status: 'dismissed', adminNotes: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.', resolvedBy: admin._id, resolvedAt: daysAgo(0, 9), createdAt: daysAgo(1, 21) },
+    { reporterId: parents[44]._id, reportedUserId: parents[45]._id, targetType: 'user', category: 'inappropriate_content', reason: 'Ngôn từ không phù hợp', description: 'Dùng từ ngữ thiếu lịch sự trong phần giới thiệu bản thân.', evidenceUrls: [SAMPLE_IMAGE_URL], status: 'pending', createdAt: daysAgo(0, 7, 45) },
+  ]);
+
+  // ---- Blocks --------------------------------------------------------------------------------
+  await Block.insertMany([
+    { blockerId: parents[0]._id, blockedId: parents[25]._id, reason: 'Nội dung tin nhắn không phù hợp', createdAt: daysAgo(3, 14) },
+    { blockerId: parents[0]._id, blockedId: parents[26]._id, reason: 'Quấy rối và gửi nhiều tin spam', createdAt: daysAgo(1, 10) },
+    { blockerId: parents[1]._id, blockedId: parents[27]._id, reason: 'Hồ sơ giả mạo', createdAt: daysAgo(2, 8) },
   ]);
 
   // ---- Notifications ---------------------------------------------------------------------------
