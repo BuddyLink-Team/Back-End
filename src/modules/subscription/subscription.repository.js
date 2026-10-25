@@ -111,6 +111,122 @@ class SubscriptionRepository {
       options
     );
   }
+
+  /**
+   * Count active premium subscriptions whose end date is in the future
+   */
+  async countActivePremium(now = new Date()) {
+    return Subscription.countDocuments({
+      status: SUBSCRIPTION_STATUS.ACTIVE,
+      planCode: { $in: [SUBSCRIPTION_PLAN_CODES.PREMIUM_MONTHLY, SUBSCRIPTION_PLAN_CODES.PREMIUM_YEARLY] },
+      endDate: { $gt: now },
+    });
+  }
+
+  /**
+   * Paginated list of subscriptions with parent and user lookup for admin portal
+   */
+  async findPaginated({ planCode, status, search, page = 1, limit = 10 } = {}) {
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.max(1, parseInt(limit, 10) || 10);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const pipeline = [
+      {
+        $lookup: {
+          from: 'parents',
+          localField: 'parentId',
+          foreignField: '_id',
+          as: 'parent',
+        },
+      },
+      {
+        $unwind: {
+          path: '$parent',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'parent.userId',
+          foreignField: '_id',
+          as: 'user',
+        },
+      },
+      {
+        $unwind: {
+          path: '$user',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+    ];
+
+    const matchConditions = {};
+
+    if (planCode) {
+      matchConditions.planCode = planCode;
+    }
+
+    if (status) {
+      matchConditions.status = status;
+    }
+
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      matchConditions.$or = [
+        { 'parent.fullName': { $regex: escaped, $options: 'i' } },
+        { 'user.email': { $regex: escaped, $options: 'i' } },
+      ];
+    }
+
+    if (Object.keys(matchConditions).length > 0) {
+      pipeline.push({ $match: matchConditions });
+    }
+
+    pipeline.push({
+      $facet: {
+        items: [
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $skip: skip },
+          { $limit: parsedLimit },
+          {
+            $project: {
+              _id: 1,
+              parentId: 1,
+              planCode: 1,
+              status: 1,
+              startDate: 1,
+              endDate: 1,
+              purchasedMonths: 1,
+              createdAt: 1,
+              parent: {
+                _id: '$parent._id',
+                fullName: '$parent.fullName',
+                avatarUrl: '$parent.avatarUrl',
+                email: '$user.email',
+              },
+            },
+          },
+        ],
+        totalCount: [{ $count: 'count' }],
+      },
+    });
+
+    const result = await Subscription.aggregate(pipeline);
+    const items = result[0]?.items || [];
+    const total = result[0]?.totalCount[0]?.count || 0;
+
+    return {
+      items,
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total,
+        totalPages: Math.ceil(total / parsedLimit) || 1,
+      },
+    };
+  }
 }
 
 export default new SubscriptionRepository();
