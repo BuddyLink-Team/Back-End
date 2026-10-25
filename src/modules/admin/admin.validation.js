@@ -1,0 +1,124 @@
+import { query, param, body } from 'express-validator';
+import { CHILD_GENDERS } from '../child/child.constants.js';
+
+/**
+ * Validation rules for GET /api/v1/admin/users
+ */
+export const listUsersValidation = [
+  query('search')
+    .optional()
+    .isString()
+    .trim(),
+  query('isActive')
+    .optional()
+    .isBoolean()
+    .withMessage('isActive must be a boolean'),
+  query('isVerified')
+    .optional()
+    .isBoolean()
+    .withMessage('isVerified must be a boolean'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+];
+
+/**
+ * Validation rules for :id param on user endpoints
+ */
+export const userIdParamValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid user ID'),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/users/:id/status
+ */
+export const updateUserStatusValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid user ID'),
+  body('isActive')
+    .notEmpty()
+    .withMessage('isActive is required')
+    .isBoolean()
+    .withMessage('isActive must be a boolean'),
+  body('reason')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Reason must be at most 500 characters'),
+];
+
+/**
+ * Validation rules for GET /api/v1/admin/children
+ */
+export const listChildrenValidation = [
+  query('search')
+    .optional()
+    .isString()
+    .trim(),
+  query('gender')
+    .optional()
+    .isIn(Object.values(CHILD_GENDERS))
+    .withMessage(`Gender must be one of: ${Object.values(CHILD_GENDERS).join(', ')}`),
+  query('minAge')
+    .optional()
+    .isInt({ min: 0, max: 18 })
+    .withMessage('minAge must be between 0 and 18'),
+  query('maxAge')
+    .optional()
+    .isInt({ min: 0, max: 18 })
+    .withMessage('maxAge must be between 0 and 18')
+    .bail()
+    .custom((value, { req }) =>
+      req.query.minAge === undefined || parseInt(req.query.minAge, 10) <= parseInt(value, 10)
+    )
+    .withMessage('maxAge must be greater than or equal to minAge'),
+  query('isArchived')
+    .optional()
+    .isBoolean()
+    .withMessage('isArchived must be a boolean'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+];
+
+/**
+ * Validation rules for :id param on child endpoints
+ */
+export const childIdParamValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid child ID'),
+];
+
+/**
+ * Validation rules for GET /api/v1/admin/payments
+ */
+export const listPaymentsValidation = [
+  query('parentId')
+    .notEmpty()
+    .withMessage('parentId is required')
+    .isMongoId()
+    .withMessage('Invalid parent ID'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+];

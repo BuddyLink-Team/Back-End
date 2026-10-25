@@ -2,6 +2,7 @@ import childRepository from './child.repository.js';
 import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
+import userService from '../user/user.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
 import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import { ChildResponseDTO, ChildPublicProfileDTO } from './child.dto.js';
@@ -229,12 +230,31 @@ class ChildService {
     if (!isOwnChild) {
       const isHidden = parent.privacySettings?.isProfileHidden === true;
       const isBlocked = isHidden ? false : await safetyService.isBlocked(viewerParentId, parent._id);
-      if (isHidden || isBlocked) {
+      const isParentActive = parent.userId
+        ? (await userService.getActiveUserIds([parent.userId])).length > 0
+        : true;
+      if (isHidden || isBlocked || !isParentActive) {
         throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
       }
     }
 
     return ChildPublicProfileDTO.toResponse(child);
+  }
+
+  /**
+   * Get all children belonging to a parent including archived (for admin)
+   * @param {string|mongoose.Types.ObjectId} parentId
+   */
+  async getAllChildrenByParentId(parentId) {
+    return childRepository.findAllByParentId(parentId);
+  }
+
+  /**
+   * Get child by ID regardless of status (for admin)
+   * @param {string|mongoose.Types.ObjectId} childId
+   */
+  async getChildByIdRaw(childId) {
+    return childRepository.findById(childId);
   }
 }
 
