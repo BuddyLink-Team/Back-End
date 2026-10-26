@@ -1,8 +1,5 @@
 import Connection from './connection.model.js';
 import { CONNECTION_STATUS } from './connection.constants.js';
-import { PAGINATION } from '../../shared/constants/index.js';
-import '../user/user.model.js';
-import '../parent/parent.model.js';
 
 class ConnectionRepository {
   /**
@@ -111,7 +108,7 @@ class ConnectionRepository {
    * @param {string} toStatus - accepted | declined | removed
    * @returns {Promise<Object|null>} Updated connection
    */
-  async transitionStatus(connectionId, fromStatus, toStatus, extraFields = {}) {
+  async transitionStatus(connectionId, fromStatus, toStatus) {
     const timestampField = {
       [CONNECTION_STATUS.ACCEPTED]: 'connectedAt',
       [CONNECTION_STATUS.DECLINED]: 'declinedAt',
@@ -120,74 +117,9 @@ class ConnectionRepository {
 
     return Connection.findOneAndUpdate(
       { _id: connectionId, status: fromStatus },
-      {
-        $set: {
-          status: toStatus,
-          ...(timestampField ? { [timestampField]: new Date() } : {}),
-          ...extraFields,
-        },
-      },
+      { $set: { status: toStatus, ...(timestampField ? { [timestampField]: new Date() } : {}) } },
       { new: true }
     ).lean();
-  }
-
-  /**
-   * One page of connections for admin oversight
-   * @param {Object} options
-   * @param {string} [options.status]
-   * @param {Array<string|ObjectId>} [options.searchParentIds]
-   * @param {number} [options.page=1]
-   * @param {number} [options.limit=10]
-   * @returns {Promise<{ items: Array<Object>, pagination: Object }>}
-   */
-  async findPageForAdmin({ status, searchParentIds, page = 1, limit = 10 } = {}) {
-    const andConditions = [];
-    if (status && status !== 'all') {
-      andConditions.push({ status: status.toLowerCase() });
-    }
-    if (Array.isArray(searchParentIds)) {
-      andConditions.push({ parents: { $in: searchParentIds } });
-    }
-
-    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
-    const parsedLimit = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || PAGINATION.DEFAULT_LIMIT));
-    const parsedPage = Math.max(PAGINATION.DEFAULT_PAGE, parseInt(page, 10) || PAGINATION.DEFAULT_PAGE);
-    const skip = (parsedPage - 1) * parsedLimit;
-
-    const parentFields = 'fullName avatarUrl userId verification location';
-    const [total, items] = await Promise.all([
-      Connection.countDocuments(query),
-      Connection.find(query)
-        .sort({ createdAt: -1, _id: -1 })
-        .skip(skip)
-        .limit(parsedLimit)
-        .populate({ path: 'requesterId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
-        .populate({ path: 'recipientId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
-        .lean(),
-    ]);
-
-    return {
-      items,
-      pagination: {
-        page: parsedPage,
-        limit: parsedLimit,
-        total,
-        totalPages: Math.ceil(total / parsedLimit) || 1,
-      },
-    };
-  }
-
-  /**
-   * Find connection with populated parents and users for admin detail view
-   * @param {string|ObjectId} id
-   * @returns {Promise<Object|null>}
-   */
-  async findWithDetailsForAdmin(id) {
-    const parentFields = 'fullName avatarUrl userId verification location bio';
-    return Connection.findById(id)
-      .populate({ path: 'requesterId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
-      .populate({ path: 'recipientId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
-      .lean();
   }
 
   /**

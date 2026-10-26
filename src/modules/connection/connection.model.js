@@ -75,14 +75,6 @@ const connectionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    removalReason: {
-      type: String,
-      default: null,
-    },
-    removedByAdmin: {
-      type: Boolean,
-      default: false,
-    },
     childPairs: {
       type: [childPairSchema],
       default: [],
