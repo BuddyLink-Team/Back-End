@@ -225,6 +225,8 @@ erDiagram
         date connectedAt
         date declinedAt
         date removedAt
+        string removalReason "Lý do gỡ kết nối khi admin/phụ huynh gỡ"
+        boolean removedByAdmin "true khi admin thực hiện gỡ kết nối"
         array childPairs "Array of { childIds [min, max], pairKey, source, matchScore, createdAt }"
         date createdAt
         date updatedAt
@@ -259,7 +261,7 @@ erDiagram
         object location "name, address, placeId, coordinates [lng, lat]"
         string note "Ghi chú cho các gia đình"
         string status "upcoming | completed | cancelled"
-        object cancellation "cancelledBy, reason, cancelledAt"
+        object cancellation "cancelledBy, cancelledByAdmin, reason, cancelledAt"
         date completedAt
         ObjectId chatConversationId FK "Ref: conversations._id (1:1)"
         object reminders "h24SentAt, h1SentAt (job nhắc lịch)"
@@ -737,6 +739,8 @@ interface IConnection {
   connectedAt?: Date;
   declinedAt?: Date;
   removedAt?: Date;
+  removalReason?: string; // Lý do gỡ kết nối khi admin/phụ huynh gỡ
+  removedByAdmin?: boolean; // true khi admin thực hiện gỡ kết nối
   // Các cặp bé được ghép trên kết nối này (BUD-48). Bé đã lưu trữ (archived) bị lọc khi đọc.
   childPairs: Array<{
     childIds: [ObjectId, ObjectId]; // Sort [minId, maxId], mỗi bé thuộc 1 phụ huynh của kết nối
@@ -853,6 +857,7 @@ interface IPlaydate {
 
   cancellation?: {
     cancelledBy: ObjectId | null; // null khi hệ thống tự hủy (job 0h: quá ngày mà không ai Accept)
+    cancelledByAdmin?: boolean; // true khi admin chủ động hủy buổi hẹn
     reason?: string;
     cancelledAt: Date;
   };
