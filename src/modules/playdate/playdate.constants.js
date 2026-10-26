@@ -4,6 +4,14 @@ export const PLAYDATE_STATUS = Object.freeze({
   CANCELLED: 'cancelled',
 });
 
+// displayStatus of a playdate for the viewer (PlaydateResponseDTO); completed / cancelled are the stored status
+export const PLAYDATE_DISPLAY_STATUS = Object.freeze({
+  PENDING: 'pending', // an answer is awaited (the viewer's, or an invitee's for the host)
+  CONFIRMED: 'confirmed', // at least one invitee accepted
+  DECLINED: 'declined', // the viewer declined the invitation
+  AWAITING_PLAYMATES: 'awaiting_playmates', // host: nobody joined yet (all declined or none invited)
+});
+
 export const PARTICIPANT_STATUS = Object.freeze({
   PENDING: 'pending',
   ACCEPTED: 'accepted',

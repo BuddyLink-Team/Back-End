@@ -29,6 +29,7 @@ import Connection from '../src/modules/connection/connection.model.js';
 import Swipe from '../src/modules/discovery/discovery.model.js';
 import { buildChildPairKey } from '../src/modules/connection/connection.constants.js';
 import PlacesCache from '../src/modules/places/places-cache.model.js';
+import { PLACE_SOURCES } from '../src/modules/places/places.constants.js';
 import Conversation from '../src/modules/chat/conversation.model.js';
 import Message from '../src/modules/chat/message.model.js';
 import Playdate from '../src/modules/playdate/playdate.model.js';
@@ -159,17 +160,20 @@ const BIOS = [
   'Bé nhà mình hòa đồng nhưng hơi nóng tính, đang tập chia sẻ đồ chơi. Mong gặp các bạn kiên nhẫn để con học hỏi thêm.',
 ];
 
+// osm-*: the real OpenStreetMap element (checked on openstreetmap.org), coordinates = its center.
+// seed-*: no matching OSM element, so the place has no OpenStreetMap link (Google Maps searches name + address).
 const PLACES = [
-  { name: 'Công viên Biển Đông', address: 'Đường Võ Nguyên Giáp, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2475, 16.0717], placeType: 'park', osmId: 'osm-way-243118562' },
-  { name: 'Công viên APEC', address: 'Đường Bạch Đằng, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2238, 16.0598], placeType: 'park', osmId: 'osm-way-512870334' },
-  { name: 'Công viên 29/3', address: 'Đường Điện Biên Phủ, Phường Thanh Khê, Thành phố Đà Nẵng', coordinates: [108.2004, 16.0641], placeType: 'park', osmId: 'osm-way-31876540' },
-  { name: 'Sun World Đà Nẵng Wonders', address: '1 Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2283, 16.0391], placeType: 'playground', osmId: 'osm-way-326440118' },
-  { name: 'Bảo tàng Điêu khắc Chăm', address: '02 Đường 2 Tháng 9, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2232, 16.0605], placeType: 'workshop', osmId: 'osm-way-89221457' },
-  { name: 'Thư viện Khoa học Tổng hợp Đà Nẵng', address: 'Đường Lê Duẩn, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2166, 16.0716], placeType: 'library', osmId: 'osm-way-415206643' },
-  { name: 'Khu vui chơi trẻ em Lotte Mart Đà Nẵng', address: '6 Nại Nam, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2244, 16.0352], placeType: 'kids_cafe', osmId: 'osm-way-276113902' },
-  { name: 'Khu vui chơi Vincom Plaza Ngô Quyền', address: '910A Ngô Quyền, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2302, 16.0714], placeType: 'kids_cafe', osmId: 'osm-way-301447251' },
-  { name: 'Cung Thể thao Tiên Sơn', address: 'Đường Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2232, 16.0362], placeType: 'sports_center', osmId: 'osm-way-145532980' },
-  { name: 'Công viên Biển Hội An (An Bàng)', address: 'Bãi biển An Bàng, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3418, 15.9139], placeType: 'park', osmId: 'osm-way-198604477' },
+  { name: 'Công viên Biển Đông', address: 'Đường Võ Nguyên Giáp, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.24593, 16.06815], placeType: 'park', osmId: 'osm-way-149699484' },
+  { name: 'Công viên APEC', address: 'Đường Bạch Đằng, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.22327, 16.0586], placeType: 'park', osmId: 'osm-way-675604354' },
+  { name: 'Công viên 29/3', address: 'Đường Điện Biên Phủ, Phường Thanh Khê, Thành phố Đà Nẵng', coordinates: [108.2004, 16.0641], placeType: 'park', osmId: 'seed-cong-vien-29-3' },
+  { name: 'Sun World Đà Nẵng Wonders', address: '1 Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2283, 16.0391], placeType: 'playground', osmId: 'seed-sun-world-da-nang-wonders' },
+  { name: 'Bảo tàng Điêu khắc Chăm', address: '02 Đường 2 Tháng 9, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.22317, 16.0602], placeType: 'workshop', osmId: 'osm-way-302872188' },
+  { name: 'Thư viện Khoa học Tổng hợp Đà Nẵng', address: 'Đường Lê Duẩn, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2166, 16.0716], placeType: 'library', osmId: 'seed-thu-vien-khth-da-nang' },
+  // Kids areas inside a mall: the OSM element is the mall itself
+  { name: 'Khu vui chơi trẻ em Lotte Mart Đà Nẵng', address: '6 Nại Nam, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.22923, 16.03487], placeType: 'kids_cafe', osmId: 'osm-way-302765734' },
+  { name: 'Khu vui chơi Vincom Plaza Ngô Quyền', address: '910A Ngô Quyền, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2303, 16.0714], placeType: 'kids_cafe', osmId: 'osm-way-693393717' },
+  { name: 'Cung Thể thao Tiên Sơn', address: 'Đường Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.22654, 16.03676], placeType: 'sports_center', osmId: 'osm-way-302765735' },
+  { name: 'Công viên Biển Hội An (An Bàng)', address: 'Bãi biển An Bàng, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3418, 15.9139], placeType: 'park', osmId: 'seed-cong-vien-bien-an-bang' },
 ];
 
 // Same badges as the app (title / description / icon / requirement), without the metric used to evaluate them
@@ -531,6 +535,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       address: p.address,
       coordinates: { type: 'Point', coordinates: p.coordinates },
       placeType: p.placeType,
+      // Never removed by a places sync (the kids areas in a mall are not kid-friendly places in OSM)
+      source: PLACE_SOURCES.MANUAL,
       openingHours: OPENING_HOURS[p.placeType] || '',
       lastFetchedAt: daysAgo(int(1, 20)),
     })),

@@ -7,6 +7,7 @@ import overpassAdapter from '../../src/integrations/maps/overpass.adapter.js';
 import geocodingAdapter from '../../src/integrations/maps/geocoding.adapter.js';
 import placesService, { gridCellsOf } from '../../src/modules/places/places.service.js';
 import PlacesSyncTile from '../../src/modules/places/places-sync-tile.model.js';
+import env from '../../src/config/env.js';
 
 const CENTER = [108.2208, 16.0678]; // Hải Châu, Đà Nẵng
 
@@ -132,6 +133,15 @@ describe('Places module (OpenStreetMap cache)', () => {
       expect(reverse).toHaveBeenCalledTimes(1);
     });
 
+    it('only links to OpenStreetMap for a real OSM element', async () => {
+      const [seeded] = await PlacesCache.insertMany([
+        cachedPlace('seed-cong-vien-29-3', near(CENTER, 0.003), { name: 'Công viên mẫu 29/3', source: 'manual' }),
+      ]);
+      const res = await get(token, `/api/v1/places/${seeded._id}`);
+      expect(res.body.data).toMatchObject({ placeId: 'seed-cong-vien-29-3', osmUrl: null });
+      await PlacesCache.deleteOne({ _id: seeded._id });
+    });
+
     it('returns 404 for an unknown place', async () => {
       const res = await get(token, '/api/v1/places/64b7f0c2a1b2c3d4e5f60789');
       expect(res.status).toBe(404);
@@ -167,11 +177,74 @@ describe('Places module (OpenStreetMap cache)', () => {
       expect(tiles[0]).toMatchObject({ placesCount: 2, bbox: [16.0, 108.1, 16.1, 108.2] });
     });
 
+    it('removes the OSM places a new sync of their cell no longer returns, but keeps places added by hand', async () => {
+      const cellBbox = [16.2, 108.5, 16.3, 108.6];
+      await PlacesCache.insertMany([
+        cachedPlace('osm-way-7001', [108.55, 16.25], { name: 'Công viên còn trên OSM' }),
+        cachedPlace('osm-way-7002', [108.56, 16.25], { name: 'Công viên đã bị xóa khỏi OSM' }),
+        cachedPlace('osm-way-7003', [108.57, 16.25], { name: 'Khu vui chơi trong siêu thị', source: 'manual' }),
+        cachedPlace('seed-cong-vien-mau', [108.58, 16.25], { name: 'Công viên mẫu', source: 'manual' }),
+        // Outside the synced cell: untouched
+        cachedPlace('osm-way-7004', [108.65, 16.25], { name: 'Công viên ô bên cạnh' }),
+      ]);
+      jest.spyOn(overpassAdapter, 'searchArea').mockResolvedValueOnce([
+        cachedPlace('osm-way-7001', [108.55, 16.25], { name: 'Công viên còn trên OSM' }),
+      ]);
+
+      await placesService.syncArea(cellBbox, { delayMs: 0 });
+
+      const left = await PlacesCache.find({ osmId: /^(osm-way-700|seed-cong-vien-mau)/ }).lean();
+      expect(left.map((p) => p.osmId).sort()).toEqual(['osm-way-7001', 'osm-way-7003', 'osm-way-7004', 'seed-cong-vien-mau']);
+    });
+
     it('aligns any area on the fixed grid, so a city sync and the auto sync share cells', () => {
       const cells = gridCellsOf([15.85, 108.05, 16.2, 108.36], 0.1);
       expect(cells[0]).toEqual({ key: '0.1:158:1080', bbox: [15.8, 108.0, 15.9, 108.1], cellSizeDeg: 0.1 });
       expect(cells.at(-1).bbox).toEqual([16.1, 108.3, 16.2, 108.4]);
       expect(cells).toHaveLength(4 * 4);
+    });
+  });
+
+  describe('Background address lookup', () => {
+    afterEach(() => {
+      env.PLACES.ADDRESS_LOOKUP = false;
+    });
+
+    it('is off in tests (never calls Nominatim)', async () => {
+      const reverse = jest.spyOn(geocodingAdapter, 'reverseGeocode');
+      await get(token, '/api/v1/places/nearby');
+      await placesService._addressLookupQueue;
+      expect(reverse).not.toHaveBeenCalled();
+    });
+
+    it('fills the missing address of the places shown, once each, and never overwrites one', async () => {
+      env.PLACES.ADDRESS_LOOKUP = true;
+      placesService.addressLookupIntervalMs = 0;
+      const [noAddress, withAddress] = await PlacesCache.insertMany([
+        cachedPlace('osm-node-8001', near(CENTER, 0.0005), { name: 'Sân chơi chưa có địa chỉ', address: '' }),
+        cachedPlace('osm-node-8002', near(CENTER, 0.0006), { name: 'Sân chơi có địa chỉ', address: '1 Bạch Đằng' }),
+      ]);
+      const reverse = jest.spyOn(geocodingAdapter, 'reverseGeocode').mockResolvedValue('5 Trần Phú, Phường Hải Châu, Đà Nẵng');
+
+      const lookupsOf = (place) => reverse.mock.calls.filter(([lng]) => lng === place.coordinates.coordinates[0]).length;
+
+      // A place already waiting is not queued twice
+      placesService.queueAddressLookups([noAddress.toObject()]);
+      placesService.queueAddressLookups([noAddress.toObject()]);
+      await placesService._addressLookupQueue;
+      expect(lookupsOf(noAddress)).toBe(1);
+      await PlacesCache.updateOne({ _id: noAddress._id }, { $set: { address: '' } });
+
+      // A search queues the places it shows without an address; the next search finds it filled
+      await get(token, '/api/v1/places/nearby');
+      await placesService._addressLookupQueue;
+      await get(token, '/api/v1/places/nearby');
+      await placesService._addressLookupQueue;
+      expect(lookupsOf(noAddress)).toBe(2);
+      expect(lookupsOf(withAddress)).toBe(0);
+      expect((await PlacesCache.findById(noAddress._id).lean()).address).toBe('5 Trần Phú, Phường Hải Châu, Đà Nẵng');
+      expect((await PlacesCache.findById(withAddress._id).lean()).address).toBe('1 Bạch Đằng');
+      await PlacesCache.deleteMany({ _id: { $in: [noAddress._id, withAddress._id] } });
     });
   });
 

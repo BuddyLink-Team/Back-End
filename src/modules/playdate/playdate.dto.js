@@ -1,5 +1,5 @@
 import { addMinutesToTime } from '../../shared/helpers/date.helper.js';
-import { PLAYDATE_RULES } from './playdate.constants.js';
+import { PLAYDATE_RULES, PLAYDATE_STATUS, PARTICIPANT_STATUS, PLAYDATE_DISPLAY_STATUS } from './playdate.constants.js';
 
 // Old playdates / requests were stored without a duration
 const durationOf = (value) => value ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
@@ -30,15 +30,19 @@ export class PlaydateResponseDTO {
       }
     }
 
-    // Determine Stitch displayStatus: 'pending' | 'confirmed' | 'completed' | 'cancelled'
+    // Status seen by the viewer (PLAYDATE_DISPLAY_STATUS) for an upcoming playdate: confirmed only once
+    // someone accepted; the host of a playdate nobody joined (all declined, or none invited) is awaiting playmates
     let displayStatus = playdate.status;
-    if (playdate.status === 'upcoming') {
-      if (myParticipantStatus === 'pending') {
-        displayStatus = 'pending';
-      } else if (isHost && playdate.participants?.some((p) => p.status === 'pending')) {
-        displayStatus = 'pending';
+    if (playdate.status === PLAYDATE_STATUS.UPCOMING) {
+      const statuses = (playdate.participants || []).map((p) => p.status);
+      if (myParticipantStatus === PARTICIPANT_STATUS.PENDING || (isHost && statuses.includes(PARTICIPANT_STATUS.PENDING))) {
+        displayStatus = PLAYDATE_DISPLAY_STATUS.PENDING;
+      } else if (myParticipantStatus === PARTICIPANT_STATUS.DECLINED) {
+        displayStatus = PLAYDATE_DISPLAY_STATUS.DECLINED;
+      } else if (isHost && !statuses.includes(PARTICIPANT_STATUS.ACCEPTED)) {
+        displayStatus = PLAYDATE_DISPLAY_STATUS.AWAITING_PLAYMATES;
       } else {
-        displayStatus = 'confirmed';
+        displayStatus = PLAYDATE_DISPLAY_STATUS.CONFIRMED;
       }
     }
 
@@ -70,8 +74,21 @@ export class PlaydateResponseDTO {
         }
       : { id: playdate.hostParentId?.toString() };
 
+    // Who the viewer sees: the host sees every invitee and their answer. Anyone else sees the families who
+    // joined (accepted, the group chat members) and themselves, never who else was invited or declined,
+    // only how many families are still invited.
+    const idOf = (p) => (p.parentId?._id || p.parentId)?.toString();
+    const allParticipants = playdate.participants || [];
+    const seesAll = isHost || !parentIdStr;
+    const visibleParticipants = seesAll
+      ? allParticipants
+      : allParticipants.filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED || idOf(p) === parentIdStr);
+    const otherPendingCount = seesAll
+      ? 0
+      : allParticipants.filter((p) => p.status === PARTICIPANT_STATUS.PENDING && idOf(p) !== parentIdStr).length;
+
     // Format participants
-    const participants = (playdate.participants || []).map((p) => ({
+    const participants = visibleParticipants.map((p) => ({
       parentId: (p.parentId?._id || p.parentId)?.toString(),
       parent: p.parentId && typeof p.parentId === 'object'
         ? {
@@ -103,6 +120,8 @@ export class PlaydateResponseDTO {
       hostChildId: playdate.hostChildId?._id?.toString() || playdate.hostChildId?.toString(),
       hostChild,
       participants,
+      // Invitees still to answer that the viewer does not see (always 0 for the host)
+      otherPendingCount,
       scheduledDate: playdate.scheduledDate,
       time: playdate.time,
       durationMinutes: durationOf(playdate.durationMinutes),

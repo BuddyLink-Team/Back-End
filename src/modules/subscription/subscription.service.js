@@ -218,6 +218,8 @@ class SubscriptionService {
 
     const discoveryUsed = dailyCounters[QUOTA_ACTIONS.discovery.counterField] || 0;
     const playdatesUsed = monthlyCounters[QUOTA_ACTIONS.playdateCreate.counterField] || 0;
+    const aiAssistantLimit = features[QUOTA_ACTIONS.aiAssistant.limitKey] ?? 5;
+    const aiAssistantUsed = monthlyCounters[QUOTA_ACTIONS.aiAssistant.counterField] || 0;
 
     return {
       isPremium,
@@ -253,8 +255,45 @@ class SubscriptionService {
           periodType: QUOTA_PERIOD_TYPES.MONTHLY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
         },
+        // AI assistant: one unit per chat session (ai-assistant.service.js)
+        [QUOTA_FEATURES.AI_ASSISTANT]: {
+          limit: isPremium ? -1 : aiAssistantLimit,
+          used: aiAssistantUsed,
+          remaining: isPremium || aiAssistantLimit === -1 ? null : Math.max(0, aiAssistantLimit - aiAssistantUsed),
+          periodType: QUOTA_PERIOD_TYPES.MONTHLY,
+          resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
+        },
       },
     };
+  }
+
+  /**
+   * Current usage of one bounded action, without checking or consuming it
+   * @param {string|mongoose.Types.ObjectId} parentId
+   * @param {string} actionType - A QUOTA_ACTIONS key or its QUOTA_FEATURES name
+   * @returns {Promise<{ isPremium: boolean, limit: number, used: number, remaining: number }>} -1 = unlimited
+   */
+  async getActionUsage(parentId, actionType) {
+    const action = QUOTA_ACTIONS[QUOTA_ACTION_ALIASES[actionType] || actionType];
+    if (!action) {
+      throw new AppError(`Unknown quota action: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
+    }
+
+    const subscription = await this.getSubscriptionByParentId(parentId);
+    const isPremium = this.isSubscriptionActive(subscription);
+    const counters = await usageQuotaRepository.getCounters(
+      parentId,
+      action.periodType,
+      getVietnamPeriodValue(action.periodType)
+    );
+    const used = counters[action.counterField] || 0;
+    if (isPremium) {
+      return { isPremium, limit: -1, used, remaining: -1 };
+    }
+
+    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
+    const limit = freePlan?.features?.[action.limitKey] ?? 0;
+    return { isPremium, limit, used, remaining: limit === -1 ? -1 : Math.max(0, limit - used) };
   }
 
   /**
@@ -1013,6 +1052,24 @@ class SubscriptionService {
     }
 
     return { allowed: true, limit: freeLimit, currentUsed: currentChildCount };
+  }
+
+  /**
+   * Give back the unit consumed by an action that did not complete (current period, never below 0)
+   * @param {string|mongoose.Types.ObjectId} parentId
+   * @param {string} actionType - A QUOTA_ACTIONS key or its QUOTA_FEATURES name
+   */
+  async refundQuota(parentId, actionType) {
+    const action = QUOTA_ACTIONS[QUOTA_ACTION_ALIASES[actionType] || actionType];
+    if (!action) {
+      throw new AppError(`Unknown quota action: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
+    }
+    await usageQuotaRepository.decrementCounter(
+      parentId,
+      action.periodType,
+      getVietnamPeriodValue(action.periodType),
+      action.counterField
+    );
   }
 
   /**

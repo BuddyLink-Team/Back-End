@@ -5,9 +5,10 @@ export class ChildPublicProfileDTO {
    * Shape a child document (with populated parentId) into a safe public-facing response.
    * Visibility (hidden / blocked parents) is enforced by ChildService before shaping.
    * @param {Object} child - Mongoose lean document with parentId populated
+   * @param {string} [connectionStatus='none'] - VIEWER_CONNECTION_STATUS between the viewer and this parent
    * @returns {Object}
    */
-  static toResponse(child) {
+  static toResponse(child, connectionStatus = 'none') {
     const parent = child.parentId || {};
 
     const ageYears = calculateAgeYears(child.dateOfBirth);
@@ -20,6 +21,7 @@ export class ChildPublicProfileDTO {
       interests: child.interests || [],
       favoriteActivities: child.favoriteActivities || [],
       personality: child.personality || [],
+      connectionStatus,
       parent: {
         fullName: parent.fullName || null,
         avatarUrl: parent.avatarUrl || null,

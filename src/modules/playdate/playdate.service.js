@@ -187,6 +187,58 @@ class PlaydateService {
     }
   }
 
+  /**
+   * Invitees of the host, one per family: connected friends only, their own child, no block relationship
+   * @param {ObjectId} hostParentId
+   * @param {Array<{ parentId: string, childId: string }>} [rawParticipants]
+   * @returns {Promise<Array<{ parentId: string, childId: string }>>}
+   * @private
+   */
+  async _validateInvitees(hostParentId, rawParticipants) {
+    const participants = Array.isArray(rawParticipants) ? rawParticipants : [];
+    if (participants.some((p) => toId(p.parentId) === hostParentId.toString())) {
+      throw new AppError('Host cannot invite themselves to a playdate', 400, 'CANNOT_INVITE_SELF');
+    }
+
+    const seenParents = new Set();
+    const uniqueParticipants = participants.filter((p) => {
+      const pid = toId(p.parentId);
+      if (seenParents.has(pid)) return false;
+      seenParents.add(pid);
+      return true;
+    });
+
+    // Safety first: no invitation between parents who blocked each other
+    if (await safetyService.isBlockedWithAny(hostParentId, uniqueParticipants.map((p) => toId(p.parentId)))) {
+      throw new AppError('Cannot invite a parent you have a block relationship with', 403, 'BLOCKED_INTERACTION');
+    }
+
+    for (const p of uniqueParticipants) {
+      const targetParentId = toId(p.parentId);
+      const isFriend = await connectionService.areParentsConnected(hostParentId, targetParentId);
+      if (!isFriend) {
+        throw new AppError('Only connected friends can be invited to a playdate', 400, 'NOT_CONNECTED_FRIEND');
+      }
+      const isParticipantChildValid = await childService.isChildOwnedByParent(toId(p.childId), targetParentId);
+      if (!isParticipantChildValid) {
+        throw new AppError('Invited child does not belong to the selected parent', 400, 'INVALID_PARTICIPANT_CHILD');
+      }
+    }
+    return uniqueParticipants;
+  }
+
+  /**
+   * Schedule conflicts of invited children, returned as warnings (they are checked again when their parent accepts)
+   * @private
+   */
+  async _inviteeWarnings(invitees, start, end, excludePlaydateId = null) {
+    const conflicts = await this._findConflicts(invitees.map((p) => toId(p.childId)), start, end, excludePlaydateId);
+    return [...new Set(conflicts.map((c) => c.childId))].map((childId) => ({
+      code: PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
+      childId,
+    }));
+  }
+
   // ---------------------------------------------------------------------------
   // Used by the chat module
   // ---------------------------------------------------------------------------
@@ -573,45 +625,12 @@ class PlaydateService {
     }
 
     // 3. Filter, deduplicate, and validate participants
-    const rawParticipants = Array.isArray(data.participants) ? data.participants : [];
-    if (rawParticipants.some((p) => toId(p.parentId) === hostParentId.toString())) {
-      throw new AppError('Host cannot invite themselves to a playdate', 400, 'CANNOT_INVITE_SELF');
-    }
-
-    const seenParents = new Set();
-    const uniqueParticipants = rawParticipants.filter((p) => {
-      const pid = toId(p.parentId);
-      if (seenParents.has(pid)) return false;
-      seenParents.add(pid);
-      return true;
-    });
-    const participantParentIds = uniqueParticipants.map((p) => toId(p.parentId));
-
-    // Safety first: no invitation between parents who blocked each other
-    if (await safetyService.isBlockedWithAny(hostParentId, participantParentIds)) {
-      throw new AppError('Cannot invite a parent you have a block relationship with', 403, 'BLOCKED_INTERACTION');
-    }
-
-    for (const p of uniqueParticipants) {
-      const targetParentId = toId(p.parentId);
-      const isFriend = await connectionService.areParentsConnected(hostParentId, targetParentId);
-      if (!isFriend) {
-        throw new AppError('Only connected friends can be invited to a playdate', 400, 'NOT_CONNECTED_FRIEND');
-      }
-      const isParticipantChildValid = await childService.isChildOwnedByParent(toId(p.childId), targetParentId);
-      if (!isParticipantChildValid) {
-        throw new AppError('Invited child does not belong to the selected parent', 400, 'INVALID_PARTICIPANT_CHILD');
-      }
-    }
+    const uniqueParticipants = await this._validateInvitees(hostParentId, data.participants);
 
     // 4. The host's child cannot be in two playdates at once; invited children only get a warning
     //    (they are checked again when their parent accepts). Nothing is created or sent before this.
     await this._assertNoConflict(data.hostChildId, start, end);
-    const invitedConflicts = await this._findConflicts(uniqueParticipants.map((p) => toId(p.childId)), start, end);
-    const warnings = [...new Set(invitedConflicts.map((c) => c.childId))].map((childId) => ({
-      code: PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
-      childId,
-    }));
+    const warnings = await this._inviteeWarnings(uniqueParticipants, start, end);
 
     // 5. Check the creation quota first, consume it only once the playdate exists
     await subscriptionService.checkAndConsumeQuota(hostParentId, 'playdateCreate', false);
@@ -656,6 +675,65 @@ class PlaydateService {
     }
 
     const populated = await playdateRepository.findById(playdate._id);
+    return { ...PlaydateResponseDTO.toResponse(populated, hostParentId), warnings };
+  }
+
+  /**
+   * Invite more friends' children to an upcoming playdate (Host only), e.g. once every invitee declined.
+   * Same checks as at creation. A family already invited (whatever its answer) cannot be invited again,
+   * and no quota is used: the playdate was counted when it was created.
+   * @param {string} userId
+   * @param {string} id
+   * @param {Array<{ parentId: string, childId: string }>} participants
+   * @returns {Promise<Object>} The playdate, with SCHEDULE_CONFLICT warnings for busy invitees
+   */
+  async inviteParticipants(userId, id, participants) {
+    const hostParentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (!this._isHost(playdate, hostParentId)) {
+      throw new AppError('Only the host can invite friends to the playdate', 403, 'FORBIDDEN_INVITE');
+    }
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Friends can only be invited to an upcoming playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+    const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+    if (start <= new Date()) {
+      throw new AppError('The playdate has already started', 400, 'PLAYDATE_IN_PAST');
+    }
+
+    const invitees = await this._validateInvitees(hostParentId, participants);
+    if (!invitees.length) {
+      throw new AppError('Pick at least one friend to invite', 400, 'NO_INVITEES');
+    }
+    const invitedParentIds = new Set((playdate.participants || []).map((p) => toId(p.parentId)));
+    if (invitees.some((p) => invitedParentIds.has(toId(p.parentId)))) {
+      throw new AppError('This family is already invited to the playdate', 400, 'ALREADY_INVITED');
+    }
+
+    const warnings = await this._inviteeWarnings(invitees, start, endOf(start, durationOf(playdate)), id);
+
+    // Atomic: fails if the playdate was closed or the same family invited in the meantime
+    const updated = await playdateRepository.addParticipants(
+      id,
+      invitees.map((p) => ({
+        parentId: toId(p.parentId),
+        childId: toId(p.childId),
+        status: PARTICIPANT_STATUS.PENDING,
+        invitedAt: new Date(),
+      }))
+    );
+    if (!updated) {
+      throw new AppError('The playdate changed in the meantime, please reload it', 409, 'PLAYDATE_CHANGED');
+    }
+
+    await emitPlaydateEvent(PLAYDATE_EVENTS.INVITED, {
+      playdateId: id.toString(),
+      hostParentId: hostParentId.toString(),
+      participantParentIds: invitees.map((p) => toId(p.parentId)),
+    });
+
+    const populated = await playdateRepository.findById(id);
     return { ...PlaydateResponseDTO.toResponse(populated, hostParentId), warnings };
   }
 

@@ -94,10 +94,17 @@ class PlaydateRepository {
       } else if (normalizedStatus === 'upcoming') {
         andConditions.push({ status: PLAYDATE_STATUS.UPCOMING });
       } else if (normalizedStatus === 'confirmed') {
+        // Same rule as the displayStatus: the host's playdate once someone accepted and nobody is pending
         andConditions.push({
           status: PLAYDATE_STATUS.UPCOMING,
           $or: [
-            { hostParentId: parentId },
+            {
+              hostParentId: parentId,
+              $and: [
+                { 'participants.status': PARTICIPANT_STATUS.ACCEPTED },
+                { 'participants.status': { $ne: PARTICIPANT_STATUS.PENDING } },
+              ],
+            },
             { participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.ACCEPTED } } },
           ],
         });
@@ -274,18 +281,61 @@ class PlaydateRepository {
               ],
             },
           },
+          // Same rule as the displayStatus 'confirmed'
+          confirmed: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$status', PLAYDATE_STATUS.UPCOMING] },
+                    {
+                      $or: [
+                        {
+                          $and: [
+                            { $eq: ['$hostParentId', parentObjId] },
+                            { $in: [PARTICIPANT_STATUS.ACCEPTED, { $ifNull: ['$participants.status', []] }] },
+                            { $not: [{ $in: [PARTICIPANT_STATUS.PENDING, { $ifNull: ['$participants.status', []] }] }] },
+                          ],
+                        },
+                        {
+                          $gt: [
+                            {
+                              $size: {
+                                $filter: {
+                                  input: { $ifNull: ['$participants', []] },
+                                  as: 'p',
+                                  cond: {
+                                    $and: [
+                                      { $eq: ['$$p.parentId', parentObjId] },
+                                      { $eq: ['$$p.status', PARTICIPANT_STATUS.ACCEPTED] },
+                                    ],
+                                  },
+                                },
+                              },
+                            },
+                            0,
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
         },
       },
     ]);
 
-    const stats = results[0] || { all: 0, completed: 0, cancelled: 0, pending: 0 };
+    const stats = results[0] || { all: 0, completed: 0, cancelled: 0, pending: 0, confirmed: 0 };
     const upcomingCount = stats.all - stats.completed - stats.cancelled;
-    const confirmedCount = Math.max(0, upcomingCount - stats.pending);
 
     return {
       all: stats.all,
       upcoming: upcomingCount,
-      confirmed: confirmedCount,
+      confirmed: stats.confirmed,
       pending: stats.pending,
       completed: stats.completed,
       cancelled: stats.cancelled,
@@ -311,6 +361,24 @@ class PlaydateRepository {
     return Playdate.findOneAndUpdate(
       { _id: id, participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.PENDING } } },
       { $set: { 'participants.$.status': status, 'participants.$.respondedAt': new Date() } },
+      { new: true },
+    ).lean();
+  }
+
+  /**
+   * Atomically add invitees to an upcoming playdate where none of their families is invited yet
+   * @param {string|ObjectId} id
+   * @param {Array<{ parentId: string, childId: string, status: string, invitedAt: Date }>} participants
+   * @returns {Promise<Object|null>} null when the playdate is not upcoming anymore or a family is already in it
+   */
+  async addParticipants(id, participants) {
+    return Playdate.findOneAndUpdate(
+      {
+        _id: id,
+        status: PLAYDATE_STATUS.UPCOMING,
+        'participants.parentId': { $nin: participants.map((p) => p.parentId) },
+      },
+      { $push: { participants: { $each: participants } } },
       { new: true },
     ).lean();
   }

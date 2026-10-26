@@ -9,16 +9,31 @@ import { PLACE_TYPES } from '../../modules/places/places.constants.js';
  * OpenStreetMap tags of each place type (Overpass QL filters), in classification order.
  * A kids cafe has no dedicated OSM tag: indoor play areas plus cafes named for children.
  */
+const KIDS_NAME = 'kid|trẻ em|thiếu nhi|baby|tini|tiny|play';
 const TYPE_FILTERS = Object.freeze({
-  [PLACE_TYPES.PARK]: ['["leisure"="park"]'],
-  [PLACE_TYPES.PLAYGROUND]: ['["leisure"="playground"]', '["tourism"="theme_park"]'],
-  [PLACE_TYPES.KIDS_CAFE]: ['["leisure"="indoor_play"]', '["amenity"="cafe"]["name"~"kid|trẻ em|thiếu nhi",i]'],
+  [PLACE_TYPES.PARK]: ['["leisure"="park"]', '["leisure"="garden"]["access"!="private"]'],
+  [PLACE_TYPES.PLAYGROUND]: [
+    '["leisure"="playground"]',
+    '["tourism"="theme_park"]',
+    '["leisure"="water_park"]',
+    '["tourism"="zoo"]',
+    '["tourism"="aquarium"]',
+  ],
+  [PLACE_TYPES.KIDS_CAFE]: [
+    '["leisure"="indoor_play"]',
+    `["amenity"="cafe"]["name"~"${KIDS_NAME}",i]`,
+    `["leisure"="amusement_arcade"]["name"~"${KIDS_NAME}",i]`,
+  ],
   [PLACE_TYPES.LIBRARY]: ['["amenity"="library"]'],
-  [PLACE_TYPES.SPORTS_CENTER]: ['["leisure"="sports_centre"]', '["leisure"="swimming_pool"]["access"!="private"]'],
-  [PLACE_TYPES.WORKSHOP]: ['["amenity"="arts_centre"]', '["tourism"="museum"]'],
+  [PLACE_TYPES.SPORTS_CENTER]: [
+    '["leisure"="sports_centre"]',
+    '["leisure"="swimming_pool"]["access"!="private"]',
+    '["leisure"="ice_rink"]',
+  ],
+  [PLACE_TYPES.WORKSHOP]: ['["amenity"="arts_centre"]', '["tourism"="museum"]', '["amenity"="planetarium"]'],
 });
 
-const KIDS_NAME_REGEX = /kid|trẻ em|thiếu nhi/i;
+const KIDS_NAME_REGEX = new RegExp(KIDS_NAME, 'i');
 // Public instances answer 429 / 504 when busy: worth retrying after a pause
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 
@@ -28,14 +43,17 @@ const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
  * @returns {string|null}
  */
 export const classifyPlaceType = (tags = {}) => {
-  if (tags.leisure === 'park') return PLACE_TYPES.PARK;
-  if (tags.leisure === 'playground' || tags.tourism === 'theme_park') return PLACE_TYPES.PLAYGROUND;
-  if (tags.leisure === 'indoor_play' || (tags.amenity === 'cafe' && KIDS_NAME_REGEX.test(tags.name || ''))) {
+  if (tags.leisure === 'park' || tags.leisure === 'garden') return PLACE_TYPES.PARK;
+  if (['playground', 'water_park'].includes(tags.leisure) || ['theme_park', 'zoo', 'aquarium'].includes(tags.tourism)) {
+    return PLACE_TYPES.PLAYGROUND;
+  }
+  const kidsName = KIDS_NAME_REGEX.test(tags.name || '');
+  if (tags.leisure === 'indoor_play' || (kidsName && (tags.amenity === 'cafe' || tags.leisure === 'amusement_arcade'))) {
     return PLACE_TYPES.KIDS_CAFE;
   }
   if (tags.amenity === 'library') return PLACE_TYPES.LIBRARY;
-  if (tags.leisure === 'sports_centre' || tags.leisure === 'swimming_pool') return PLACE_TYPES.SPORTS_CENTER;
-  if (tags.amenity === 'arts_centre' || tags.tourism === 'museum') return PLACE_TYPES.WORKSHOP;
+  if (['sports_centre', 'swimming_pool', 'ice_rink'].includes(tags.leisure)) return PLACE_TYPES.SPORTS_CENTER;
+  if (['arts_centre', 'planetarium'].includes(tags.amenity) || tags.tourism === 'museum') return PLACE_TYPES.WORKSHOP;
   return null;
 };
 
@@ -74,6 +92,20 @@ export const buildAreaQuery = ({ bbox, type, timeoutSec = 25 }) => {
   return `[out:json][timeout:${timeoutSec}][bbox:${box}];\n(\n${selectors}\n);\nout center tags;`;
 };
 
+// Vietnamese and English names are written in the Latin script (digits, punctuation and symbols allowed)
+const LATIN_NAME_REGEX = /^[\p{Script=Latin}\p{N}\p{P}\p{S}\s]+$/u;
+
+/**
+ * Name shown to Vietnamese parents: the Vietnamese name, else the name / English name when written in
+ * Latin letters. '' for a place only named in another script (e.g. "Боксёрский клуб"), which is skipped.
+ * @param {Object} tags
+ * @returns {string}
+ */
+export const pickPlaceName = (tags = {}) =>
+  [tags['name:vi'], tags.name, tags['name:en']]
+    .map((name) => (name || '').trim())
+    .find((name) => name && LATIN_NAME_REGEX.test(name)) || '';
+
 /**
  * Map an Overpass element to a places_cache document (null when unusable)
  * @param {Object} element
@@ -81,7 +113,7 @@ export const buildAreaQuery = ({ bbox, type, timeoutSec = 25 }) => {
  */
 export const mapElementToPlace = (element) => {
   const tags = element?.tags || {};
-  const name = (tags['name:vi'] || tags.name || '').trim();
+  const name = pickPlaceName(tags);
   const lat = element?.lat ?? element?.center?.lat;
   const lng = element?.lon ?? element?.center?.lon;
   const placeType = classifyPlaceType(tags);

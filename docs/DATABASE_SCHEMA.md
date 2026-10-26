@@ -363,9 +363,15 @@ erDiagram
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
         string title "Tiêu đề cuộc trò chuyện"
-        array messages "Array of { role, content, toolCalls, toolCallId, timestamp }"
+        array messages "Array of { role, content, toolCalls, toolCallId, toolName, cards, toolsUsed, choice, timestamp }"
+        object planDraft "Bản nháp playdate đang lên kế hoạch, null khi không có"
+        number messageCount "Số tin của phụ huynh trong phiên"
+        date quotaConsumedAt "Lúc phiên dùng lượt AI của tháng"
+        date pendingSince "Khóa khi đang sinh câu trả lời"
+        date lastMessageAt
         object tokenUsage "promptTokens, completionTokens, totalTokens"
         boolean isActive
+        date deletedAt
         date createdAt
         date updatedAt
     }
@@ -951,14 +957,15 @@ _Indexes:_
 
 ### 3.12 `ai_chat_sessions` Collection (AI Assistant Agent)
 
-_Ánh xạ: Mục 8._
+_Ánh xạ: Mục 8. API: `/api/v1/ai-assistant` (BUD-25)._
 
 ```typescript
 interface IAIChatSession {
   _id: ObjectId;
   parentId: ObjectId; // Tham chiếu parents._id
-  title: string;
+  title: string; // Sinh từ tin nhắn đầu tiên (tối đa 60 ký tự)
   messages: Array<{
+    _id: ObjectId;
     role: "user" | "assistant" | "system" | "tool";
     content: string;
     toolCalls?: Array<{
@@ -966,22 +973,35 @@ interface IAIChatSession {
       type: "function";
       function: {
         name: string;
-        arguments: string;
+        arguments: string; // JSON
       };
     }>;
     toolCallId?: string;
+    toolName?: string; // role 'tool': tên function đã chạy
+    cards?: Array<object>; // role 'assistant': Tool UI Cards (choices, place_suggestions, match_suggestions, playdate_draft, quota_notice)
+    toolsUsed?: string[]; // role 'assistant'
+    choice?: { messageId: ObjectId; stepId: string; optionIds: string[] }; // role 'user': gửi bằng cách bấm lựa chọn
     timestamp: Date;
   }>;
+  planDraft: object | null; // Bản nháp playdate đang lên kế hoạch từng bước (plan-draft.rules.js), chưa tạo playdate
+  messageCount: number; // Số tin của phụ huynh, giới hạn 30 (Free) / 100 (Premium) mỗi phiên
+  quotaConsumedAt: Date | null; // Phiên đã dùng 1 lượt AI của tháng (lấy khi gửi tin đầu tiên, hoàn lại nếu lượt đó thất bại)
+  pendingSince: Date | null; // Khóa khi đang sinh câu trả lời (mỗi phiên xử lý 1 tin một lúc, khóa quá 2 phút coi như hết hạn)
+  lastMessageAt: Date;
   tokenUsage?: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
   };
-  isActive: boolean;
+  isActive: boolean; // false = đã xóa (soft delete)
+  deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 ```
+
+- Index: `{ parentId: 1, isActive: 1, updatedAt: -1 }` (danh sách phiên mới nhất).
+- Hạn mức `usage_quotas.counters.aiAssistantRequests` đếm **số phiên** trong tháng (Free 5, Premium không giới hạn), không đếm từng tin nhắn.
 
 ---
 
