@@ -2,7 +2,9 @@ import safetyRepository from "./safety.repository.js";
 import parentService from "../parent/parent.service.js";
 import AppError from "../../shared/exceptions/AppError.js";
 import storageAdapter from "../../integrations/storage/storage.adapter.js";
-import { REPORT_TARGET_TYPES, REPORT_LIMITS } from "./safety.constants.js";
+import SafetyDTO from "./safety.dto.js";
+import { emitSafetyEvent, SAFETY_EVENTS } from "./safety.events.js";
+import { REPORT_TARGET_TYPES, REPORT_LIMITS, REPORT_CATEGORIES, DEFAULT_BLOCK_REASON } from "./safety.constants.js";
 class SafetyService {
   /**
    * Get all parentIds that the given parent has blocked or been blocked by.
@@ -55,11 +57,19 @@ class SafetyService {
       );
     }
 
-    return safetyRepository.upsertBlock(
+    const block = await safetyRepository.upsertBlock(
       currentParent._id,
       targetParent._id,
-      reason || "Blocked by user",
+      reason || DEFAULT_BLOCK_REASON,
     );
+
+    // Other modules react to the block (connection ends any active connection between the two)
+    await emitSafetyEvent(SAFETY_EVENTS.USER_BLOCKED, {
+      blockerId: currentParent._id.toString(),
+      blockedId: targetParent._id.toString(),
+    });
+
+    return block;
   }
 
   /**
@@ -98,6 +108,16 @@ class SafetyService {
   }
 
   /**
+   * Find all active blocks involving a parent (either as blocker or blocked)
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Array>}
+   */
+  async findBlocksInvolving(parentId) {
+    if (!parentId) return [];
+    return safetyRepository.findBlocksInvolving(parentId);
+  }
+
+  /**
    * Get all active blocks involving a parent
    */
   async getBlockedUserIds(parentId) {
@@ -126,6 +146,7 @@ class SafetyService {
       targetType = REPORT_TARGET_TYPES.USER,
       targetMessageId,
       targetPlaydateId,
+      category,
       reason,
       description,
       evidenceUrls,
@@ -139,8 +160,12 @@ class SafetyService {
       );
     }
 
-    if (!reason || !reason.trim()) {
-      throw new AppError("Report reason is required", 400, "REASON_REQUIRED");
+    if (!category || !Object.values(REPORT_CATEGORIES).includes(category)) {
+      throw new AppError(
+        "Violation category is required",
+        400,
+        "CATEGORY_REQUIRED",
+      );
     }
 
     const reportedParent = await parentService.getParentById(reportedUserId);
@@ -190,12 +215,59 @@ class SafetyService {
       targetType,
       targetMessageId: targetMessageId || null,
       targetPlaydateId: targetPlaydateId || null,
-      reason: reason.trim(),
+      category,
+      reason: (reason && reason.trim()) || category,
       description: description || "",
       evidenceUrls: evidence,
     });
 
     return report;
+  }
+
+  /**
+   * Get paginated list of parents blocked by the current parent
+   * @param {string|ObjectId} userIdOrParentId
+   * @param {{ page?: number|string, limit?: number|string, search?: string }} [options]
+   * @returns {Promise<{ items: Array<Object>, pagination: Object }>}
+   */
+  async getBlockedUsers(userIdOrParentId, { page = 1, limit = 10, search = "" } = {}) {
+    const currentParent = await this._resolveParent(userIdOrParentId);
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
+    const keyword = typeof search === "string" ? search.trim() : "";
+    const blockedIds = keyword ? await parentService.findParentIdsByName(keyword) : undefined;
+
+    const { items, total } = await safetyRepository.findBlockedUsersByBlocker(currentParent._id, {
+      page: pageNum,
+      limit: limitNum,
+      blockedIds,
+    });
+
+    return {
+      items: items.map((block) => SafetyDTO.toBlockedUserResponse(block)),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    };
+  }
+
+  /**
+   * Upload an evidence image for a report to Cloud Storage
+   * @param {{ buffer: Buffer, mimetype: string }} file - Multer file
+   * @returns {Promise<{ url: string, publicId: string }>}
+   */
+  async uploadEvidence(file) {
+    if (!file) {
+      throw new AppError("No image file uploaded", 400, "FILE_REQUIRED");
+    }
+    const result = await storageAdapter.uploadImage(file.buffer, {
+      folder: "buddylink/reports",
+      mimetype: file.mimetype,
+    });
+    return { url: result.url, publicId: result.publicId };
   }
 }
 

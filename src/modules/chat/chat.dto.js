@@ -71,6 +71,19 @@ export class ChatDTO {
     // Identify the other participant in direct conversations
     const partner = participants.find((p) => p.id !== currentParentIdStr) || participants[0] || null;
 
+    const playdate = this.formatPlaydate(conversation.playdateId);
+
+    // Block state computed by the chat service; members may only appear in the playdate
+    const blockState = conversation._blockState || { blockedByMeIds: [], isBlockedByPartner: false };
+    const membersById = new Map(participants.filter(Boolean).map((p) => [p.id, p]));
+    if (playdate?.host) membersById.set(playdate.host.id, playdate.host);
+    (playdate?.participants || []).forEach(({ parent }) => {
+      if (parent && !membersById.has(parent.id)) membersById.set(parent.id, parent);
+    });
+    const blockedByMeParticipants = blockState.blockedByMeIds.map((id) => membersById.get(id) || { id });
+    const isBlockedByMe = blockedByMeParticipants.length > 0;
+    const isBlockedByPartner = Boolean(blockState.isBlockedByPartner);
+
     // Get unread count for current parent
     let unreadCount = 0;
     if (conversation.unreadCounts) {
@@ -86,7 +99,11 @@ export class ChatDTO {
       type: conversation.type,
       participants,
       partner,
-      playdate: this.formatPlaydate(conversation.playdateId),
+      blockedByMeParticipants,
+      isBlockedByMe,
+      isBlockedByPartner,
+      isBlocked: isBlockedByMe || isBlockedByPartner,
+      playdate,
       lastMessage: conversation.lastMessage
         ? {
             messageId: conversation.lastMessage.messageId?.toString() || null,

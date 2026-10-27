@@ -502,7 +502,8 @@ erDiagram
         string targetType "user | message | playdate"
         ObjectId targetMessageId FK "Ref: messages._id (nếu báo cáo tin nhắn)"
         ObjectId targetPlaydateId FK "Ref: playdates._id (nếu báo cáo playdate)"
-        string reason "Lý do vi phạm"
+        string category "harassment | inappropriate_content | spam | fake_profile | child_safety | no_show | other"
+        string reason "Nhãn lý do (tùy chọn, mặc định = category)"
         string description "Mô tả chi tiết"
         string[] evidenceUrls "Ảnh chụp bằng chứng"
         string status "pending | reviewing | resolved | dismissed"
@@ -1070,7 +1071,8 @@ interface IReport {
   targetType: "user" | "message" | "playdate";
   targetMessageId?: ObjectId; // Tham chiếu messages._id (nếu báo cáo tin nhắn)
   targetPlaydateId?: ObjectId; // Tham chiếu playdates._id (nếu báo cáo playdate)
-  reason: string; // Lý do vi phạm
+  category: "harassment" | "inappropriate_content" | "spam" | "fake_profile" | "child_safety" | "no_show" | "other"; // Danh mục vi phạm (bắt buộc; report cũ chưa có được đọc là "other")
+  reason?: string; // Nhãn lý do hiển thị (tùy chọn, mặc định bằng category)
   description?: string; // Chi tiết phản ánh
   evidenceUrls?: string[]; // Ảnh chụp màn hình / bằng chứng
   status: "pending" | "reviewing" | "resolved" | "dismissed"; // Default: 'pending'
@@ -1086,6 +1088,7 @@ _Indexes:_
 
 - `{ status: 1, createdAt: -1 }` (Admin lọc danh sách report theo trạng thái)
 - `{ reportedUserId: 1 }` (Thống kê số lần bị report của một user)
+- `{ category: 1 }` (Admin lọc report theo danh mục vi phạm)
 
 #### D. `places_cache` Collection (Mục 7.2)
 
