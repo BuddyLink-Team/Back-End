@@ -2,6 +2,15 @@ import logger from '../../shared/logger/index.js';
 import connectionService from './connection.service.js';
 import { CHILD_PAIR_SOURCES } from './connection.constants.js';
 import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
+import { onSafetyEvent, SAFETY_EVENTS } from '../safety/safety.events.js';
+
+/**
+ * Blocking a parent ends any pending or accepted connection between the two parents.
+ * @param {{ blockerId: string, blockedId: string }} payload
+ */
+const removeConnectionOnBlock = async ({ blockerId, blockedId }) => {
+  await connectionService.removeActiveConnectionBetween(blockerId, blockedId);
+};
 
 /**
  * Children who played together in a completed playdate become a pair on their parents' connection.
@@ -34,6 +43,7 @@ export const registerConnectionListeners = () => {
   isRegistered = true;
 
   onPlaydateEvent(PLAYDATE_EVENTS.COMPLETED, addPlaydatePairs);
+  onSafetyEvent(SAFETY_EVENTS.USER_BLOCKED, removeConnectionOnBlock);
 };
 
 export default registerConnectionListeners;

@@ -366,19 +366,74 @@ class PlaydateRepository {
   }
 
   /**
-   * Atomically add invitees to an upcoming playdate where none of their families is invited yet
+   * Atomically invite families to an upcoming playdate: new families are appended, families who
+   * declined or left get their entry back to pending (same place in the list)
    * @param {string|ObjectId} id
    * @param {Array<{ parentId: string, childId: string, status: string, invitedAt: Date }>} participants
-   * @returns {Promise<Object|null>} null when the playdate is not upcoming anymore or a family is already in it
+   * @param {Array<string>} [reinvitedParentIds] - families already in the playdate with a declined status
+   * @returns {Promise<Object|null>} null when the playdate is not upcoming anymore, a new family got in
+   *   or a re-invited family is not declined anymore in the meantime
    */
-  async addParticipants(id, participants) {
+  async addParticipants(id, participants, reinvitedParentIds = []) {
+    const toObjectId = (value) => new mongoose.Types.ObjectId(String(value));
+    const reinvited = new Set(reinvitedParentIds.map(String));
+    // Update pipelines are not cast by Mongoose
+    const entries = participants.map((p) => ({
+      parentId: toObjectId(p.parentId),
+      childId: toObjectId(p.childId),
+      status: p.status,
+      invitedAt: p.invitedAt,
+      respondedAt: null,
+    }));
+    const fresh = entries.filter((e) => !reinvited.has(e.parentId.toString()));
+    const renewed = entries.filter((e) => reinvited.has(e.parentId.toString()));
+
+    const kept = renewed.length
+      ? {
+          $map: {
+            input: '$participants',
+            as: 'p',
+            in: {
+              $switch: {
+                branches: renewed.map((e) => ({ case: { $eq: ['$$p.parentId', e.parentId] }, then: { $literal: e } })),
+                default: '$$p',
+              },
+            },
+          },
+        }
+      : '$participants';
+
     return Playdate.findOneAndUpdate(
       {
         _id: id,
         status: PLAYDATE_STATUS.UPCOMING,
-        'participants.parentId': { $nin: participants.map((p) => p.parentId) },
+        'participants.parentId': { $nin: fresh.map((e) => e.parentId) },
+        ...(renewed.length && {
+          $and: renewed.map((e) => ({
+            participants: { $elemMatch: { parentId: e.parentId, status: PARTICIPANT_STATUS.DECLINED } },
+          })),
+        }),
       },
-      { $push: { participants: { $each: participants } } },
+      [{ $set: { participants: { $concatArrays: [kept, { $literal: fresh }] } } }],
+      { new: true },
+    ).lean();
+  }
+
+  /**
+   * Mark a participant who has not declined yet as declined, only while the playdate is upcoming
+   * (atomic: a concurrent cancel/complete or a double click cannot leave twice)
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Object|null>} null when the playdate is no longer upcoming or the parent already left
+   */
+  async markParticipantLeft(id, parentId) {
+    return Playdate.findOneAndUpdate(
+      {
+        _id: id,
+        status: PLAYDATE_STATUS.UPCOMING,
+        participants: { $elemMatch: { parentId, status: { $ne: PARTICIPANT_STATUS.DECLINED } } },
+      },
+      { $set: { 'participants.$.status': PARTICIPANT_STATUS.DECLINED, 'participants.$.respondedAt': new Date() } },
       { new: true },
     ).lean();
   }

@@ -112,6 +112,7 @@ describe('Inviting more friends to a playdate (POST /playdates/:id/participants)
     expect(notFriend.status).toBe(400);
     expect(notFriend.body.error.code).toBe('NOT_CONNECTED_FRIEND');
 
+    // Still pending: cannot be invited twice
     const again = await as(host).invite(id, [declined]);
     expect(again.status).toBe(400);
     expect(again.body.error.code).toBe('ALREADY_INVITED');
@@ -124,6 +125,34 @@ describe('Inviting more friends to a playdate (POST /playdates/:id/participants)
     expect(cancelled.status).toBe(400);
     expect(cancelled.body.error.code).toBe('INVALID_PLAYDATE_STATUS');
     expect((await Playdate.findById(id).lean()).participants).toHaveLength(1);
+  });
+
+  it('invites again a family who declined or left, back to pending in place, but never one still in', async () => {
+    // Own host: the shared one is kept within its monthly creation quota
+    const reHost = await registerParent('rehost');
+    const leaver = await registerParent('leaver');
+    await Promise.all([connect(reHost, declined), connect(reHost, leaver), connect(reHost, newcomer)]);
+    const created = await as(reHost).create([declined, leaver], { scheduledDate: isoDay(14) });
+    const id = created.body.data.id;
+    await as(declined).respond(id, 'declined');
+    await as(leaver).respond(id, 'accepted');
+    const left = await request(app).post(`/api/v1/playdates/${id}/leave`).set('Authorization', `Bearer ${leaver.token}`);
+    expect(left.status).toBe(200);
+
+    const reinvited = await as(reHost).invite(id, [declined, leaver, newcomer]);
+    expect(reinvited.status).toBe(200);
+    expect(reinvited.body.data.participants.map((p) => [p.parentId, p.status])).toEqual([
+      [declined.parentId, 'pending'],
+      [leaver.parentId, 'pending'],
+      [newcomer.parentId, 'pending'],
+    ]);
+    const stored = await Playdate.findById(id).lean();
+    expect(stored.participants.every((p) => p.respondedAt === null)).toBe(true);
+
+    // Pending again: a second invitation is refused, and they can answer once more
+    const twice = await as(reHost).invite(id, [leaver]);
+    expect(twice.body.error.code).toBe('ALREADY_INVITED');
+    expect((await as(leaver).respond(id, 'accepted')).status).toBe(200);
   });
 
   it('shows every invitee to the host only; guests see who joined, themselves and how many are still invited', async () => {

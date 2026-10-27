@@ -52,6 +52,9 @@ router.post('/:id/participants', validate(inviteParticipantsValidation), playdat
 router.put('/:id/respond', validate(respondPlaydateValidation), playdateController.respondToPlaydate);
 router.patch('/:id/respond', validate(respondPlaydateValidation), playdateController.respondToPlaydate);
 
+// POST /api/v1/playdates/:id/leave (Participant leaves)
+router.post('/:id/leave', validate(playdateIdParamValidation), playdateController.leavePlaydate);
+
 // POST /api/v1/playdates/:id/reschedule (Propose reschedule)
 router.post('/:id/reschedule', validate(createRescheduleValidation), playdateController.createRescheduleRequest);
 

@@ -174,17 +174,34 @@ describe('Chat Module Integration Tests (TASK-BE-10)', () => {
 
     // Parent B unblocks Parent A
     const unblockRes = await request(app)
-      .delete(`/api/v1/safety/block/${parentIdA}`)
+      .delete(`/api/v1/safety/unblock/${parentIdA}`)
       .set('Authorization', `Bearer ${parentTokenB}`);
 
     expect(unblockRes.status).toBe(200);
     expect(unblockRes.body.success).toBe(true);
 
-    // Message sending works again
-    const reSendRes = await request(app)
+    // Unblocking does not restore the connection: sending a message directly is rejected
+    const blockedMsgRes = await request(app)
       .post(`/api/v1/chat/conversations/${conversationId}/messages`)
       .set('Authorization', `Bearer ${parentTokenA}`)
       .send({ content: 'Da mo chan, minh tro chuyen tiep nhe!' });
+    expect(blockedMsgRes.status).toBe(403);
+    expect(blockedMsgRes.body.error.code).toBe('CONNECTION_REQUIRED');
+
+    // Reconnecting restores connection and allows messaging
+    await Connection.create({
+      parents: [parentIdA, parentIdB],
+      pairKey: [parentIdA, parentIdB].sort().join('_'),
+      requesterId: parentIdA,
+      recipientId: parentIdB,
+      status: CONNECTION_STATUS.ACCEPTED,
+      connectedAt: new Date(),
+    });
+
+    const reSendRes = await request(app)
+      .post(`/api/v1/chat/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${parentTokenA}`)
+      .send({ content: 'Da ket noi lai, minh tro chuyen tiep nhe!' });
 
     expect(reSendRes.status).toBe(201);
     expect(reSendRes.body.success).toBe(true);
@@ -318,28 +335,28 @@ describe('Chat Module Integration Tests (TASK-BE-10)', () => {
     expect(invalidBlockRes.body.error.code).toBe('VALIDATION_ERROR');
 
     const longReasonRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${parentTokenA}`)
-      .send({ reportedUserId: parentIdB, reason: 'x'.repeat(201) });
+      .send({ reportedUserId: parentIdB, category: 'spam', reason: 'x'.repeat(201) });
     expect(longReasonRes.status).toBe(400);
 
     const invalidTargetTypeRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${parentTokenA}`)
-      .send({ reportedUserId: parentIdB, targetType: 'anything', reason: 'Spam' });
+      .send({ reportedUserId: parentIdB, targetType: 'anything', category: 'spam', reason: 'Spam' });
     expect(invalidTargetTypeRes.status).toBe(400);
 
     const selfReportRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${parentTokenA}`)
-      .send({ reportedUserId: parentIdA, targetType: 'user', reason: 'Spam' });
+      .send({ reportedUserId: parentIdA, targetType: 'user', category: 'spam', reason: 'Spam' });
     expect(selfReportRes.status).toBe(400);
     expect(selfReportRes.body.error.code).toBe('SELF_REPORT_NOT_ALLOWED');
 
     const validReportRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${parentTokenA}`)
-      .send({ reportedUserId: parentIdB, targetType: 'user', reason: 'Spam', description: 'Gửi tin quảng cáo' });
+      .send({ reportedUserId: parentIdB, targetType: 'user', category: 'spam', reason: 'Spam', description: 'Gửi tin quảng cáo' });
     expect(validReportRes.status).toBe(201);
   });
 

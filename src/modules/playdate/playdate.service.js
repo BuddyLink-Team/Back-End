@@ -680,7 +680,7 @@ class PlaydateService {
 
   /**
    * Invite more friends' children to an upcoming playdate (Host only), e.g. once every invitee declined.
-   * Same checks as at creation. A family already invited (whatever its answer) cannot be invited again,
+   * Same checks as at creation. A family still invited or joined cannot be invited again, one who declined or left can,
    * and no quota is used: the playdate was counted when it was created.
    * @param {string} userId
    * @param {string} id
@@ -706,10 +706,13 @@ class PlaydateService {
     if (!invitees.length) {
       throw new AppError('Pick at least one friend to invite', 400, 'NO_INVITEES');
     }
-    const invitedParentIds = new Set((playdate.participants || []).map((p) => toId(p.parentId)));
-    if (invitees.some((p) => invitedParentIds.has(toId(p.parentId)))) {
+    // A family who declined or left can be invited again; one still pending or joined cannot
+    const statusByParent = new Map((playdate.participants || []).map((p) => [toId(p.parentId), p.status]));
+    const isStillIn = (p) => statusByParent.has(toId(p.parentId)) && statusByParent.get(toId(p.parentId)) !== PARTICIPANT_STATUS.DECLINED;
+    if (invitees.some(isStillIn)) {
       throw new AppError('This family is already invited to the playdate', 400, 'ALREADY_INVITED');
     }
+    const reinvitedParentIds = invitees.map((p) => toId(p.parentId)).filter((pid) => statusByParent.has(pid));
 
     const warnings = await this._inviteeWarnings(invitees, start, endOf(start, durationOf(playdate)), id);
 
@@ -721,7 +724,8 @@ class PlaydateService {
         childId: toId(p.childId),
         status: PARTICIPANT_STATUS.PENDING,
         invitedAt: new Date(),
-      }))
+      })),
+      reinvitedParentIds
     );
     if (!updated) {
       throw new AppError('The playdate changed in the meantime, please reload it', 409, 'PLAYDATE_CHANGED');
@@ -826,6 +830,58 @@ class PlaydateService {
 
     const populated = await playdateRepository.findById(id);
     return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
+  /**
+   * Leave an upcoming playdate (Participant only)
+   * @param {string} userId
+   * @param {string} id - Playdate ID
+   */
+  async leavePlaydate(userId, id) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Cannot leave a completed or cancelled playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    if (this._isHost(playdate, parentId)) {
+      throw new AppError('Host cannot leave their own playdate. Cancel the playdate instead.', 400, 'HOST_CANNOT_LEAVE');
+    }
+
+    const participant = (playdate.participants || []).find((p) => toId(p.parentId) === parentId.toString());
+    if (!participant) {
+      throw new AppError('You are not a participant of this playdate', 403, 'NOT_PARTICIPANT');
+    }
+    if (participant.status === PARTICIPANT_STATUS.DECLINED) {
+      throw new AppError('You have already left this playdate', 400, 'ALREADY_LEFT');
+    }
+
+    const left = await playdateRepository.markParticipantLeft(id, parentId);
+    if (!left) {
+      throw new AppError('You have already left this playdate or it is no longer upcoming', 409, 'LEAVE_CONFLICT');
+    }
+
+    await this._removeVoterFromPendingReschedule(id, parentId);
+    await this._notifyMembersChanged(id);
+
+    const populated = await playdateRepository.findById(id);
+    return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
+  /**
+   * A parent who left no longer votes on the pending reschedule (Section 6.2: only accepted
+   * participants vote). If every remaining voter already accepted, the new schedule applies now.
+   * @private
+   */
+  async _removeVoterFromPendingReschedule(playdateId, parentId) {
+    const pendingReq = await rescheduleRepository.removeVoterFromPending(playdateId, parentId);
+    if (!pendingReq || !pendingReq.responses.every((r) => r.status === PARTICIPANT_STATUS.ACCEPTED)) return;
+
+    await this._applySchedule(playdateId, pendingReq);
+    pendingReq.status = RESCHEDULE_STATUS.ACCEPTED;
+    pendingReq.resolvedAt = new Date();
+    await pendingReq.save();
   }
 
   // ---------------------------------------------------------------------------

@@ -1,0 +1,35 @@
+import { EventEmitter } from 'node:events';
+import logger from '../../shared/logger/index.js';
+
+/**
+ * Safety domain events. Other modules subscribe here instead of being imported by the safety
+ * service (keeps the dependency one-way, e.g. connection -> safety).
+ */
+export const SAFETY_EVENTS = Object.freeze({
+  // A parent blocked another parent
+  USER_BLOCKED: 'safety.user_blocked',
+});
+
+const emitter = new EventEmitter();
+
+/**
+ * Subscribe to a safety event.
+ * @param {string} event - One of SAFETY_EVENTS
+ * @param {(payload: Object) => Promise<void>|void} handler
+ */
+export const onSafetyEvent = (event, handler) => {
+  emitter.on(event, handler);
+};
+
+/**
+ * Emit a safety event and wait for every handler. A failing handler is logged and never
+ * breaks the safety action that emitted the event.
+ * @param {string} event
+ * @param {Object} payload
+ */
+export const emitSafetyEvent = async (event, payload) => {
+  const results = await Promise.allSettled(emitter.listeners(event).map((handler) => handler(payload)));
+  results
+    .filter((result) => result.status === 'rejected')
+    .forEach((result) => logger.error(`[SafetyEvents] ${event} handler failed: ${result.reason?.message}`));
+};
