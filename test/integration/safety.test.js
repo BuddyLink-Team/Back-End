@@ -3,7 +3,6 @@ import request from 'supertest';
 import app from '../../src/app.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import { CONNECTION_STATUS } from '../../src/modules/connection/connection.constants.js';
-import Block from '../../src/modules/safety/block.model.js';
 import Report from '../../src/modules/safety/report.model.js';
 import { REPORT_CATEGORIES } from '../../src/modules/safety/safety.constants.js';
 
@@ -97,6 +96,23 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
     });
   });
 
+  describe('Report model', () => {
+    it('reads a report created before categories existed as "other"', async () => {
+      const { _id } = await Report.create({
+        reporterId: userB.parentId,
+        reportedUserId: userC.parentId,
+        targetType: 'user',
+        category: REPORT_CATEGORIES.SPAM,
+      });
+      await Report.collection.updateOne({ _id }, { $unset: { category: '' } });
+
+      const legacy = await Report.findById(_id);
+      expect(legacy.category).toBe(REPORT_CATEGORIES.OTHER);
+      legacy.status = 'reviewing';
+      await expect(legacy.save()).resolves.toBeDefined();
+    });
+  });
+
   describe('Block, Get Blocked Users, and Unblock Flow', () => {
     it('POST /api/v1/safety/block: blocks target parent and removes active connection', async () => {
       // Create an active connection between userA and userC first
@@ -136,7 +152,7 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
 
       const blockedItem = res.body.data.items.find((i) => i.parentId === userC.parentId);
       expect(blockedItem).toBeDefined();
-      expect(blockedItem.displayName).toBeDefined();
+      expect(blockedItem.fullName).toBe('Parent safety-c');
       expect(blockedItem.reason).toBe('Inappropriate behavior');
       expect(blockedItem.blockedAt).toBeDefined();
 
@@ -146,6 +162,26 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
         .set(auth(userC.token));
       expect(resC.status).toBe(200);
       expect(resC.body.data.items.find((i) => i.parentId === userA.parentId)).toBeUndefined();
+    });
+
+    it('GET /api/v1/safety/blocked-users?search: filters by blocked parent name on the server', async () => {
+      const match = await request(app)
+        .get('/api/v1/safety/blocked-users?search=safety-c')
+        .set(auth(userA.token));
+      expect(match.status).toBe(200);
+      expect(match.body.data.items.map((i) => i.parentId)).toEqual([userC.parentId]);
+      expect(match.body.data.pagination.total).toBe(1);
+
+      const noMatch = await request(app)
+        .get('/api/v1/safety/blocked-users?search=nobody-here')
+        .set(auth(userA.token));
+      expect(noMatch.body.data.items).toHaveLength(0);
+      expect(noMatch.body.data.pagination.total).toBe(0);
+    });
+
+    it('DELETE /api/v1/safety/unblock/:id: rejects an invalid id', async () => {
+      const res = await request(app).delete('/api/v1/safety/unblock/not-an-id').set(auth(userA.token));
+      expect(res.status).toBe(400);
     });
 
     it('DELETE /api/v1/safety/unblock/:id: unblocks parent and removes from blocked-users list', async () => {

@@ -26,3 +26,6 @@ export const REPORT_LIMITS = Object.freeze({
   // A reporter can report the same parent at most once per window
   DUPLICATE_WINDOW_MS: 24 * 60 * 60 * 1000,
 });
+
+// Stored when the client sends no block reason (shown on the blocked users list)
+export const DEFAULT_BLOCK_REASON = 'Không muốn tiếp tục liên lạc';

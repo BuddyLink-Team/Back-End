@@ -88,7 +88,7 @@ class ChatService {
     ]);
     return conversations.map((conv) => ({
       ...conv,
-      _blocks: blocks,
+      _blockState: this._buildBlockState(conv, parent._id, blocks),
     }));
   }
 
@@ -112,7 +112,46 @@ class ChatService {
     }
 
     await this._assertConversationAccess(conversation, parent._id);
-    return { ...conversation, _blocks: blocks };
+    return { ...conversation, _blockState: this._buildBlockState(conversation, parent._id, blocks) };
+  }
+
+  /**
+   * Block state of a conversation as seen by the given parent.
+   * Group (playdate) chats only list the members the caller blocked: who blocked the caller is
+   * never revealed. A direct chat reports a block by the partner because sending is refused.
+   * @param {Object} conversation - Participants and playdateId populated or not
+   * @param {string|ObjectId} parentId
+   * @param {Array<{ blockerId: ObjectId, blockedId: ObjectId }>} blocks - Blocks involving the parent
+   * @returns {{ blockedByMeIds: string[], isBlockedByPartner: boolean }}
+   * @private
+   */
+  _buildBlockState(conversation, parentId, blocks) {
+    const me = parentId.toString();
+    const blockedByMe = new Set();
+    const blockedMe = new Set();
+    blocks.forEach((b) => {
+      const blockerId = b.blockerId.toString();
+      const blockedId = b.blockedId.toString();
+      if (blockerId === me) blockedByMe.add(blockedId);
+      else if (blockedId === me) blockedMe.add(blockerId);
+    });
+
+    const idOf = (ref) => (ref?._id || ref)?.toString();
+    const memberIds = new Set((conversation.participants || []).map(idOf));
+    const playdate = conversation.playdateId;
+    if (playdate && typeof playdate === 'object' && playdate.hostParentId) {
+      memberIds.add(idOf(playdate.hostParentId));
+      (playdate.participants || []).forEach((p) => memberIds.add(idOf(p.parentId)));
+    }
+    memberIds.delete(me);
+    memberIds.delete(undefined);
+
+    const others = [...memberIds];
+    return {
+      blockedByMeIds: others.filter((id) => blockedByMe.has(id)),
+      isBlockedByPartner:
+        conversation.type === CONVERSATION_TYPES.DIRECT && others.some((id) => blockedMe.has(id)),
+    };
   }
 
   /**
@@ -239,7 +278,8 @@ class ChatService {
       .filter((p) => p.toString() !== parent._id.toString())
       .map((p) => p.toString());
 
-    // Check if blocked in either direction (direct conversations only)
+    // Check if blocked in either direction (direct conversations only). In a playdate group chat
+    // a parent who blocked a member is asked on the client whether to stay or leave the playdate.
     if (conversation.type === CONVERSATION_TYPES.DIRECT) {
       const isBlocked = await safetyService.isBlockedWithAny(parent._id, recipientIds);
       if (isBlocked) {

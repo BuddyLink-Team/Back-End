@@ -771,12 +771,35 @@ class PlaydateService {
     if (!participant) {
       throw new AppError('You are not a participant of this playdate', 403, 'NOT_PARTICIPANT');
     }
+    if (participant.status === PARTICIPANT_STATUS.DECLINED) {
+      throw new AppError('You have already left this playdate', 400, 'ALREADY_LEFT');
+    }
 
-    await playdateRepository.updateParticipantStatus(id, parentId, PARTICIPANT_STATUS.DECLINED);
+    const left = await playdateRepository.markParticipantLeft(id, parentId);
+    if (!left) {
+      throw new AppError('You have already left this playdate or it is no longer upcoming', 409, 'LEAVE_CONFLICT');
+    }
+
+    await this._removeVoterFromPendingReschedule(id, parentId);
     await this._notifyMembersChanged(id);
 
     const populated = await playdateRepository.findById(id);
     return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
+  /**
+   * A parent who left no longer votes on the pending reschedule (Section 6.2: only accepted
+   * participants vote). If every remaining voter already accepted, the new schedule applies now.
+   * @private
+   */
+  async _removeVoterFromPendingReschedule(playdateId, parentId) {
+    const pendingReq = await rescheduleRepository.removeVoterFromPending(playdateId, parentId);
+    if (!pendingReq || !pendingReq.responses.every((r) => r.status === PARTICIPANT_STATUS.ACCEPTED)) return;
+
+    await this._applySchedule(playdateId, pendingReq);
+    pendingReq.status = RESCHEDULE_STATUS.ACCEPTED;
+    pendingReq.resolvedAt = new Date();
+    await pendingReq.save();
   }
 
   // ---------------------------------------------------------------------------

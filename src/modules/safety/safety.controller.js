@@ -25,10 +25,18 @@ class SafetyController {
 
   async getBlockedUsers(req, res, next) {
     try {
-      const page = req.query.page;
-      const limit = req.query.limit;
-      const result = await safetyService.getBlockedUsers(req.userId, { page, limit });
+      const { page, limit, search } = req.query;
+      const result = await safetyService.getBlockedUsers(req.userId, { page, limit, search });
       return successResponse(res, result, 'Blocked users retrieved successfully', 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadEvidence(req, res, next) {
+    try {
+      const result = await safetyService.uploadEvidence(req.file);
+      return successResponse(res, result, 'Evidence uploaded successfully', 200);
     } catch (error) {
       next(error);
     }

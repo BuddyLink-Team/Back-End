@@ -34,6 +34,8 @@ const reportSchema = new mongoose.Schema(
       type: String,
       enum: Object.values(REPORT_CATEGORIES),
       required: true,
+      // Reports created before categories existed are read (and saved again) as "other"
+      default: REPORT_CATEGORIES.OTHER,
       index: true,
     },
     reason: {

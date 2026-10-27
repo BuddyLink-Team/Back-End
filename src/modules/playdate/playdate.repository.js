@@ -316,16 +316,20 @@ class PlaydateRepository {
   }
 
   /**
-   * Update RSVP status of any participant (e.g. accepted participant leaving)
+   * Mark a participant who has not declined yet as declined, only while the playdate is upcoming
+   * (atomic: a concurrent cancel/complete or a double click cannot leave twice)
    * @param {string|ObjectId} id
    * @param {string|ObjectId} parentId
-   * @param {string} status - accepted | declined
-   * @returns {Promise<Object|null>}
+   * @returns {Promise<Object|null>} null when the playdate is no longer upcoming or the parent already left
    */
-  async updateParticipantStatus(id, parentId, status) {
+  async markParticipantLeft(id, parentId) {
     return Playdate.findOneAndUpdate(
-      { _id: id, 'participants.parentId': parentId },
-      { $set: { 'participants.$.status': status, 'participants.$.respondedAt': new Date() } },
+      {
+        _id: id,
+        status: PLAYDATE_STATUS.UPCOMING,
+        participants: { $elemMatch: { parentId, status: { $ne: PARTICIPANT_STATUS.DECLINED } } },
+      },
+      { $set: { 'participants.$.status': PARTICIPANT_STATUS.DECLINED, 'participants.$.respondedAt': new Date() } },
       { new: true },
     ).lean();
   }

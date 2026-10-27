@@ -39,6 +39,7 @@ import UserBadge from '../src/modules/gamification/user-badge.model.js';
 import { BADGE_DEFINITIONS } from '../src/modules/gamification/gamification.constants.js';
 import Notification from '../src/modules/notification/notification.model.js';
 import Block from '../src/modules/safety/block.model.js';
+import { DEFAULT_BLOCK_REASON } from '../src/modules/safety/safety.constants.js';
 import Report from '../src/modules/safety/report.model.js';
 import Subscription from '../src/modules/subscription/subscription.model.js';
 import SubscriptionPlan from '../src/modules/subscription/subscription-plan.model.js';
@@ -346,6 +347,13 @@ const OPENING_HOURS = {
 // Public sample image used for the image messages and report evidence of the demo data
 const SAMPLE_IMAGE_URL = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
 
+// Same strings the app stores when blocking (frontend BLOCK_REASONS, backend DEFAULT_BLOCK_REASON)
+const BLOCK_REASONS = {
+  DEFAULT: DEFAULT_BLOCK_REASON,
+  CHAT: 'Không muốn tiếp tục trò chuyện',
+  CONNECTION: 'Không muốn tiếp tục kết nối',
+};
+
 // AI assistant demo conversations: [role, content, toolCall?]
 const AI_SESSIONS = [
   {
@@ -538,9 +546,9 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // ---- Safety: blocks (pairs never connect) ---------------------------------------
   const blockPairs = [
-    [parents[30], parents[31], 'Nhắn tin liên tục dù mình đã từ chối khéo.'],
-    [parents[33], parents[34], 'Không phù hợp quan điểm nuôi dạy con.'],
-    [parents[40], parents[41], 'Đã gặp ngoài đời và không muốn tiếp tục liên lạc.'],
+    [parents[30], parents[31], BLOCK_REASONS.CHAT],
+    [parents[33], parents[34], BLOCK_REASONS.CONNECTION],
+    [parents[40], parents[41], BLOCK_REASONS.DEFAULT],
   ];
   await Block.insertMany(
     blockPairs.map(([blocker, blocked, reason], i) => ({
@@ -847,6 +855,7 @@ export async function seedDatabase({ log = console.log } = {}) {
   // ---- Reports ------------------------------------------------------------------------------
   const cancelledPlaydate = playdates.find((p) => p.status === 'cancelled');
   const reportedMessage = await Message.findOne({ conversationId: directConversations[3]._id, type: 'text' }).sort({ createdAt: -1 });
+  const messageReporter = directConversations[3].participants.find((id) => !id.equals(reportedMessage.senderId));
   await Report.insertMany([
     { reporterId: parents[30]._id, reportedUserId: parents[31]._id, targetType: 'user', category: 'harassment', reason: 'Quấy rối', description: 'Gửi lời mời kết nối nhiều lần và nhắn tin không phù hợp sau khi bị từ chối.', status: 'resolved', adminNotes: 'Đã cảnh cáo tài khoản, theo dõi thêm 30 ngày.', resolvedBy: admin._id, resolvedAt: daysAgo(8), createdAt: daysAgo(10) },
     { reporterId: parents[33]._id, reportedUserId: parents[34]._id, targetType: 'user', category: 'fake_profile', reason: 'Thông tin hồ sơ không trung thực', description: 'Ảnh đại diện và độ tuổi của bé có vẻ không đúng thực tế.', status: 'reviewing', adminNotes: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.', createdAt: daysAgo(5) },
@@ -857,9 +866,9 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // ---- Blocks --------------------------------------------------------------------------------
   await Block.insertMany([
-    { blockerId: parents[0]._id, blockedId: parents[25]._id, reason: 'Nội dung tin nhắn không phù hợp', createdAt: daysAgo(3, 14) },
-    { blockerId: parents[0]._id, blockedId: parents[26]._id, reason: 'Quấy rối và gửi nhiều tin spam', createdAt: daysAgo(1, 10) },
-    { blockerId: parents[1]._id, blockedId: parents[27]._id, reason: 'Hồ sơ giả mạo', createdAt: daysAgo(2, 8) },
+    { blockerId: parents[0]._id, blockedId: parents[25]._id, reason: BLOCK_REASONS.CHAT, createdAt: daysAgo(3, 14) },
+    { blockerId: parents[0]._id, blockedId: parents[26]._id, reason: BLOCK_REASONS.CONNECTION, createdAt: daysAgo(1, 10) },
+    { blockerId: parents[1]._id, blockedId: parents[27]._id, reason: BLOCK_REASONS.DEFAULT, createdAt: daysAgo(2, 8) },
   ]);
 
   // ---- Notifications ---------------------------------------------------------------------------

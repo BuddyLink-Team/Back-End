@@ -79,6 +79,20 @@ class RescheduleRepository {
   }
 
   /**
+   * Remove a voter from the pending reschedule request of a playdate (participant left)
+   * @param {string|ObjectId} playdateId
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Object|null>} The updated request document, or null when the parent was not a voter
+   */
+  async removeVoterFromPending(playdateId, parentId) {
+    return RescheduleRequest.findOneAndUpdate(
+      { playdateId, status: RESCHEDULE_STATUS.PENDING, 'responses.parentId': parentId },
+      { $pull: { responses: { parentId } } },
+      { new: true },
+    );
+  }
+
+  /**
    * Update multiple reschedule requests
    * @param {Object} filter
    * @param {Object} update

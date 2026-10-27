@@ -71,77 +71,18 @@ export class ChatDTO {
     // Identify the other participant in direct conversations
     const partner = participants.find((p) => p.id !== currentParentIdStr) || participants[0] || null;
 
-    const blocks = conversation._blocks || [];
-    const partnerIdStr = partner?.id?.toString();
+    const playdate = this.formatPlaydate(conversation.playdateId);
 
-    // Check all participants in this conversation
-    const blockedByMeParticipants = [];
-    const blockedMeParticipants = [];
-
-    participants.forEach((p) => {
-      if (!p || !p.id || p.id === currentParentIdStr) return;
-      const pIdStr = p.id.toString();
-      const byMe = blocks.some(
-        (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
-               (b.blockedId?._id || b.blockedId)?.toString() === pIdStr
-      );
-      if (byMe && !blockedByMeParticipants.some((item) => item.id === pIdStr)) {
-        blockedByMeParticipants.push(p);
-      }
-
-      const byPartner = blocks.some(
-        (b) => (b.blockerId?._id || b.blockerId)?.toString() === pIdStr &&
-               (b.blockedId?._id || b.blockedId)?.toString() === currentParentIdStr
-      );
-      if (byPartner && !blockedMeParticipants.some((item) => item.id === pIdStr)) {
-        blockedMeParticipants.push(p);
-      }
+    // Block state computed by the chat service; members may only appear in the playdate
+    const blockState = conversation._blockState || { blockedByMeIds: [], isBlockedByPartner: false };
+    const membersById = new Map(participants.filter(Boolean).map((p) => [p.id, p]));
+    if (playdate?.host) membersById.set(playdate.host.id, playdate.host);
+    (playdate?.participants || []).forEach(({ parent }) => {
+      if (parent && !membersById.has(parent.id)) membersById.set(parent.id, parent);
     });
-
-    // Also check playdate host and participants if present in playdateId
-    if (conversation.playdateId && typeof conversation.playdateId === 'object') {
-      const pd = conversation.playdateId;
-      if (pd.hostParentId) {
-        const hostId = (pd.hostParentId._id || pd.hostParentId.id || pd.hostParentId).toString();
-        if (hostId !== currentParentIdStr && !blockedByMeParticipants.some((p) => p.id === hostId)) {
-          const byMe = blocks.some(
-            (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
-                   (b.blockedId?._id || b.blockedId)?.toString() === hostId
-          );
-          if (byMe) blockedByMeParticipants.push(this.formatParticipant(pd.hostParentId));
-        }
-      }
-      if (Array.isArray(pd.participants)) {
-        pd.participants.forEach((item) => {
-          const partParent = item.parentId;
-          if (!partParent) return;
-          const partId = (partParent._id || partParent.id || partParent).toString();
-          if (partId !== currentParentIdStr && !blockedByMeParticipants.some((p) => p.id === partId)) {
-            const byMe = blocks.some(
-              (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
-                     (b.blockedId?._id || b.blockedId)?.toString() === partId
-            );
-            if (byMe) blockedByMeParticipants.push(this.formatParticipant(partParent));
-          }
-        });
-      }
-    }
-
-    const isBlockedByMe = conversation.type === 'direct'
-      ? blocks.some(
-          (b) => (b.blockerId?._id || b.blockerId)?.toString() === currentParentIdStr &&
-                 (b.blockedId?._id || b.blockedId)?.toString() === partnerIdStr
-        )
-      : blockedByMeParticipants.length > 0;
-
-    const isBlockedByPartner = conversation.type === 'direct'
-      ? blocks.some(
-          (b) => (b.blockerId?._id || b.blockerId)?.toString() === partnerIdStr &&
-                 (b.blockedId?._id || b.blockedId)?.toString() === currentParentIdStr
-        )
-      : blockedMeParticipants.length > 0;
-
-    const isBlocked = isBlockedByMe || isBlockedByPartner;
+    const blockedByMeParticipants = blockState.blockedByMeIds.map((id) => membersById.get(id) || { id });
+    const isBlockedByMe = blockedByMeParticipants.length > 0;
+    const isBlockedByPartner = Boolean(blockState.isBlockedByPartner);
 
     // Get unread count for current parent
     let unreadCount = 0;
@@ -159,11 +100,10 @@ export class ChatDTO {
       participants,
       partner,
       blockedByMeParticipants,
-      blockedMeParticipants,
       isBlockedByMe,
       isBlockedByPartner,
-      isBlocked,
-      playdate: this.formatPlaydate(conversation.playdateId),
+      isBlocked: isBlockedByMe || isBlockedByPartner,
+      playdate,
       lastMessage: conversation.lastMessage
         ? {
             messageId: conversation.lastMessage.messageId?.toString() || null,

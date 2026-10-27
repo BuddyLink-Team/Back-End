@@ -1,4 +1,4 @@
-import { body, query } from 'express-validator';
+import { body, param, query } from 'express-validator';
 import { REPORT_TARGET_TYPES, REPORT_LIMITS, REPORT_CATEGORIES } from './safety.constants.js';
 
 export const blockUserValidation = [
@@ -72,6 +72,17 @@ export const createReportValidation = [
     .withMessage('evidenceUrls items must be strings'),
 ];
 
+export const unblockUserValidation = [
+  param('id')
+    .optional()
+    .isMongoId()
+    .withMessage('id must be a valid MongoDB ObjectId'),
+  param('blockedId')
+    .optional()
+    .isMongoId()
+    .withMessage('blockedId must be a valid MongoDB ObjectId'),
+];
+
 export const getBlockedUsersValidation = [
   query('page')
     .optional()
@@ -81,4 +92,10 @@ export const getBlockedUsersValidation = [
     .optional()
     .isInt({ min: 1, max: 100 })
     .withMessage('limit must be between 1 and 100'),
+  query('search')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('search cannot exceed 100 characters'),
 ];
