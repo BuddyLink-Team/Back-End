@@ -152,8 +152,42 @@ describe('Inviting more friends to a playdate (POST /playdates/:id/participants)
     // Pending again: a second invitation is refused, and they can answer once more
     const twice = await as(reHost).invite(id, [leaver]);
     expect(twice.body.error.code).toBe('ALREADY_INVITED');
+    const usedBefore = (await subscriptionService.getActionUsage(leaver.parentId, 'playdateParticipate')).used;
+    expect(usedBefore).toBe(1);
     expect((await as(leaver).respond(id, 'accepted')).status).toBe(200);
-  });
+    // Same playdate: its participation was already counted on the first accept
+    expect((await subscriptionService.getActionUsage(leaver.parentId, 'playdateParticipate')).used).toBe(1);
+    // The family who only declined uses a participation when it accepts for the first time
+    expect((await as(declined).respond(id, 'accepted')).status).toBe(200);
+    expect((await subscriptionService.getActionUsage(declined.parentId, 'playdateParticipate')).used).toBe(1);
+  }, 20000);
+
+  it('gives back the participation of families still in when the host cancels, not of those who left', async () => {
+    const cHost = await registerParent('cancel-host');
+    const stayer = await registerParent('stayer');
+    const quitter = await registerParent('quitter');
+    await Promise.all([connect(cHost, stayer), connect(cHost, quitter)]);
+    const created = await as(cHost).create([stayer, quitter], { scheduledDate: isoDay(16) });
+    const id = created.body.data.id;
+    await as(stayer).respond(id, 'accepted');
+    await as(quitter).respond(id, 'accepted');
+    await request(app).post(`/api/v1/playdates/${id}/leave`).set('Authorization', `Bearer ${quitter.token}`);
+    const used = async (parent, action) => (await subscriptionService.getActionUsage(parent.parentId, action)).used;
+    expect(await used(stayer, 'playdateParticipate')).toBe(1);
+    expect(await used(quitter, 'playdateParticipate')).toBe(1);
+
+    expect((await as(cHost).cancel(id)).status).toBe(200);
+    expect(await used(stayer, 'playdateParticipate')).toBe(0);
+    expect(await used(quitter, 'playdateParticipate')).toBe(1);
+    expect(await used(cHost, 'playdateCreate')).toBe(1);
+    // A participation used in a past month is not given back on this month's counter
+    expect(await subscriptionService.refundQuota(quitter.parentId, 'playdateParticipate', new Date(Date.now() - 40 * DAY))).toBe(false);
+    expect(await used(quitter, 'playdateParticipate')).toBe(1);
+
+    // Cancelling twice gives nothing back twice
+    expect((await as(cHost).cancel(id)).body.error.code).toBe('ALREADY_CANCELLED');
+    expect(await used(stayer, 'playdateParticipate')).toBe(0);
+  }, 20000);
 
   it('shows every invitee to the host only; guests see who joined, themselves and how many are still invited', async () => {
     const joiner = await registerParent('joiner');

@@ -367,7 +367,7 @@ class PlaydateRepository {
 
   /**
    * Atomically invite families to an upcoming playdate: new families are appended, families who
-   * declined or left get their entry back to pending (same place in the list)
+   * declined or left get their entry back to pending (same place in the list, quotaConsumedAt kept)
    * @param {string|ObjectId} id
    * @param {Array<{ parentId: string, childId: string, status: string, invitedAt: Date }>} participants
    * @param {Array<string>} [reinvitedParentIds] - families already in the playdate with a declined status
@@ -395,7 +395,7 @@ class PlaydateRepository {
             as: 'p',
             in: {
               $switch: {
-                branches: renewed.map((e) => ({ case: { $eq: ['$$p.parentId', e.parentId] }, then: { $literal: e } })),
+                branches: renewed.map((e) => ({ case: { $eq: ['$$p.parentId', e.parentId] }, then: { $mergeObjects: ['$$p', { $literal: e }] } })),
                 default: '$$p',
               },
             },
@@ -436,6 +436,32 @@ class PlaydateRepository {
       { $set: { 'participants.$.status': PARTICIPANT_STATUS.DECLINED, 'participants.$.respondedAt': new Date() } },
       { new: true },
     ).lean();
+  }
+
+  /**
+   * Cancel a playdate that is not cancelled or completed yet (atomic: a double click cancels once)
+   * @param {string|ObjectId} id
+   * @param {{ cancelledBy: ObjectId, reason: string, cancelledAt: Date }} cancellation
+   * @returns {Promise<Object|null>} The playdate before the update, null when it was already closed
+   */
+  async cancelIfOpen(id, cancellation) {
+    return Playdate.findOneAndUpdate(
+      { _id: id, status: { $nin: [PLAYDATE_STATUS.CANCELLED, PLAYDATE_STATUS.COMPLETED] } },
+      { $set: { status: PLAYDATE_STATUS.CANCELLED, cancellation } },
+      { new: false },
+    ).lean();
+  }
+
+  /**
+   * Remember that the participation quota of this family was used for the playdate
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   */
+  async markParticipantQuotaConsumed(id, parentId) {
+    return Playdate.updateOne(
+      { _id: id, 'participants.parentId': parentId },
+      { $set: { 'participants.$.quotaConsumedAt': new Date() } },
+    );
   }
 
   /**

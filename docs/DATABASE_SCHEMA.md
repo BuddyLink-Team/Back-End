@@ -251,7 +251,7 @@ erDiagram
         ObjectId _id PK
         ObjectId hostParentId FK "Ref: parents._id"
         ObjectId hostChildId FK "Ref: children._id"
-        array participants "Array of { parentId, childId, status, invitedAt, respondedAt }"
+        array participants "Array of { parentId, childId, status, invitedAt, respondedAt, quotaConsumedAt }"
         date scheduledDate "Ngày tổ chức"
         string time "Giờ bắt đầu, ví dụ: 09:00"
         int durationMinutes "Thời lượng 30 - 480 phút, mặc định 120"
@@ -832,6 +832,7 @@ interface IPlaydateParticipant {
   status: "pending" | "accepted" | "declined";
   invitedAt: Date;
   respondedAt?: Date;
+  quotaConsumedAt?: Date | null; // Lần đầu chấp nhận đã dùng 1 lượt tham gia; rời rồi được mời lại và chấp nhận lại không trừ thêm. Chủ hủy buổi hẹn: hoàn lượt cho người còn tham gia nếu lượt thuộc tháng hiện tại
 }
 
 interface IPlaydate {

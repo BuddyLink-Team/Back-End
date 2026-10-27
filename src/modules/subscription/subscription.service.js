@@ -1058,11 +1058,16 @@ class SubscriptionService {
    * Give back the unit consumed by an action that did not complete (current period, never below 0)
    * @param {string|mongoose.Types.ObjectId} parentId
    * @param {string} actionType - A QUOTA_ACTIONS key or its QUOTA_FEATURES name
+   * @param {Date} [consumedAt] - When the unit was used: nothing is given back if it belongs to a past period
+   * @returns {Promise<boolean>} true when a unit was given back
    */
-  async refundQuota(parentId, actionType) {
+  async refundQuota(parentId, actionType, consumedAt = null) {
     const action = QUOTA_ACTIONS[QUOTA_ACTION_ALIASES[actionType] || actionType];
     if (!action) {
       throw new AppError(`Unknown quota action: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
+    }
+    if (consumedAt && getVietnamPeriodValue(action.periodType, consumedAt) !== getVietnamPeriodValue(action.periodType)) {
+      return false;
     }
     await usageQuotaRepository.decrementCounter(
       parentId,
@@ -1070,6 +1075,7 @@ class SubscriptionService {
       getVietnamPeriodValue(action.periodType),
       action.counterField
     );
+    return true;
   }
 
   /**

@@ -6,6 +6,7 @@ import connectionService from '../connection/connection.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
+import logger from '../../shared/logger/index.js';
 import {
   getScheduledStart,
   getScheduledEnd,
@@ -758,18 +759,39 @@ class PlaydateService {
       throw new AppError('Cannot cancel a completed playdate', 400, 'INVALID_PLAYDATE_STATUS');
     }
 
-    const updated = await playdateRepository.updateById(id, {
-      status: PLAYDATE_STATUS.CANCELLED,
-      cancellation: {
-        cancelledBy: parentId,
-        reason: reason || 'Cancelled by host',
-        cancelledAt: new Date(),
-      },
+    const before = await playdateRepository.cancelIfOpen(id, {
+      cancelledBy: parentId,
+      reason: reason || 'Cancelled by host',
+      cancelledAt: new Date(),
     });
+    if (!before) {
+      throw new AppError('The playdate changed in the meantime, please reload it', 409, 'PLAYDATE_CHANGED');
+    }
 
     await rescheduleRepository.cancelPendingByPlaydateId(id);
+    await this._refundJoinedParticipants(before);
 
+    const updated = await playdateRepository.findById(id);
     return PlaydateResponseDTO.toResponse(updated, parentId);
+  }
+
+  /**
+   * The host cancelled: families who were still in give back the participation used this month.
+   * Families who left keep it used (their own choice), and the host's creation is not given back.
+   * @param {Object} playdate - The playdate as it was before the cancellation
+   * @private
+   */
+  async _refundJoinedParticipants(playdate) {
+    const joined = (playdate.participants || []).filter(
+      (p) => p.status === PARTICIPANT_STATUS.ACCEPTED && p.quotaConsumedAt
+    );
+    await Promise.all(
+      joined.map((p) =>
+        subscriptionService.refundQuota(p.parentId, 'playdateParticipate', p.quotaConsumedAt).catch((error) => {
+          logger.error(`[Playdate] participation refund failed for parent=${p.parentId}: ${error.message}`);
+        })
+      )
+    );
   }
 
   /**
@@ -798,6 +820,8 @@ class PlaydateService {
     }
 
     const isAccepting = status === PARTICIPANT_STATUS.ACCEPTED;
+    // A family who left and was invited again already used a participation for this playdate
+    const usesQuota = isAccepting && !participant.quotaConsumedAt;
 
     if (isAccepting) {
       // The invited child cannot join two playdates at once (declining is always allowed)
@@ -805,7 +829,9 @@ class PlaydateService {
       await this._assertNoConflict(toId(participant.childId), start, endOf(start, durationOf(playdate)), id);
 
       // Participation quota (Free plan: 3/month): check now, consume once the answer is saved
-      await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', false);
+      if (usesQuota) {
+        await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', false);
+      }
     }
 
     // Atomic: a double click cannot answer twice
@@ -815,11 +841,14 @@ class PlaydateService {
     }
 
     if (isAccepting) {
-      try {
-        await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', true);
-      } catch (error) {
-        await playdateRepository.resetParticipantToPending(id, parentId);
-        throw error;
+      if (usesQuota) {
+        try {
+          await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', true);
+        } catch (error) {
+          await playdateRepository.resetParticipantToPending(id, parentId);
+          throw error;
+        }
+        await playdateRepository.markParticipantQuotaConsumed(id, parentId);
       }
 
       // Section 6.2: every accepted participant must agree to a pending reschedule
