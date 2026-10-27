@@ -499,6 +499,7 @@ erDiagram
         ObjectId blockedId FK "Ref: parents._id (người bị chặn)"
         string reason "Lý do chặn"
         date createdAt
+        date updatedAt "Đổi khi chặn lại với lý do khác"
     }
 
     REPORTS {
@@ -1074,6 +1075,7 @@ interface IBlock {
   blockedId: ObjectId; // Tham chiếu parents._id (Người bị chặn)
   reason?: string;
   createdAt: Date;
+  updatedAt: Date; // Đổi khi chặn lại với lý do khác
 }
 ```
 

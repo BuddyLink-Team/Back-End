@@ -261,6 +261,22 @@ class ChatService {
   }
 
   /**
+   * Sender of a message and the members of its conversation. Used by the safety module to check
+   * that a reported message belongs to the reported parent and was visible to the reporter.
+   * @param {string|ObjectId} messageId
+   * @returns {Promise<{ senderId: string, participantIds: string[] }|null>} null when not found
+   */
+  async getMessageWithParticipants(messageId) {
+    const message = await chatRepository.findMessageById(messageId);
+    if (!message) return null;
+    const conversation = await chatRepository.findConversationDocById(message.conversationId);
+    return {
+      senderId: message.senderId.toString(),
+      participantIds: (conversation?.participants || []).map((id) => id.toString()),
+    };
+  }
+
+  /**
    * Send a new message into a conversation
    */
   async sendMessage(parentOrUserId, conversationId, { content, type, mediaUrl }) {

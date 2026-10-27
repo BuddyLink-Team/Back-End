@@ -15,7 +15,7 @@ class SafetyController {
 
   async unblockUser(req, res, next) {
     try {
-      const targetParentId = req.params.id || req.params.blockedId || req.body.blockedId;
+      const targetParentId = req.params.id;
       const result = await safetyService.unblockUser(req.userId, targetParentId);
       return successResponse(res, result, 'User unblocked successfully', 200);
     } catch (error) {

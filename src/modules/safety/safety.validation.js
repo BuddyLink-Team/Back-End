@@ -74,13 +74,8 @@ export const createReportValidation = [
 
 export const unblockUserValidation = [
   param('id')
-    .optional()
     .isMongoId()
     .withMessage('id must be a valid MongoDB ObjectId'),
-  param('blockedId')
-    .optional()
-    .isMongoId()
-    .withMessage('blockedId must be a valid MongoDB ObjectId'),
 ];
 
 export const getBlockedUsersValidation = [
