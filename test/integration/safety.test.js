@@ -1,7 +1,13 @@
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, jest } from '@jest/globals';
+import mongoose from 'mongoose';
 import request from 'supertest';
 import app from '../../src/app.js';
 import Connection from '../../src/modules/connection/connection.model.js';
+import connectionService from '../../src/modules/connection/connection.service.js';
+import Conversation from '../../src/modules/chat/conversation.model.js';
+import Message from '../../src/modules/chat/message.model.js';
+import { CONVERSATION_TYPES } from '../../src/modules/chat/chat.constants.js';
+import Playdate from '../../src/modules/playdate/playdate.model.js';
 import { CONNECTION_STATUS } from '../../src/modules/connection/connection.constants.js';
 import Report from '../../src/modules/safety/report.model.js';
 import { REPORT_CATEGORIES } from '../../src/modules/safety/safety.constants.js';
@@ -81,6 +87,18 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data.category).toBe(REPORT_CATEGORIES.HARASSMENT);
       expect(res.body.data.reportedUserId).toBe(userB.parentId);
+      // Moderation fields stay internal
+      expect(res.body.data).not.toHaveProperty('adminNotes');
+      expect(res.body.data).not.toHaveProperty('resolvedBy');
+      expect(res.body.data).not.toHaveProperty('reporterId');
+    });
+
+    it('is no longer served on the old POST /api/v1/safety/report route', async () => {
+      const res = await request(app)
+        .post('/api/v1/safety/report')
+        .set(auth(userA.token))
+        .send({ reportedUserId: userC.parentId, category: REPORT_CATEGORIES.SPAM });
+      expect(res.status).toBe(404);
     });
 
     it('rejects duplicate reports against the same user within 24h', async () => {
@@ -93,6 +111,118 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
         });
       expect(res.status).toBe(429);
       expect(res.body.error.code).toBe('REPORT_TOO_FREQUENT');
+    });
+  });
+
+  describe('Report targets (message / playdate)', () => {
+    let reporter;
+    let sender;
+    let other;
+    let messageId;
+
+    beforeAll(async () => {
+      [reporter, sender, other] = await Promise.all([
+        register('target-reporter'),
+        register('target-sender'),
+        register('target-other'),
+      ]);
+      const conversation = await Conversation.create({
+        type: CONVERSATION_TYPES.DIRECT,
+        participants: [reporter.parentId, sender.parentId],
+      });
+      const message = await Message.create({
+        conversationId: conversation._id,
+        senderId: sender.parentId,
+        content: 'Rude message',
+      });
+      messageId = message._id.toString();
+    });
+
+    const report = (token, body) =>
+      request(app)
+        .post('/api/v1/safety/reports')
+        .set(auth(token))
+        .send({ category: REPORT_CATEGORIES.HARASSMENT, ...body });
+
+    it('requires the message of a message report', async () => {
+      const res = await report(reporter.token, { reportedUserId: sender.parentId, targetType: 'message' });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('REPORT_TARGET_REQUIRED');
+    });
+
+    it('rejects a message that was not sent by the reported parent', async () => {
+      const res = await report(reporter.token, {
+        reportedUserId: other.parentId,
+        targetType: 'message',
+        targetMessageId: messageId,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_REPORT_TARGET');
+    });
+
+    it('rejects a message from a conversation the reporter is not in', async () => {
+      const res = await report(other.token, {
+        reportedUserId: sender.parentId,
+        targetType: 'message',
+        targetMessageId: messageId,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_REPORT_TARGET');
+    });
+
+    it('reports a message of the reported parent', async () => {
+      const res = await report(reporter.token, {
+        reportedUserId: sender.parentId,
+        targetType: 'message',
+        targetMessageId: messageId,
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.data.targetMessageId).toBe(messageId);
+    });
+
+    it('reports a playdate against its host only, from one of its families', async () => {
+      const playdate = await Playdate.create({
+        hostParentId: other.parentId,
+        hostChildId: new mongoose.Types.ObjectId(),
+        participants: [{ parentId: sender.parentId, childId: new mongoose.Types.ObjectId(), status: 'accepted' }],
+        scheduledDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        time: '09:00',
+        activity: 'Picnic',
+        location: { name: 'Park', address: 'District 1' },
+      });
+      const playdateId = playdate._id.toString();
+
+      const notHost = await report(other.token, {
+        reportedUserId: sender.parentId,
+        targetType: 'playdate',
+        targetPlaydateId: playdateId,
+      });
+      expect(notHost.status).toBe(400);
+      expect(notHost.body.error.code).toBe('INVALID_REPORT_TARGET');
+
+      const notMember = await report(reporter.token, {
+        reportedUserId: other.parentId,
+        targetType: 'playdate',
+        targetPlaydateId: playdateId,
+      });
+      expect(notMember.status).toBe(400);
+      expect(notMember.body.error.code).toBe('INVALID_REPORT_TARGET');
+
+      const missing = await report(sender.token, {
+        reportedUserId: other.parentId,
+        targetType: 'playdate',
+        targetPlaydateId: new mongoose.Types.ObjectId().toString(),
+      });
+      expect(missing.status).toBe(404);
+      expect(missing.body.error.code).toBe('REPORT_TARGET_NOT_FOUND');
+
+      const ok = await report(sender.token, {
+        reportedUserId: other.parentId,
+        targetType: 'playdate',
+        targetPlaydateId: playdateId,
+      });
+      expect(ok.status).toBe(201);
+      expect(ok.body.data.targetPlaydateId).toBe(playdateId);
     });
   });
 
@@ -134,6 +264,9 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
         });
       expect(blockRes.status).toBe(200);
       expect(blockRes.body.success).toBe(true);
+      expect(blockRes.body.data).toEqual(
+        expect.objectContaining({ parentId: userC.parentId, reason: 'Inappropriate behavior' }),
+      );
 
       // Verify connection is removed
       const updatedConn = await Connection.findById(connection._id);
@@ -177,6 +310,35 @@ describe('Safety Module Integration Tests (/api/v1/safety)', () => {
         .set(auth(userA.token));
       expect(noMatch.body.data.items).toHaveLength(0);
       expect(noMatch.body.data.pagination.total).toBe(0);
+    });
+
+    it('POST /api/v1/safety/block: reports BLOCK_INCOMPLETE when the connection cannot be removed', async () => {
+      const spy = jest
+        .spyOn(connectionService, 'removeActiveConnectionBetween')
+        .mockRejectedValueOnce(new Error('database unavailable'));
+      try {
+        const res = await request(app)
+          .post('/api/v1/safety/block')
+          .set(auth(userB.token))
+          .send({ blockedId: userC.parentId });
+        expect(res.status).toBe(500);
+        expect(res.body.error.code).toBe('BLOCK_INCOMPLETE');
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Blocking again is safe and completes the block
+      const retry = await request(app)
+        .post('/api/v1/safety/block')
+        .set(auth(userB.token))
+        .send({ blockedId: userC.parentId });
+      expect(retry.status).toBe(200);
+      await request(app).delete(`/api/v1/safety/unblock/${userC.parentId}`).set(auth(userB.token));
+    });
+
+    it('DELETE /api/v1/safety/block/:blockedId: old route is no longer served', async () => {
+      const res = await request(app).delete(`/api/v1/safety/block/${userC.parentId}`).set(auth(userA.token));
+      expect(res.status).toBe(404);
     });
 
     it('DELETE /api/v1/safety/unblock/:id: rejects an invalid id', async () => {

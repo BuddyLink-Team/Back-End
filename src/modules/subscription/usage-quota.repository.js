@@ -36,6 +36,17 @@ class UsageQuotaRepository {
   }
 
   /**
+   * Give back one unit of a counter (never below 0)
+   */
+  async decrementCounter(parentId, periodType, periodValue, counterField) {
+    return UsageQuota.findOneAndUpdate(
+      { parentId, periodType, periodValue, [`counters.${counterField}`]: { $gt: 0 } },
+      { $inc: { [`counters.${counterField}`]: -1 } },
+      { new: true }
+    );
+  }
+
+  /**
    * Atomically check and consume quota for limited actions
    * Ensures race condition safety when multiple requests arrive simultaneously
    * @param {string|mongoose.Types.ObjectId} parentId

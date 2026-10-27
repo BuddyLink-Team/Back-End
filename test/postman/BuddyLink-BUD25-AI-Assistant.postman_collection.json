@@ -1,0 +1,552 @@
+{
+  "info": {
+    "name": "BuddyLink - AI Family Assistant (BUD-25)",
+    "_postman_id": "bud-25-ai-family-assistant",
+    "description": "AI assistant chat sessions (parent only) with Gemini tool calling.\n\n## Setup\nRun the setup of \"BuddyLink - Child Pairing & Playdate Planning (BUD-48)\" first (Parent A / B connected, each with a child and a location), then copy parent_a_token here. GEMINI_API_KEY must be set on the server (check it with `npm run ai:check`).\n\n## Quota\nOne monthly unit per session (Free: 5 sessions), used by the first successful reply. Later messages of the session are free, up to 30 (Free) / 100 (Premium).\n\n## Flow\n1. Create a session\n2. Ask for a playdate with details -> the reply has one open `choices` card (the next missing step)\n3. Tap the first option of the open card (repeat until a `playdate_draft` card appears)\n4. Confirm with POST /playdates using the draft (see the Playdate collections)\n5. Find playmates: vague request -> `match_criteria` card -> tap -> `match_suggestions`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000/api/v1"
+    },
+    {
+      "key": "parent_a_token",
+      "value": ""
+    },
+    {
+      "key": "session_id",
+      "value": ""
+    },
+    {
+      "key": "last_reply_id",
+      "value": ""
+    },
+    {
+      "key": "open_step",
+      "value": ""
+    },
+    {
+      "key": "first_option_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Sessions",
+      "item": [
+        {
+          "name": "Create session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('session_id', res.data.session.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List sessions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions?page=1&limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions?page=1&limit=20"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Session detail (messages + plan draft)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Plan a playdate step by step",
+      "item": [
+        {
+          "name": "Ask with details",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Mình muốn hẹn cho bé đi vẽ tranh với bạn vào thứ 7 tới\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('last_reply_id', res.data.reply.id);",
+                  "const card = (res.data.reply.cards || []).find((c) => c.type === 'choices' && c.status === 'open');",
+                  "if (card) { pm.collectionVariables.set('open_step', card.stepId); pm.collectionVariables.set('first_option_id', (card.options[0] || {}).id || '__skip'); }",
+                  "console.log('AI:', res.data.reply.content, JSON.stringify(res.data.reply.cards.map((c) => c.type + ':' + (c.stepId || ''))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tap first option of the open card",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Chọn lựa chọn đầu tiên\",\n  \"choice\": {\n    \"messageId\": \"{{last_reply_id}}\",\n    \"stepId\": \"{{open_step}}\",\n    \"optionIds\": [\n      \"{{first_option_id}}\"\n    ]\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('last_reply_id', res.data.reply.id);",
+                  "const card = (res.data.reply.cards || []).find((c) => c.type === 'choices' && c.status === 'open');",
+                  "if (card) { pm.collectionVariables.set('open_step', card.stepId); pm.collectionVariables.set('first_option_id', (card.options[0] || {}).id || '__skip'); }",
+                  "console.log('AI:', res.data.reply.content, JSON.stringify(res.data.reply.cards.map((c) => c.type + ':' + (c.stepId || ''))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Type an answer instead of tapping",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Cho mình chọn công viên gần nhà nhé\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('last_reply_id', res.data.reply.id);",
+                  "const card = (res.data.reply.cards || []).find((c) => c.type === 'choices' && c.status === 'open');",
+                  "if (card) { pm.collectionVariables.set('open_step', card.stepId); pm.collectionVariables.set('first_option_id', (card.options[0] || {}).id || '__skip'); }",
+                  "console.log('AI:', res.data.reply.content, JSON.stringify(res.data.reply.cards.map((c) => c.type + ':' + (c.stepId || ''))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Find playmates",
+      "item": [
+        {
+          "name": "Vague request (criteria card)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Tìm bạn chơi cho con\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('last_reply_id', res.data.reply.id);",
+                  "const card = (res.data.reply.cards || []).find((c) => c.type === 'choices' && c.status === 'open');",
+                  "if (card) { pm.collectionVariables.set('open_step', card.stepId); pm.collectionVariables.set('first_option_id', (card.options[0] || {}).id || '__skip'); }",
+                  "console.log('AI:', res.data.reply.content, JSON.stringify(res.data.reply.cards.map((c) => c.type + ':' + (c.stepId || ''))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm criteria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Đúng, tìm luôn\",\n  \"choice\": {\n    \"messageId\": \"{{last_reply_id}}\",\n    \"stepId\": \"match_criteria\",\n    \"optionIds\": [\n      \"criteria:confirm\"\n    ]\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('last_reply_id', res.data.reply.id);",
+                  "const card = (res.data.reply.cards || []).find((c) => c.type === 'choices' && c.status === 'open');",
+                  "if (card) { pm.collectionVariables.set('open_step', card.stepId); pm.collectionVariables.set('first_option_id', (card.options[0] || {}).id || '__skip'); }",
+                  "console.log('AI:', res.data.reply.content, JSON.stringify(res.data.reply.cards.map((c) => c.type + ':' + (c.stepId || ''))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Errors",
+      "item": [
+        {
+          "name": "Answered card again -> 400 AI_INVALID_CHOICE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Đúng, tìm luôn\",\n  \"choice\": {\n    \"messageId\": \"{{last_reply_id}}\",\n    \"stepId\": \"match_criteria\",\n    \"optionIds\": [\n      \"criteria:confirm\"\n    ]\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Empty content -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"   \"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}",
+                "messages"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete session (soft)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Deleted session -> 404 AI_SESSION_NOT_FOUND",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{parent_a_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ai-assistant/sessions/{{session_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ai-assistant",
+                "sessions",
+                "{{session_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

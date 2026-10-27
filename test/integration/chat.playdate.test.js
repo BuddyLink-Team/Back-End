@@ -66,7 +66,7 @@ describe('Playdate Group Chat Integration Tests', () => {
     expect(playdate.chatConversationId.toString()).toBe(conversationId);
   });
 
-  it('2. returns playdate details (host + participants) and only host & accepted members', async () => {
+  it('2. returns playdate details with only the chat members (host + accepted), never pending invitees', async () => {
     const res = await request(app)
       .get(`/api/v1/chat/playdate/${playdateId}`)
       .set('Authorization', `Bearer ${accepted.token}`);
@@ -76,7 +76,7 @@ describe('Playdate Group Chat Integration Tests', () => {
       [host.parentId, accepted.parentId].sort()
     );
     expect(res.body.data.playdate.host.id).toBe(host.parentId);
-    expect(res.body.data.playdate.participants).toHaveLength(2);
+    expect(res.body.data.playdate.participants.map((p) => p.parent.id)).toEqual([accepted.parentId]);
     expect(res.body.data.playdate.location.name).toBe('Tao Dan Park');
   });
 
@@ -87,7 +87,7 @@ describe('Playdate Group Chat Integration Tests', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.playdate.host.id).toBe(host.parentId);
-    expect(res.body.data.playdate.participants).toHaveLength(2);
+    expect(res.body.data.playdate.participants).toHaveLength(1);
   });
 
   it('4. rejects a pending participant', async () => {

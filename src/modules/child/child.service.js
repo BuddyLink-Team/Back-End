@@ -6,6 +6,9 @@ import AppError from '../../shared/exceptions/AppError.js';
 import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import { ChildResponseDTO, ChildPublicProfileDTO } from './child.dto.js';
 import { CHILD_EDITABLE_FIELDS } from './child.constants.js';
+// Repository, not ConnectionService: that service imports this one
+import connectionRepository from '../connection/connection.repository.js';
+import { CONNECTION_STATUS, VIEWER_CONNECTION_STATUS } from '../connection/connection.constants.js';
 
 /**
  * Keep only client-editable fields so a request body cannot set parentId, isArchived, _id...
@@ -234,7 +237,23 @@ class ChildService {
       }
     }
 
-    return ChildPublicProfileDTO.toResponse(child);
+    const connectionStatus = isOwnChild
+      ? VIEWER_CONNECTION_STATUS.NONE
+      : await this._getViewerConnectionStatus(viewerParentId, parent._id);
+    return ChildPublicProfileDTO.toResponse(child, connectionStatus);
+  }
+
+  /**
+   * Pending / accepted connection between the viewer and another parent, from the viewer's side
+   * @returns {Promise<string>} VIEWER_CONNECTION_STATUS
+   */
+  async _getViewerConnectionStatus(viewerParentId, otherParentId) {
+    const connection = await connectionRepository.findActiveBetween(viewerParentId, otherParentId);
+    if (!connection) return VIEWER_CONNECTION_STATUS.NONE;
+    if (connection.status === CONNECTION_STATUS.ACCEPTED) return VIEWER_CONNECTION_STATUS.CONNECTED;
+    return connection.requesterId.toString() === viewerParentId.toString()
+      ? VIEWER_CONNECTION_STATUS.SENT
+      : VIEWER_CONNECTION_STATUS.RECEIVED;
   }
 }
 

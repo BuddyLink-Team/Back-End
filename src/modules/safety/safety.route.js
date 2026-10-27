@@ -17,10 +17,8 @@ router.use(authenticate);
 
 router.post('/block', validate(blockUserValidation), safetyController.blockUser);
 router.delete('/unblock/:id', validate(unblockUserValidation), safetyController.unblockUser);
-router.delete('/block/:blockedId', validate(unblockUserValidation), safetyController.unblockUser); // Backward-compatible alias
 router.get('/blocked-users', validate(getBlockedUsersValidation), safetyController.getBlockedUsers);
 router.post('/reports/evidence', uploadSingleImage, safetyController.uploadEvidence);
 router.post('/reports', validate(createReportValidation), safetyController.createReport);
-router.post('/report', validate(createReportValidation), safetyController.createReport); // Backward-compatible alias
 
 export default router;

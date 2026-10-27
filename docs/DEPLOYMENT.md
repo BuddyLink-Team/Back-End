@@ -67,6 +67,7 @@ Web admin (Vercel) ──────► API admin (Render) ──────�
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | 2 secret của API phụ huynh |
 | `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN` | `15m`, `7d` |
 | `AI_PROVIDER`, `GEMINI_API_KEY` | `gemini`, key Gemini |
+| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | `gemini-3.5-flash`, `gemini-3.5-flash-lite` (chạy `npm run ai:check` trên server để kiểm tra key và tên model) |
 | `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` | key PayOS |
 | `PAYOS_RETURN_URL`, `PAYOS_CANCEL_URL` | `<CLIENT_URL>/payment/success`, `<CLIENT_URL>/payment/cancel` |
 | `PAYMENT_MODE` | `live` |
@@ -75,7 +76,7 @@ Web admin (Vercel) ──────► API admin (Render) ──────�
 | `EMAIL_FROM`, `BREVO_API_KEY` | gửi mail qua Brevo HTTP API (xem lưu ý bên dưới) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | chỉ dùng khi không có Brevo |
 | `FIREBASE_SERVICE_ACCOUNT` | JSON một dòng ở mục 2 |
-| `OVERPASS_ENABLED`, `PLACES_AUTO_SYNC` | `true`, `true` |
+| `OVERPASS_ENABLED`, `PLACES_AUTO_SYNC`, `PLACES_ADDRESS_LOOKUP` | `true`, `true`, `true` |
 
 > ⚠️ **Không đặt `ADMIN_PORT`** ở service này. Biến đó chỉ dùng ở local để chạy admin chung process.
 >

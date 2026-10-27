@@ -1,6 +1,6 @@
 import PlacesCache from './places-cache.model.js';
 import PlacesSyncTile from './places-sync-tile.model.js';
-import { PLACES_SYNC_TILE_STATUS } from './places.constants.js';
+import { PLACES_SYNC_TILE_STATUS, PLACE_SOURCES } from './places.constants.js';
 import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 /**
@@ -152,6 +152,31 @@ class PlacesRepository {
       status: PLACES_SYNC_TILE_STATUS.SYNCING,
       startedAt: { $gte: lockStaleBefore },
     });
+  }
+
+  /**
+   * Remove the cached OpenStreetMap places inside a box that the latest sync of the box did not return.
+   * Places added by hand (source 'manual') are kept.
+   * @param {[number, number, number, number]} bbox - [south, west, north, east]
+   * @param {string[]} keptOsmIds
+   * @returns {Promise<number>} Number of places removed
+   */
+  async deleteOsmPlacesInBboxExcept([south, west, north, east], keptOsmIds) {
+    const result = await PlacesCache.deleteMany({
+      source: { $ne: PLACE_SOURCES.MANUAL },
+      osmId: { $nin: keptOsmIds },
+      coordinates: { $geoWithin: { $box: [[west, south], [east, north]] } },
+    });
+    return result.deletedCount;
+  }
+
+  /**
+   * Set the address of a place that still has none (background reverse geocoding)
+   * @param {string|ObjectId} id
+   * @param {string} address
+   */
+  async setAddressIfMissing(id, address) {
+    return PlacesCache.updateOne({ _id: id, address: { $in: ['', null] } }, { $set: { address } });
   }
 
   async findById(id) {

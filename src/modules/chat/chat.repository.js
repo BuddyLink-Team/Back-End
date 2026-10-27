@@ -164,6 +164,15 @@ class ChatRepository {
   }
 
   /**
+   * Find a message (sender and conversation only)
+   * @param {string|ObjectId} messageId
+   * @returns {Promise<{ senderId: ObjectId, conversationId: ObjectId }|null>}
+   */
+  async findMessageById(messageId) {
+    return Message.findById(messageId).select('senderId conversationId').lean();
+  }
+
+  /**
    * Create a new message
    * @param {Object} messageData
    * @returns {Promise<Object>}

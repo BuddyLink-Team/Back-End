@@ -22,21 +22,6 @@ class SafetyRepository {
     return [...ids];
   }
 
-  /**
-   * Check if a block relationship exists between two parents (either direction)
-   * @param {string|mongoose.Types.ObjectId} parentIdA
-   * @param {string|mongoose.Types.ObjectId} parentIdB
-   * @returns {Promise<boolean>}
-   */
-  async isBlocked(parentIdA, parentIdB) {
-    const block = await Block.findOne({
-      $or: [
-        { blockerId: parentIdA, blockedId: parentIdB },
-        { blockerId: parentIdB, blockedId: parentIdA },
-      ],
-    });
-    return !!block;
-  }
 
   /**
    * Create or update the block from one parent to another

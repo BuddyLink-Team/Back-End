@@ -1,3 +1,5 @@
+import { PARTICIPANT_STATUS } from '../playdate/playdate.constants.js';
+
 export class ChatDTO {
   static formatParticipant(participant) {
     if (!participant) return null;
@@ -31,7 +33,8 @@ export class ChatDTO {
         }
       : null;
 
-    const participants = (playdate.participants || []).map((p) => ({
+    // Only the families in the group chat: the host and the accepted invitees (pending / declined ones are not members)
+    const participants = (playdate.participants || []).filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED).map((p) => ({
       parent: this.formatParticipant(p.parentId),
       child: p.childId && typeof p.childId === 'object'
         ? {

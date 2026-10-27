@@ -41,6 +41,22 @@ export const PLACES_AUTO_SYNC_DEFAULTS = Object.freeze({
   STALE_LOCK_MS: 15 * 60 * 1000,
 });
 
+// Cache id of an OpenStreetMap element; other ids ("seed-…") are places added by hand, with no OSM page
+export const OSM_ID_REGEX = /^osm-(node|way|relation)-(\d+)$/;
+
+// Where a cached place comes from (places_cache.source)
+export const PLACE_SOURCES = Object.freeze({
+  OSM: 'osm', // places sync: removed from the cache once OpenStreetMap no longer returns it
+  MANUAL: 'manual', // added by hand (seed): never removed by a sync
+});
+
+// Missing addresses resolved in the background with Nominatim reverse geocoding (1 request per second)
+export const PLACES_ADDRESS_LOOKUP_DEFAULTS = Object.freeze({
+  INTERVAL_MS: 1100,
+  // Places waiting at most: a big sync never floods Nominatim
+  MAX_QUEUED: 300,
+});
+
 export const PLACES_SYNC_TILE_STATUS = Object.freeze({
   SYNCING: 'syncing',
   DONE: 'done',

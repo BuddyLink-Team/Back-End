@@ -22,14 +22,15 @@ export const onSafetyEvent = (event, handler) => {
 };
 
 /**
- * Emit a safety event and wait for every handler. A failing handler is logged and never
- * breaks the safety action that emitted the event.
+ * Emit a safety event and wait for every handler. Every handler runs even when another one
+ * fails; failures are logged and returned so the emitter can tell the caller.
  * @param {string} event
  * @param {Object} payload
+ * @returns {Promise<Error[]>} Errors of the failed handlers (empty when all succeeded)
  */
 export const emitSafetyEvent = async (event, payload) => {
   const results = await Promise.allSettled(emitter.listeners(event).map((handler) => handler(payload)));
-  results
-    .filter((result) => result.status === 'rejected')
-    .forEach((result) => logger.error(`[SafetyEvents] ${event} handler failed: ${result.reason?.message}`));
+  const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+  errors.forEach((error) => logger.error(`[SafetyEvents] ${event} handler failed: ${error?.message}`));
+  return errors;
 };
