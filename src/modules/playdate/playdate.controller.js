@@ -82,6 +82,19 @@ class PlaydateController {
   }
 
   /**
+   * POST /api/v1/playdates/:id/participants
+   * Host invites more friends' children (returns the playdate with schedule warnings)
+   */
+  async inviteParticipants(req, res, next) {
+    try {
+      const playdate = await playdateService.inviteParticipants(req.userId, req.params.id, req.body.participants);
+      return successResponse(res, playdate, 'Invitations sent successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
    * PUT /api/v1/playdates/:id/respond
    * Respond to playdate invitation (RSVP: accepted / declined)
    */
@@ -93,6 +106,19 @@ class PlaydateController {
         req.body.status
       );
       return successResponse(res, playdate, 'RSVP response recorded successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/playdates/:id/leave
+   * Participant leaves an upcoming playdate
+   */
+  async leavePlaydate(req, res, next) {
+    try {
+      const playdate = await playdateService.leavePlaydate(req.userId, req.params.id);
+      return successResponse(res, playdate, 'Successfully left playdate', 200);
     } catch (error) {
       return next(error);
     }

@@ -20,7 +20,8 @@ const blockSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: { createdAt: true, updatedAt: false },
+    // updatedAt changes when the parent blocks again with another reason
+    timestamps: true,
     collection: 'blocks',
   }
 );

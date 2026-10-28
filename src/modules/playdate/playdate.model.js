@@ -26,6 +26,12 @@ const playdateParticipantSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // When this family's participation quota was used for the playdate: set on the first accept,
+    // kept when they leave and are invited again, so the same playdate is never counted twice
+    quotaConsumedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: false }
 );

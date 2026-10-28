@@ -10,6 +10,7 @@ import {
   playdateIdParamValidation,
   createPlaydateValidation,
   cancelPlaydateValidation,
+  inviteParticipantsValidation,
   respondPlaydateValidation,
   createRescheduleValidation,
   voteRescheduleValidation,
@@ -44,9 +45,15 @@ router.get('/busy-times', validate(busyTimesValidation), playdateController.getB
 // GET /api/v1/playdates/:id
 router.get('/:id', validate(playdateIdParamValidation), playdateController.getPlaydateById);
 
+// POST /api/v1/playdates/:id/participants (Host invites more friends)
+router.post('/:id/participants', validate(inviteParticipantsValidation), playdateController.inviteParticipants);
+
 // PUT & PATCH /api/v1/playdates/:id/respond (RSVP)
 router.put('/:id/respond', validate(respondPlaydateValidation), playdateController.respondToPlaydate);
 router.patch('/:id/respond', validate(respondPlaydateValidation), playdateController.respondToPlaydate);
+
+// POST /api/v1/playdates/:id/leave (Participant leaves)
+router.post('/:id/leave', validate(playdateIdParamValidation), playdateController.leavePlaydate);
 
 // POST /api/v1/playdates/:id/reschedule (Propose reschedule)
 router.post('/:id/reschedule', validate(createRescheduleValidation), playdateController.createRescheduleRequest);

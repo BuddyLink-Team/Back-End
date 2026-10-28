@@ -22,21 +22,6 @@ class SafetyRepository {
     return [...ids];
   }
 
-  /**
-   * Check if a block relationship exists between two parents (either direction)
-   * @param {string|mongoose.Types.ObjectId} parentIdA
-   * @param {string|mongoose.Types.ObjectId} parentIdB
-   * @returns {Promise<boolean>}
-   */
-  async isBlocked(parentIdA, parentIdB) {
-    const block = await Block.findOne({
-      $or: [
-        { blockerId: parentIdA, blockedId: parentIdB },
-        { blockerId: parentIdB, blockedId: parentIdA },
-      ],
-    });
-    return !!block;
-  }
 
   /**
    * Create or update the block from one parent to another
@@ -113,6 +98,32 @@ class SafetyRepository {
     return Report.create(data);
   }
 
+  /**
+   * Find paginated list of blocked parents by blocker
+   * @param {string|ObjectId} blockerId
+   * @param {{ page: number, limit: number, blockedIds?: Array<ObjectId> }} options - blockedIds limits the
+   *   list to these parents (name search)
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findBlockedUsersByBlocker(blockerId, { page = 1, limit = 10, blockedIds } = {}) {
+    const query = { blockerId };
+    if (blockedIds) query.blockedId = { $in: blockedIds };
+    const [items, total] = await Promise.all([
+      Block.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({
+          path: 'blockedId',
+          select: 'fullName avatarUrl',
+          // A deleted parent keeps its id so the block can still be listed and removed
+          transform: (doc, id) => doc ?? { _id: id },
+        })
+        .lean(),
+      Block.countDocuments(query),
+    ]);
+    return { items, total };
+  }
 }
 
 export const safetyRepository = new SafetyRepository();

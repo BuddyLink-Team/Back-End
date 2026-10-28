@@ -121,6 +121,28 @@ export const createPlaydateValidation = [
 ];
 
 /**
+ * Validation rules for POST /playdates/:id/participants (host invites more friends)
+ */
+export const inviteParticipantsValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid playdate ID'),
+  body('participants')
+    .isArray({ min: 1 })
+    .withMessage('Pick at least one friend to invite'),
+  body('participants.*.parentId')
+    .notEmpty()
+    .withMessage('Participant parentId is required')
+    .isMongoId()
+    .withMessage('Invalid participant parentId'),
+  body('participants.*.childId')
+    .notEmpty()
+    .withMessage('Participant childId is required')
+    .isMongoId()
+    .withMessage('Invalid participant childId'),
+];
+
+/**
  * Validation rules for PATCH /playdates/:id/cancel
  */
 export const cancelPlaydateValidation = [

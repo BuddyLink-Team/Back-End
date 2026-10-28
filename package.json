@@ -14,6 +14,7 @@
     "seed:chat": "node scripts/seed-chat.js",
     "migrate:bud48": "node scripts/migrate-bud48-child-pairs.js",
     "geocode:parents": "node scripts/regeocode-parents.js",
+    "ai:check": "node scripts/check-gemini.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch --verbose",
     "test:gamification": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/gamification",
@@ -34,7 +35,7 @@
     "npm": ">=10.0.0"
   },
   "dependencies": {
-    "@google/genai": "^0.2.0",
+    "@google/genai": "2.28.0",
     "@payos/node": "^1.0.8",
     "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",

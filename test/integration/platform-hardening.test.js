@@ -127,22 +127,22 @@ describe('Safety report limits', () => {
     const reported = await register('reported');
 
     const externalRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${reporter.token}`)
-      .send({ reportedUserId: reported.parentId, reason: 'Spam', evidenceUrls: ['https://evil.example.com/x.png'] });
+      .send({ reportedUserId: reported.parentId, category: 'spam', reason: 'Spam', evidenceUrls: ['https://evil.example.com/x.png'] });
     expect(externalRes.status).toBe(400);
     expect(externalRes.body.error.code).toBe('INVALID_EVIDENCE_URL');
 
     const firstRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${reporter.token}`)
-      .send({ reportedUserId: reported.parentId, reason: 'Spam' });
+      .send({ reportedUserId: reported.parentId, category: 'spam', reason: 'Spam' });
     expect(firstRes.status).toBe(201);
 
     const repeatRes = await request(app)
-      .post('/api/v1/safety/report')
+      .post('/api/v1/safety/reports')
       .set('Authorization', `Bearer ${reporter.token}`)
-      .send({ reportedUserId: reported.parentId, reason: 'Spam again' });
+      .send({ reportedUserId: reported.parentId, category: 'spam', reason: 'Spam again' });
     expect(repeatRes.status).toBe(429);
     expect(repeatRes.body.error.code).toBe('REPORT_TOO_FREQUENT');
   });

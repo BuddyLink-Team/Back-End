@@ -36,6 +36,10 @@ const env = {
   AI: {
     PROVIDER: process.env.AI_PROVIDER || 'gemini',
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+    GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+    // Used once when the main model is rate limited or overloaded
+    GEMINI_FALLBACK_MODEL: process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash-lite',
+    REQUEST_TIMEOUT_MS: parseInt(process.env.AI_REQUEST_TIMEOUT_MS, 10) || 30000,
   },
 
   // 'mock' lets development run checkouts without PayOS keys (never honored in production)
@@ -68,6 +72,11 @@ const env = {
   PLACES: {
     // Fetch the places around a parent in the background when their area was never synced
     AUTO_SYNC: process.env.PLACES_AUTO_SYNC !== 'false',
+    // Resolve the missing addresses of the places shown, in the background (Nominatim). Off in tests:
+    // they never call the public API
+    ADDRESS_LOOKUP: process.env.PLACES_ADDRESS_LOOKUP
+      ? process.env.PLACES_ADDRESS_LOOKUP === 'true'
+      : process.env.NODE_ENV !== 'test',
   },
 
   GOOGLE: {

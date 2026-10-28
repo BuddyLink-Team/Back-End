@@ -94,10 +94,17 @@ class PlaydateRepository {
       } else if (normalizedStatus === 'upcoming') {
         andConditions.push({ status: PLAYDATE_STATUS.UPCOMING });
       } else if (normalizedStatus === 'confirmed') {
+        // Same rule as the displayStatus: the host's playdate once someone accepted and nobody is pending
         andConditions.push({
           status: PLAYDATE_STATUS.UPCOMING,
           $or: [
-            { hostParentId: parentId },
+            {
+              hostParentId: parentId,
+              $and: [
+                { 'participants.status': PARTICIPANT_STATUS.ACCEPTED },
+                { 'participants.status': { $ne: PARTICIPANT_STATUS.PENDING } },
+              ],
+            },
             { participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.ACCEPTED } } },
           ],
         });
@@ -274,18 +281,61 @@ class PlaydateRepository {
               ],
             },
           },
+          // Same rule as the displayStatus 'confirmed'
+          confirmed: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$status', PLAYDATE_STATUS.UPCOMING] },
+                    {
+                      $or: [
+                        {
+                          $and: [
+                            { $eq: ['$hostParentId', parentObjId] },
+                            { $in: [PARTICIPANT_STATUS.ACCEPTED, { $ifNull: ['$participants.status', []] }] },
+                            { $not: [{ $in: [PARTICIPANT_STATUS.PENDING, { $ifNull: ['$participants.status', []] }] }] },
+                          ],
+                        },
+                        {
+                          $gt: [
+                            {
+                              $size: {
+                                $filter: {
+                                  input: { $ifNull: ['$participants', []] },
+                                  as: 'p',
+                                  cond: {
+                                    $and: [
+                                      { $eq: ['$$p.parentId', parentObjId] },
+                                      { $eq: ['$$p.status', PARTICIPANT_STATUS.ACCEPTED] },
+                                    ],
+                                  },
+                                },
+                              },
+                            },
+                            0,
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
         },
       },
     ]);
 
-    const stats = results[0] || { all: 0, completed: 0, cancelled: 0, pending: 0 };
+    const stats = results[0] || { all: 0, completed: 0, cancelled: 0, pending: 0, confirmed: 0 };
     const upcomingCount = stats.all - stats.completed - stats.cancelled;
-    const confirmedCount = Math.max(0, upcomingCount - stats.pending);
 
     return {
       all: stats.all,
       upcoming: upcomingCount,
-      confirmed: confirmedCount,
+      confirmed: stats.confirmed,
       pending: stats.pending,
       completed: stats.completed,
       cancelled: stats.cancelled,
@@ -313,6 +363,105 @@ class PlaydateRepository {
       { $set: { 'participants.$.status': status, 'participants.$.respondedAt': new Date() } },
       { new: true },
     ).lean();
+  }
+
+  /**
+   * Atomically invite families to an upcoming playdate: new families are appended, families who
+   * declined or left get their entry back to pending (same place in the list, quotaConsumedAt kept)
+   * @param {string|ObjectId} id
+   * @param {Array<{ parentId: string, childId: string, status: string, invitedAt: Date }>} participants
+   * @param {Array<string>} [reinvitedParentIds] - families already in the playdate with a declined status
+   * @returns {Promise<Object|null>} null when the playdate is not upcoming anymore, a new family got in
+   *   or a re-invited family is not declined anymore in the meantime
+   */
+  async addParticipants(id, participants, reinvitedParentIds = []) {
+    const toObjectId = (value) => new mongoose.Types.ObjectId(String(value));
+    const reinvited = new Set(reinvitedParentIds.map(String));
+    // Update pipelines are not cast by Mongoose
+    const entries = participants.map((p) => ({
+      parentId: toObjectId(p.parentId),
+      childId: toObjectId(p.childId),
+      status: p.status,
+      invitedAt: p.invitedAt,
+      respondedAt: null,
+    }));
+    const fresh = entries.filter((e) => !reinvited.has(e.parentId.toString()));
+    const renewed = entries.filter((e) => reinvited.has(e.parentId.toString()));
+
+    const kept = renewed.length
+      ? {
+          $map: {
+            input: '$participants',
+            as: 'p',
+            in: {
+              $switch: {
+                branches: renewed.map((e) => ({ case: { $eq: ['$$p.parentId', e.parentId] }, then: { $mergeObjects: ['$$p', { $literal: e }] } })),
+                default: '$$p',
+              },
+            },
+          },
+        }
+      : '$participants';
+
+    return Playdate.findOneAndUpdate(
+      {
+        _id: id,
+        status: PLAYDATE_STATUS.UPCOMING,
+        'participants.parentId': { $nin: fresh.map((e) => e.parentId) },
+        ...(renewed.length && {
+          $and: renewed.map((e) => ({
+            participants: { $elemMatch: { parentId: e.parentId, status: PARTICIPANT_STATUS.DECLINED } },
+          })),
+        }),
+      },
+      [{ $set: { participants: { $concatArrays: [kept, { $literal: fresh }] } } }],
+      { new: true },
+    ).lean();
+  }
+
+  /**
+   * Mark a participant who has not declined yet as declined, only while the playdate is upcoming
+   * (atomic: a concurrent cancel/complete or a double click cannot leave twice)
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Object|null>} null when the playdate is no longer upcoming or the parent already left
+   */
+  async markParticipantLeft(id, parentId) {
+    return Playdate.findOneAndUpdate(
+      {
+        _id: id,
+        status: PLAYDATE_STATUS.UPCOMING,
+        participants: { $elemMatch: { parentId, status: { $ne: PARTICIPANT_STATUS.DECLINED } } },
+      },
+      { $set: { 'participants.$.status': PARTICIPANT_STATUS.DECLINED, 'participants.$.respondedAt': new Date() } },
+      { new: true },
+    ).lean();
+  }
+
+  /**
+   * Cancel a playdate that is not cancelled or completed yet (atomic: a double click cancels once)
+   * @param {string|ObjectId} id
+   * @param {{ cancelledBy: ObjectId, reason: string, cancelledAt: Date }} cancellation
+   * @returns {Promise<Object|null>} The playdate before the update, null when it was already closed
+   */
+  async cancelIfOpen(id, cancellation) {
+    return Playdate.findOneAndUpdate(
+      { _id: id, status: { $nin: [PLAYDATE_STATUS.CANCELLED, PLAYDATE_STATUS.COMPLETED] } },
+      { $set: { status: PLAYDATE_STATUS.CANCELLED, cancellation } },
+      { new: false },
+    ).lean();
+  }
+
+  /**
+   * Remember that the participation quota of this family was used for the playdate
+   * @param {string|ObjectId} id
+   * @param {string|ObjectId} parentId
+   */
+  async markParticipantQuotaConsumed(id, parentId) {
+    return Playdate.updateOne(
+      { _id: id, 'participants.parentId': parentId },
+      { $set: { 'participants.$.quotaConsumedAt': new Date() } },
+    );
   }
 
   /**

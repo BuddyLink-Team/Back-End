@@ -6,6 +6,7 @@ import connectionService from '../connection/connection.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/AppError.js';
+import logger from '../../shared/logger/index.js';
 import {
   getScheduledStart,
   getScheduledEnd,
@@ -185,6 +186,58 @@ class PlaydateService {
         conflicts.map(({ playdateId }) => ({ playdateId }))
       );
     }
+  }
+
+  /**
+   * Invitees of the host, one per family: connected friends only, their own child, no block relationship
+   * @param {ObjectId} hostParentId
+   * @param {Array<{ parentId: string, childId: string }>} [rawParticipants]
+   * @returns {Promise<Array<{ parentId: string, childId: string }>>}
+   * @private
+   */
+  async _validateInvitees(hostParentId, rawParticipants) {
+    const participants = Array.isArray(rawParticipants) ? rawParticipants : [];
+    if (participants.some((p) => toId(p.parentId) === hostParentId.toString())) {
+      throw new AppError('Host cannot invite themselves to a playdate', 400, 'CANNOT_INVITE_SELF');
+    }
+
+    const seenParents = new Set();
+    const uniqueParticipants = participants.filter((p) => {
+      const pid = toId(p.parentId);
+      if (seenParents.has(pid)) return false;
+      seenParents.add(pid);
+      return true;
+    });
+
+    // Safety first: no invitation between parents who blocked each other
+    if (await safetyService.isBlockedWithAny(hostParentId, uniqueParticipants.map((p) => toId(p.parentId)))) {
+      throw new AppError('Cannot invite a parent you have a block relationship with', 403, 'BLOCKED_INTERACTION');
+    }
+
+    for (const p of uniqueParticipants) {
+      const targetParentId = toId(p.parentId);
+      const isFriend = await connectionService.areParentsConnected(hostParentId, targetParentId);
+      if (!isFriend) {
+        throw new AppError('Only connected friends can be invited to a playdate', 400, 'NOT_CONNECTED_FRIEND');
+      }
+      const isParticipantChildValid = await childService.isChildOwnedByParent(toId(p.childId), targetParentId);
+      if (!isParticipantChildValid) {
+        throw new AppError('Invited child does not belong to the selected parent', 400, 'INVALID_PARTICIPANT_CHILD');
+      }
+    }
+    return uniqueParticipants;
+  }
+
+  /**
+   * Schedule conflicts of invited children, returned as warnings (they are checked again when their parent accepts)
+   * @private
+   */
+  async _inviteeWarnings(invitees, start, end, excludePlaydateId = null) {
+    const conflicts = await this._findConflicts(invitees.map((p) => toId(p.childId)), start, end, excludePlaydateId);
+    return [...new Set(conflicts.map((c) => c.childId))].map((childId) => ({
+      code: PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
+      childId,
+    }));
   }
 
   // ---------------------------------------------------------------------------
@@ -573,45 +626,12 @@ class PlaydateService {
     }
 
     // 3. Filter, deduplicate, and validate participants
-    const rawParticipants = Array.isArray(data.participants) ? data.participants : [];
-    if (rawParticipants.some((p) => toId(p.parentId) === hostParentId.toString())) {
-      throw new AppError('Host cannot invite themselves to a playdate', 400, 'CANNOT_INVITE_SELF');
-    }
-
-    const seenParents = new Set();
-    const uniqueParticipants = rawParticipants.filter((p) => {
-      const pid = toId(p.parentId);
-      if (seenParents.has(pid)) return false;
-      seenParents.add(pid);
-      return true;
-    });
-    const participantParentIds = uniqueParticipants.map((p) => toId(p.parentId));
-
-    // Safety first: no invitation between parents who blocked each other
-    if (await safetyService.isBlockedWithAny(hostParentId, participantParentIds)) {
-      throw new AppError('Cannot invite a parent you have a block relationship with', 403, 'BLOCKED_INTERACTION');
-    }
-
-    for (const p of uniqueParticipants) {
-      const targetParentId = toId(p.parentId);
-      const isFriend = await connectionService.areParentsConnected(hostParentId, targetParentId);
-      if (!isFriend) {
-        throw new AppError('Only connected friends can be invited to a playdate', 400, 'NOT_CONNECTED_FRIEND');
-      }
-      const isParticipantChildValid = await childService.isChildOwnedByParent(toId(p.childId), targetParentId);
-      if (!isParticipantChildValid) {
-        throw new AppError('Invited child does not belong to the selected parent', 400, 'INVALID_PARTICIPANT_CHILD');
-      }
-    }
+    const uniqueParticipants = await this._validateInvitees(hostParentId, data.participants);
 
     // 4. The host's child cannot be in two playdates at once; invited children only get a warning
     //    (they are checked again when their parent accepts). Nothing is created or sent before this.
     await this._assertNoConflict(data.hostChildId, start, end);
-    const invitedConflicts = await this._findConflicts(uniqueParticipants.map((p) => toId(p.childId)), start, end);
-    const warnings = [...new Set(invitedConflicts.map((c) => c.childId))].map((childId) => ({
-      code: PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
-      childId,
-    }));
+    const warnings = await this._inviteeWarnings(uniqueParticipants, start, end);
 
     // 5. Check the creation quota first, consume it only once the playdate exists
     await subscriptionService.checkAndConsumeQuota(hostParentId, 'playdateCreate', false);
@@ -660,6 +680,69 @@ class PlaydateService {
   }
 
   /**
+   * Invite more friends' children to an upcoming playdate (Host only), e.g. once every invitee declined.
+   * Same checks as at creation. A family still invited or joined cannot be invited again, one who declined or left can,
+   * and no quota is used: the playdate was counted when it was created.
+   * @param {string} userId
+   * @param {string} id
+   * @param {Array<{ parentId: string, childId: string }>} participants
+   * @returns {Promise<Object>} The playdate, with SCHEDULE_CONFLICT warnings for busy invitees
+   */
+  async inviteParticipants(userId, id, participants) {
+    const hostParentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (!this._isHost(playdate, hostParentId)) {
+      throw new AppError('Only the host can invite friends to the playdate', 403, 'FORBIDDEN_INVITE');
+    }
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Friends can only be invited to an upcoming playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+    const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+    if (start <= new Date()) {
+      throw new AppError('The playdate has already started', 400, 'PLAYDATE_IN_PAST');
+    }
+
+    const invitees = await this._validateInvitees(hostParentId, participants);
+    if (!invitees.length) {
+      throw new AppError('Pick at least one friend to invite', 400, 'NO_INVITEES');
+    }
+    // A family who declined or left can be invited again; one still pending or joined cannot
+    const statusByParent = new Map((playdate.participants || []).map((p) => [toId(p.parentId), p.status]));
+    const isStillIn = (p) => statusByParent.has(toId(p.parentId)) && statusByParent.get(toId(p.parentId)) !== PARTICIPANT_STATUS.DECLINED;
+    if (invitees.some(isStillIn)) {
+      throw new AppError('This family is already invited to the playdate', 400, 'ALREADY_INVITED');
+    }
+    const reinvitedParentIds = invitees.map((p) => toId(p.parentId)).filter((pid) => statusByParent.has(pid));
+
+    const warnings = await this._inviteeWarnings(invitees, start, endOf(start, durationOf(playdate)), id);
+
+    // Atomic: fails if the playdate was closed or the same family invited in the meantime
+    const updated = await playdateRepository.addParticipants(
+      id,
+      invitees.map((p) => ({
+        parentId: toId(p.parentId),
+        childId: toId(p.childId),
+        status: PARTICIPANT_STATUS.PENDING,
+        invitedAt: new Date(),
+      })),
+      reinvitedParentIds
+    );
+    if (!updated) {
+      throw new AppError('The playdate changed in the meantime, please reload it', 409, 'PLAYDATE_CHANGED');
+    }
+
+    await emitPlaydateEvent(PLAYDATE_EVENTS.INVITED, {
+      playdateId: id.toString(),
+      hostParentId: hostParentId.toString(),
+      participantParentIds: invitees.map((p) => toId(p.parentId)),
+    });
+
+    const populated = await playdateRepository.findById(id);
+    return { ...PlaydateResponseDTO.toResponse(populated, hostParentId), warnings };
+  }
+
+  /**
    * Cancel an upcoming playdate (Host only)
    */
   async cancelPlaydate(userId, id, reason = '') {
@@ -676,18 +759,39 @@ class PlaydateService {
       throw new AppError('Cannot cancel a completed playdate', 400, 'INVALID_PLAYDATE_STATUS');
     }
 
-    const updated = await playdateRepository.updateById(id, {
-      status: PLAYDATE_STATUS.CANCELLED,
-      cancellation: {
-        cancelledBy: parentId,
-        reason: reason || 'Cancelled by host',
-        cancelledAt: new Date(),
-      },
+    const before = await playdateRepository.cancelIfOpen(id, {
+      cancelledBy: parentId,
+      reason: reason || 'Cancelled by host',
+      cancelledAt: new Date(),
     });
+    if (!before) {
+      throw new AppError('The playdate changed in the meantime, please reload it', 409, 'PLAYDATE_CHANGED');
+    }
 
     await rescheduleRepository.cancelPendingByPlaydateId(id);
+    await this._refundJoinedParticipants(before);
 
+    const updated = await playdateRepository.findById(id);
     return PlaydateResponseDTO.toResponse(updated, parentId);
+  }
+
+  /**
+   * The host cancelled: families who were still in give back the participation used this month.
+   * Families who left keep it used (their own choice), and the host's creation is not given back.
+   * @param {Object} playdate - The playdate as it was before the cancellation
+   * @private
+   */
+  async _refundJoinedParticipants(playdate) {
+    const joined = (playdate.participants || []).filter(
+      (p) => p.status === PARTICIPANT_STATUS.ACCEPTED && p.quotaConsumedAt
+    );
+    await Promise.all(
+      joined.map((p) =>
+        subscriptionService.refundQuota(p.parentId, 'playdateParticipate', p.quotaConsumedAt).catch((error) => {
+          logger.error(`[Playdate] participation refund failed for parent=${p.parentId}: ${error.message}`);
+        })
+      )
+    );
   }
 
   /**
@@ -716,6 +820,8 @@ class PlaydateService {
     }
 
     const isAccepting = status === PARTICIPANT_STATUS.ACCEPTED;
+    // A family who left and was invited again already used a participation for this playdate
+    const usesQuota = isAccepting && !participant.quotaConsumedAt;
 
     if (isAccepting) {
       // The invited child cannot join two playdates at once (declining is always allowed)
@@ -723,7 +829,9 @@ class PlaydateService {
       await this._assertNoConflict(toId(participant.childId), start, endOf(start, durationOf(playdate)), id);
 
       // Participation quota (Free plan: 3/month): check now, consume once the answer is saved
-      await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', false);
+      if (usesQuota) {
+        await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', false);
+      }
     }
 
     // Atomic: a double click cannot answer twice
@@ -733,11 +841,14 @@ class PlaydateService {
     }
 
     if (isAccepting) {
-      try {
-        await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', true);
-      } catch (error) {
-        await playdateRepository.resetParticipantToPending(id, parentId);
-        throw error;
+      if (usesQuota) {
+        try {
+          await subscriptionService.checkAndConsumeQuota(parentId, 'playdateParticipate', true);
+        } catch (error) {
+          await playdateRepository.resetParticipantToPending(id, parentId);
+          throw error;
+        }
+        await playdateRepository.markParticipantQuotaConsumed(id, parentId);
       }
 
       // Section 6.2: every accepted participant must agree to a pending reschedule
@@ -748,6 +859,58 @@ class PlaydateService {
 
     const populated = await playdateRepository.findById(id);
     return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
+  /**
+   * Leave an upcoming playdate (Participant only)
+   * @param {string} userId
+   * @param {string} id - Playdate ID
+   */
+  async leavePlaydate(userId, id) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Cannot leave a completed or cancelled playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    if (this._isHost(playdate, parentId)) {
+      throw new AppError('Host cannot leave their own playdate. Cancel the playdate instead.', 400, 'HOST_CANNOT_LEAVE');
+    }
+
+    const participant = (playdate.participants || []).find((p) => toId(p.parentId) === parentId.toString());
+    if (!participant) {
+      throw new AppError('You are not a participant of this playdate', 403, 'NOT_PARTICIPANT');
+    }
+    if (participant.status === PARTICIPANT_STATUS.DECLINED) {
+      throw new AppError('You have already left this playdate', 400, 'ALREADY_LEFT');
+    }
+
+    const left = await playdateRepository.markParticipantLeft(id, parentId);
+    if (!left) {
+      throw new AppError('You have already left this playdate or it is no longer upcoming', 409, 'LEAVE_CONFLICT');
+    }
+
+    await this._removeVoterFromPendingReschedule(id, parentId);
+    await this._notifyMembersChanged(id);
+
+    const populated = await playdateRepository.findById(id);
+    return PlaydateResponseDTO.toResponse(populated, parentId);
+  }
+
+  /**
+   * A parent who left no longer votes on the pending reschedule (Section 6.2: only accepted
+   * participants vote). If every remaining voter already accepted, the new schedule applies now.
+   * @private
+   */
+  async _removeVoterFromPendingReschedule(playdateId, parentId) {
+    const pendingReq = await rescheduleRepository.removeVoterFromPending(playdateId, parentId);
+    if (!pendingReq || !pendingReq.responses.every((r) => r.status === PARTICIPANT_STATUS.ACCEPTED)) return;
+
+    await this._applySchedule(playdateId, pendingReq);
+    pendingReq.status = RESCHEDULE_STATUS.ACCEPTED;
+    pendingReq.resolvedAt = new Date();
+    await pendingReq.save();
   }
 
   // ---------------------------------------------------------------------------

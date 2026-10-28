@@ -5,6 +5,14 @@ export const CONNECTION_STATUS = Object.freeze({
   REMOVED: 'removed',
 });
 
+// Connection between the viewer and another parent, as seen by the viewer
+export const VIEWER_CONNECTION_STATUS = Object.freeze({
+  NONE: 'none',
+  SENT: 'sent', // Viewer's request is pending
+  RECEIVED: 'received', // The other parent's request is pending
+  CONNECTED: 'connected',
+});
+
 // How a child pair on a connection was created
 export const CHILD_PAIR_SOURCES = Object.freeze({
   DISCOVERY: 'discovery',
