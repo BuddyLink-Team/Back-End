@@ -29,6 +29,7 @@ import Connection from '../src/modules/connection/connection.model.js';
 import Swipe from '../src/modules/discovery/discovery.model.js';
 import { buildChildPairKey } from '../src/modules/connection/connection.constants.js';
 import PlacesCache from '../src/modules/places/places-cache.model.js';
+import { PLACE_SOURCES } from '../src/modules/places/places.constants.js';
 import Conversation from '../src/modules/chat/conversation.model.js';
 import Message from '../src/modules/chat/message.model.js';
 import Playdate from '../src/modules/playdate/playdate.model.js';
@@ -39,6 +40,7 @@ import UserBadge from '../src/modules/gamification/user-badge.model.js';
 import { BADGE_DEFINITIONS } from '../src/modules/gamification/gamification.constants.js';
 import Notification from '../src/modules/notification/notification.model.js';
 import Block from '../src/modules/safety/block.model.js';
+import { DEFAULT_BLOCK_REASON } from '../src/modules/safety/safety.constants.js';
 import Report from '../src/modules/safety/report.model.js';
 import Subscription from '../src/modules/subscription/subscription.model.js';
 import SubscriptionPlan from '../src/modules/subscription/subscription-plan.model.js';
@@ -159,17 +161,20 @@ const BIOS = [
   'Bé nhà mình hòa đồng nhưng hơi nóng tính, đang tập chia sẻ đồ chơi. Mong gặp các bạn kiên nhẫn để con học hỏi thêm.',
 ];
 
+// osm-*: the real OpenStreetMap element (checked on openstreetmap.org), coordinates = its center.
+// seed-*: no matching OSM element, so the place has no OpenStreetMap link (Google Maps searches name + address).
 const PLACES = [
-  { name: 'Công viên Biển Đông', address: 'Đường Võ Nguyên Giáp, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2475, 16.0717], placeType: 'park', osmId: 'osm-way-243118562' },
-  { name: 'Công viên APEC', address: 'Đường Bạch Đằng, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2238, 16.0598], placeType: 'park', osmId: 'osm-way-512870334' },
-  { name: 'Công viên 29/3', address: 'Đường Điện Biên Phủ, Phường Thanh Khê, Thành phố Đà Nẵng', coordinates: [108.2004, 16.0641], placeType: 'park', osmId: 'osm-way-31876540' },
-  { name: 'Sun World Đà Nẵng Wonders', address: '1 Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2283, 16.0391], placeType: 'playground', osmId: 'osm-way-326440118' },
-  { name: 'Bảo tàng Điêu khắc Chăm', address: '02 Đường 2 Tháng 9, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2232, 16.0605], placeType: 'workshop', osmId: 'osm-way-89221457' },
-  { name: 'Thư viện Khoa học Tổng hợp Đà Nẵng', address: 'Đường Lê Duẩn, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2166, 16.0716], placeType: 'library', osmId: 'osm-way-415206643' },
-  { name: 'Khu vui chơi trẻ em Lotte Mart Đà Nẵng', address: '6 Nại Nam, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2244, 16.0352], placeType: 'kids_cafe', osmId: 'osm-way-276113902' },
-  { name: 'Khu vui chơi Vincom Plaza Ngô Quyền', address: '910A Ngô Quyền, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2302, 16.0714], placeType: 'kids_cafe', osmId: 'osm-way-301447251' },
-  { name: 'Cung Thể thao Tiên Sơn', address: 'Đường Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2232, 16.0362], placeType: 'sports_center', osmId: 'osm-way-145532980' },
-  { name: 'Công viên Biển Hội An (An Bàng)', address: 'Bãi biển An Bàng, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3418, 15.9139], placeType: 'park', osmId: 'osm-way-198604477' },
+  { name: 'Công viên Biển Đông', address: 'Đường Võ Nguyên Giáp, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.24593, 16.06815], placeType: 'park', osmId: 'osm-way-149699484' },
+  { name: 'Công viên APEC', address: 'Đường Bạch Đằng, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.22327, 16.0586], placeType: 'park', osmId: 'osm-way-675604354' },
+  { name: 'Công viên 29/3', address: 'Đường Điện Biên Phủ, Phường Thanh Khê, Thành phố Đà Nẵng', coordinates: [108.2004, 16.0641], placeType: 'park', osmId: 'seed-cong-vien-29-3' },
+  { name: 'Sun World Đà Nẵng Wonders', address: '1 Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2283, 16.0391], placeType: 'playground', osmId: 'seed-sun-world-da-nang-wonders' },
+  { name: 'Bảo tàng Điêu khắc Chăm', address: '02 Đường 2 Tháng 9, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.22317, 16.0602], placeType: 'workshop', osmId: 'osm-way-302872188' },
+  { name: 'Thư viện Khoa học Tổng hợp Đà Nẵng', address: 'Đường Lê Duẩn, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2166, 16.0716], placeType: 'library', osmId: 'seed-thu-vien-khth-da-nang' },
+  // Kids areas inside a mall: the OSM element is the mall itself
+  { name: 'Khu vui chơi trẻ em Lotte Mart Đà Nẵng', address: '6 Nại Nam, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.22923, 16.03487], placeType: 'kids_cafe', osmId: 'osm-way-302765734' },
+  { name: 'Khu vui chơi Vincom Plaza Ngô Quyền', address: '910A Ngô Quyền, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2303, 16.0714], placeType: 'kids_cafe', osmId: 'osm-way-693393717' },
+  { name: 'Cung Thể thao Tiên Sơn', address: 'Đường Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.22654, 16.03676], placeType: 'sports_center', osmId: 'osm-way-302765735' },
+  { name: 'Công viên Biển Hội An (An Bàng)', address: 'Bãi biển An Bàng, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3418, 15.9139], placeType: 'park', osmId: 'seed-cong-vien-bien-an-bang' },
 ];
 
 // Same badges as the app (title / description / icon / requirement), without the metric used to evaluate them
@@ -345,6 +350,13 @@ const OPENING_HOURS = {
 
 // Public sample image used for the image messages and report evidence of the demo data
 const SAMPLE_IMAGE_URL = 'https://res.cloudinary.com/demo/image/upload/sample.jpg';
+
+// Same strings the app stores when blocking (frontend BLOCK_REASONS, backend DEFAULT_BLOCK_REASON)
+const BLOCK_REASONS = {
+  DEFAULT: DEFAULT_BLOCK_REASON,
+  CHAT: 'Không muốn tiếp tục trò chuyện',
+  CONNECTION: 'Không muốn tiếp tục kết nối',
+};
 
 // AI assistant demo conversations: [role, content, toolCall?]
 const AI_SESSIONS = [
@@ -531,6 +543,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       address: p.address,
       coordinates: { type: 'Point', coordinates: p.coordinates },
       placeType: p.placeType,
+      // Never removed by a places sync (the kids areas in a mall are not kid-friendly places in OSM)
+      source: PLACE_SOURCES.MANUAL,
       openingHours: OPENING_HOURS[p.placeType] || '',
       lastFetchedAt: daysAgo(int(1, 20)),
     })),
@@ -538,9 +552,9 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // ---- Safety: blocks (pairs never connect) ---------------------------------------
   const blockPairs = [
-    [parents[30], parents[31], 'Nhắn tin liên tục dù mình đã từ chối khéo.'],
-    [parents[33], parents[34], 'Không phù hợp quan điểm nuôi dạy con.'],
-    [parents[40], parents[41], 'Đã gặp ngoài đời và không muốn tiếp tục liên lạc.'],
+    [parents[30], parents[31], BLOCK_REASONS.CHAT],
+    [parents[33], parents[34], BLOCK_REASONS.CONNECTION],
+    [parents[40], parents[41], BLOCK_REASONS.DEFAULT],
   ];
   await Block.insertMany(
     blockPairs.map(([blocker, blocked, reason], i) => ({
@@ -849,11 +863,18 @@ export async function seedDatabase({ log = console.log } = {}) {
   const reportedMessage = await Message.findOne({ conversationId: directConversations[3]._id, type: 'text' }).sort({ createdAt: -1 });
   const messageReporter = directConversations[3].participants.find((id) => !id.equals(reportedMessage.senderId));
   await Report.insertMany([
-    { reporterId: parents[30]._id, reportedUserId: parents[31]._id, targetType: 'user', reason: 'Quấy rối', description: 'Gửi lời mời kết nối nhiều lần và nhắn tin không phù hợp sau khi bị từ chối.', status: 'resolved', adminNotes: 'Đã cảnh cáo tài khoản, theo dõi thêm 30 ngày.', resolvedBy: admin._id, resolvedAt: daysAgo(8), createdAt: daysAgo(10) },
-    { reporterId: parents[33]._id, reportedUserId: parents[34]._id, targetType: 'user', reason: 'Thông tin hồ sơ không trung thực', description: 'Ảnh đại diện và độ tuổi của bé có vẻ không đúng thực tế.', status: 'reviewing', adminNotes: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.', createdAt: daysAgo(5) },
-    { reporterId: cancelledPlaydate.hostParentId, reportedUserId: cancelledPlaydate.cancellation.cancelledBy, targetType: 'playdate', targetPlaydateId: cancelledPlaydate._id, reason: 'Không đến buổi hẹn', description: 'Hủy sát giờ mà không báo trước, cả nhà đã ra tới công viên.', status: 'dismissed', adminNotes: 'Lý do hủy hợp lệ (bé bị ốm), không vi phạm.', resolvedBy: admin._id, resolvedAt: daysAgo(2), createdAt: daysAgo(3) },
-    { reporterId: messageReporter, reportedUserId: reportedMessage.senderId, targetType: 'message', targetMessageId: reportedMessage._id, reason: 'Báo cáo nhầm', description: 'Lỡ bấm báo cáo khi đang đọc tin nhắn, mong admin bỏ qua giúp.', status: 'dismissed', adminNotes: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.', resolvedBy: admin._id, resolvedAt: daysAgo(0, 9), createdAt: daysAgo(1, 21) },
-    { reporterId: parents[44]._id, reportedUserId: parents[45]._id, targetType: 'user', reason: 'Ngôn từ không phù hợp', description: 'Dùng từ ngữ thiếu lịch sự trong phần giới thiệu bản thân.', evidenceUrls: [SAMPLE_IMAGE_URL], status: 'pending', createdAt: daysAgo(0, 7, 45) },
+    { reporterId: parents[30]._id, reportedUserId: parents[31]._id, targetType: 'user', category: 'harassment', reason: 'Quấy rối', description: 'Gửi lời mời kết nối nhiều lần và nhắn tin không phù hợp sau khi bị từ chối.', status: 'resolved', adminNotes: 'Đã cảnh cáo tài khoản, theo dõi thêm 30 ngày.', resolvedBy: admin._id, resolvedAt: daysAgo(8), createdAt: daysAgo(10) },
+    { reporterId: parents[33]._id, reportedUserId: parents[34]._id, targetType: 'user', category: 'fake_profile', reason: 'Thông tin hồ sơ không trung thực', description: 'Ảnh đại diện và độ tuổi của bé có vẻ không đúng thực tế.', status: 'reviewing', adminNotes: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.', createdAt: daysAgo(5) },
+    { reporterId: cancelledPlaydate.hostParentId, reportedUserId: cancelledPlaydate.cancellation.cancelledBy, targetType: 'playdate', targetPlaydateId: cancelledPlaydate._id, category: 'no_show', reason: 'Không đến buổi hẹn', description: 'Hủy sát giờ mà không báo trước, cả nhà đã ra tới công viên.', status: 'dismissed', adminNotes: 'Lý do hủy hợp lệ (bé bị ốm), không vi phạm.', resolvedBy: admin._id, resolvedAt: daysAgo(2), createdAt: daysAgo(3) },
+    { reporterId: messageReporter, reportedUserId: reportedMessage.senderId, targetType: 'message', targetMessageId: reportedMessage._id, category: 'other', reason: 'Báo cáo nhầm', description: 'Lỡ bấm báo cáo khi đang đọc tin nhắn, mong admin bỏ qua giúp.', status: 'dismissed', adminNotes: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.', resolvedBy: admin._id, resolvedAt: daysAgo(0, 9), createdAt: daysAgo(1, 21) },
+    { reporterId: parents[44]._id, reportedUserId: parents[45]._id, targetType: 'user', category: 'inappropriate_content', reason: 'Ngôn từ không phù hợp', description: 'Dùng từ ngữ thiếu lịch sự trong phần giới thiệu bản thân.', evidenceUrls: [SAMPLE_IMAGE_URL], status: 'pending', createdAt: daysAgo(0, 7, 45) },
+  ]);
+
+  // ---- Blocks --------------------------------------------------------------------------------
+  await Block.insertMany([
+    { blockerId: parents[0]._id, blockedId: parents[25]._id, reason: BLOCK_REASONS.CHAT, createdAt: daysAgo(3, 14) },
+    { blockerId: parents[0]._id, blockedId: parents[26]._id, reason: BLOCK_REASONS.CONNECTION, createdAt: daysAgo(1, 10) },
+    { blockerId: parents[1]._id, blockedId: parents[27]._id, reason: BLOCK_REASONS.DEFAULT, createdAt: daysAgo(2, 8) },
   ]);
 
   // ---- Notifications ---------------------------------------------------------------------------

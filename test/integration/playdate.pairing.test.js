@@ -7,6 +7,7 @@ import Connection from '../../src/modules/connection/connection.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
 import playdateService from '../../src/modules/playdate/playdate.service.js';
 import { buildChildPairKey } from '../../src/modules/connection/connection.constants.js';
+import { grantPremium } from '../helpers/subscriptionHelper.js';
 
 const PASSWORD = 'Password123!';
 const YEAR = 365.25 * 24 * 60 * 60 * 1000;
@@ -24,6 +25,7 @@ const registerParent = async (label, children) => {
     { _id: parentId },
     { $set: { location: { area: 'Hải Châu', city: 'Đà Nẵng', address: '1 Secret St', coordinates: { type: 'Point', coordinates: [108.22, 16.06] } } } }
   );
+  if (children.length > 1) await grantPremium(parentId);
   const childIds = [];
   for (const child of children) {
     const created = await Child.create({ parentId, gender: 'girl', dateOfBirth: bornYearsAgo(5), ...child });

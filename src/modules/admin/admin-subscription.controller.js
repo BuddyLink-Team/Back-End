@@ -39,11 +39,11 @@ class AdminSubscriptionController {
   }
 
   /**
-   * GET /api/v1/admin/payments
+   * GET /api/v1/admin/transactions
    */
-  async getPayments(req, res, next) {
+  async getTransactions(req, res, next) {
     try {
-      const data = await adminSubscriptionService.getPayments(req.query);
+      const data = await adminSubscriptionService.getTransactions(req.query);
       return successResponse(res, data, 'Payments retrieved successfully', 200);
     } catch (error) {
       return next(error);
@@ -51,11 +51,11 @@ class AdminSubscriptionController {
   }
 
   /**
-   * GET /api/v1/admin/payments/:id
+   * GET /api/v1/admin/transactions/:id
    */
-  async getPaymentDetail(req, res, next) {
+  async getTransactionDetail(req, res, next) {
     try {
-      const payment = await adminSubscriptionService.getPaymentDetail(req.params.id);
+      const payment = await adminSubscriptionService.getTransactionDetail(req.params.id);
       return successResponse(res, payment, 'Payment detail retrieved successfully', 200);
     } catch (error) {
       return next(error);

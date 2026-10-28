@@ -3,6 +3,7 @@ import request from 'supertest';
 import app from '../../src/app.js';
 import Child from '../../src/modules/child/child.model.js';
 import Parent from '../../src/modules/parent/parent.model.js';
+import Connection from '../../src/modules/connection/connection.model.js';
 
 const registerParent = async (label) => {
   const res = await request(app).post('/api/v1/auth/register').send({
@@ -139,6 +140,23 @@ describe('Child public profile visibility', () => {
     expect(ownerRes.status).toBe(200);
 
     await Parent.findByIdAndUpdate(owner.parentId, { $set: { 'privacySettings.isProfileHidden': false } });
+  });
+
+  it("should report the viewer's connection status with the child's parent", async () => {
+    expect((await getPublicProfile(viewer.token)).body.data.connectionStatus).toBe('none');
+
+    const connection = await Connection.create({
+      parents: [viewer.parentId, owner.parentId],
+      requesterId: viewer.parentId,
+      recipientId: owner.parentId,
+    });
+    expect((await getPublicProfile(viewer.token)).body.data.connectionStatus).toBe('sent');
+    expect((await getPublicProfile(owner.token)).body.data.connectionStatus).toBe('none');
+
+    await Connection.findByIdAndUpdate(connection._id, { $set: { status: 'accepted' } });
+    expect((await getPublicProfile(viewer.token)).body.data.connectionStatus).toBe('connected');
+
+    await Connection.deleteOne({ _id: connection._id });
   });
 
   it('should hide the profile when the owner has blocked the viewer', async () => {

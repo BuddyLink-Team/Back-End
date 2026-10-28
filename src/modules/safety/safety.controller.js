@@ -15,9 +15,28 @@ class SafetyController {
 
   async unblockUser(req, res, next) {
     try {
-      const targetParentId = req.params.blockedId || req.body.blockedId;
+      const targetParentId = req.params.id;
       const result = await safetyService.unblockUser(req.userId, targetParentId);
       return successResponse(res, result, 'User unblocked successfully', 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getBlockedUsers(req, res, next) {
+    try {
+      const { page, limit, search } = req.query;
+      const result = await safetyService.getBlockedUsers(req.userId, { page, limit, search });
+      return successResponse(res, result, 'Blocked users retrieved successfully', 200);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadEvidence(req, res, next) {
+    try {
+      const result = await safetyService.uploadEvidence(req.file);
+      return successResponse(res, result, 'Evidence uploaded successfully', 200);
     } catch (error) {
       next(error);
     }

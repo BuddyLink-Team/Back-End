@@ -3,7 +3,7 @@ import parentService from '../parent/parent.service.js';
 import childService from '../child/child.service.js';
 import safetyService from '../safety/safety.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
 import { CONNECTION_STATUS, CHILD_PAIR_SOURCES, buildChildPairKey } from './connection.constants.js';
 import { PAGINATION } from '../../shared/constants/index.js';
@@ -64,6 +64,14 @@ class ConnectionService {
    */
   async getAcceptedConnections(parentId) {
     return connectionRepository.findAcceptedForParent(parentId);
+  }
+
+  /**
+   * Admin oversight: connections across the platform counted by status
+   * @returns {Promise<{ total: number, pending: number, accepted: number, declined: number, removed: number }>}
+   */
+  async getConnectionStats() {
+    return connectionRepository.countByStatus();
   }
 
   /**
@@ -248,8 +256,8 @@ class ConnectionService {
    * Move the connection to a new status, or explain why it is not in the expected one
    * @private
    */
-  async _transition(connectionId, fromStatus, toStatus) {
-    const updated = await connectionRepository.transitionStatus(connectionId, fromStatus, toStatus);
+  async _transition(connectionId, fromStatus, toStatus, extraFields = {}) {
+    const updated = await connectionRepository.transitionStatus(connectionId, fromStatus, toStatus, extraFields);
     if (!updated) {
       throw new AppError(`Connection is not ${fromStatus}`, 409, 'INVALID_CONNECTION_STATE');
     }
@@ -303,6 +311,17 @@ class ConnectionService {
       connection.status === CONNECTION_STATUS.PENDING && connection.requesterId.toString() === parentId.toString();
     const fromStatus = isOwnPendingRequest ? CONNECTION_STATUS.PENDING : CONNECTION_STATUS.ACCEPTED;
     return this._transition(connectionId, fromStatus, CONNECTION_STATUS.REMOVED);
+  }
+
+  /**
+   * Remove any active (pending or accepted) connection between two parents.
+   * Called when one parent blocks another.
+   * @param {string|ObjectId} parentIdA
+   * @param {string|ObjectId} parentIdB
+   * @returns {Promise<Object>}
+   */
+  async removeActiveConnectionBetween(parentIdA, parentIdB) {
+    return connectionRepository.removeActiveBetween(parentIdA, parentIdB);
   }
 
   /**
@@ -379,6 +398,61 @@ class ConnectionService {
         totalPages: Math.ceil(total / parsedLimit) || 1,
       },
     };
+  }
+
+  /**
+   * Admin oversight: one page of all connections, searched by parent or child name
+   * @param {{ status?: string, search?: string, page: number, limit: number }} options
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async getConnectionsForAdmin({ status, search, page, limit }) {
+    let searchParentIds = null;
+    if (search) {
+      const [byName, byChildName] = await Promise.all([
+        parentService.findParentIdsByName(search),
+        childService.findParentIdsByChildName(search),
+      ]);
+      searchParentIds = [...new Set([...byName, ...byChildName].map((id) => id.toString()))];
+    }
+
+    return connectionRepository.findPageForAdmin({ status, searchParentIds, page, limit });
+  }
+
+  /**
+   * Admin oversight: full detail of a connection
+   */
+  async getConnectionDetailForAdmin(id) {
+    const connection = await connectionRepository.findWithDetailsForAdmin(id);
+    if (!connection) {
+      throw new AppError('Connection not found', 404, 'CONNECTION_NOT_FOUND');
+    }
+    return connection;
+  }
+
+  /**
+   * Admin oversight: soft-remove a pending or accepted connection
+   * @param {string} id
+   * @param {string} [reason]
+   * @returns {Promise<Object>} Removed connection with both parents populated
+   */
+  async removeConnectionByAdmin(id, reason = '') {
+    const connection = await connectionRepository.findById(id);
+    if (!connection) {
+      throw new AppError('Connection not found', 404, 'CONNECTION_NOT_FOUND');
+    }
+
+    const removableStatuses = [CONNECTION_STATUS.PENDING, CONNECTION_STATUS.ACCEPTED];
+    if (!removableStatuses.includes(connection.status)) {
+      throw new AppError('Only pending or accepted connections can be removed', 409, 'INVALID_CONNECTION_STATE');
+    }
+
+    // Applies only while the status is unchanged, so a concurrent change also answers 409 INVALID_CONNECTION_STATE
+    await this._transition(id, connection.status, CONNECTION_STATUS.REMOVED, {
+      removedByAdmin: true,
+      ...(reason ? { removalReason: reason } : {}),
+    });
+
+    return connectionRepository.findWithDetailsForAdmin(id);
   }
 }
 

@@ -10,7 +10,7 @@ import mailAdapter from '../../integrations/mail/mail.adapter.js';
 import smsAdapter from '../../integrations/sms/sms.adapter.js';
 import googleAuthAdapter from '../../integrations/google/google-auth.adapter.js';
 import { verifyFirebasePhoneToken } from '../../integrations/firebase/firebase.adapter.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import {
   TOKEN_AUDIENCES,
@@ -607,6 +607,14 @@ class AuthService {
     const user = await userService.getUserById(userId);
     const parent = await parentService.getParentByUserId(userId);
     return AuthUserDTO.toResponse({ user, parent });
+  }
+
+  /**
+   * Revoke all refresh tokens for a user (used on account lock or security logout)
+   * @param {string|mongoose.Types.ObjectId} userId
+   */
+  async revokeAllUserRefreshTokens(userId) {
+    return authRepository.revokeAllUserRefreshTokens(userId);
   }
 }
 

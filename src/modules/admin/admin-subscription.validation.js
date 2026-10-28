@@ -73,7 +73,7 @@ export const getSubscriptionsValidation = [
     .trim(),
 ];
 
-export const getPaymentsValidation = [
+export const getTransactionsValidation = [
   query('page')
     .optional()
     .isInt({ min: 1 })
@@ -108,7 +108,7 @@ export const getPaymentsValidation = [
     .trim(),
 ];
 
-export const getPaymentDetailValidation = [
+export const getTransactionDetailValidation = [
   param('id')
     .isMongoId()
     .withMessage('Valid payment ID is required'),

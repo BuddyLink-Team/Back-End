@@ -6,6 +6,7 @@ import Child from '../../src/modules/child/child.model.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import Notification from '../../src/modules/notification/notification.model.js';
 import connectionService from '../../src/modules/connection/connection.service.js';
+import { grantPremium } from '../helpers/subscriptionHelper.js';
 
 const register = async (label) => {
   const res = await request(app).post('/api/v1/auth/register').send({
@@ -163,12 +164,16 @@ describe('Connections management (/api/v1/connections)', () => {
     expect(blockedRes.status).toBe(403);
     expect(blockedRes.body.error.code).toBe('BLOCKED_INTERACTION');
 
-    // Unblocking shows the request again
-    await request(app).delete(`/api/v1/safety/block/${carol.parentId}`).set(auth(dave.token));
+    // Unblocking does not restore the connection (it was removed on block)
+    await request(app).delete(`/api/v1/safety/unblock/${carol.parentId}`).set(auth(dave.token));
     const afterUnblock = await request(app)
       .get('/api/v1/connections?status=pending&direction=incoming')
       .set(auth(carol.token));
-    expect(afterUnblock.body.data.items.find((c) => c.id === connectionId)).toBeDefined();
+    expect(afterUnblock.body.data.items.find((c) => c.id === connectionId)).toBeUndefined();
+
+    // After unblocking, sending a new connection request is allowed
+    const newReqRes = await sendRequest(carol, dave);
+    expect(newReqRes.status).toBe(201);
   });
 
   it('paginates and searches the connections by parent or child name', async () => {
@@ -227,6 +232,7 @@ describe('Connection child pairs (BUD-48)', () => {
 
   it('creates the pair on a new request and adds pairs to a pending or accepted connection', async () => {
     const [mai, lan] = await Promise.all([register('pair-mai'), register('pair-lan')]);
+    await grantPremium(mai.parentId);
     const [maiKid1, maiKid2, lanKid] = await Promise.all([
       createChild(mai.parentId, 'Bin'),
       createChild(mai.parentId, 'Bông'),

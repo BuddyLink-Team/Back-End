@@ -31,6 +31,7 @@ import { registerConnectionListeners } from "./modules/connection/connection.lis
 import gamificationRoutes from './modules/gamification/gamification.route.js';
 import ratingFeedbackRoutes from './modules/rating-feedback/rating-feedback.route.js';
 import notificationRoutes from './modules/notification/notification.route.js';
+import aiAssistantRoutes from './modules/ai-assistant/ai-assistant.route.js';
 
 const app = express();
 
@@ -91,6 +92,7 @@ app.use("/api/v1/safety", safetyRoutes);
 app.use('/api/v1/gamification', gamificationRoutes);
 app.use('/api/v1/playdates', ratingFeedbackRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/ai-assistant', aiAssistantRoutes);
 
 // Catch 404 Not Found
 app.use(notFoundHandler);

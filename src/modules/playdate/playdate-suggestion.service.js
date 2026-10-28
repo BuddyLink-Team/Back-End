@@ -4,7 +4,7 @@ import childService from '../child/child.service.js';
 import connectionService from '../connection/connection.service.js';
 import safetyService from '../safety/safety.service.js';
 import placesService from '../places/places.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import {
   getStartOfZonedDay,
@@ -65,6 +65,7 @@ class PlaydateSuggestionService {
       throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
 
+    await childService.assertChildUsable(childId, parent._id);
     const ownChild = (await childService.getActiveChildrenByParentId(parent._id)).find((c) => c._id.toString() === childId);
     if (!ownChild) {
       throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
@@ -76,7 +77,7 @@ class PlaydateSuggestionService {
     }
 
     const [otherChildren, connections, blockedIds] = await Promise.all([
-      childService.getActiveChildrenByIds(otherIds),
+      childService.getUsableChildrenByIds(otherIds),
       connectionService.getAcceptedConnections(parent._id),
       safetyService.getBlockedParentIds(parent._id),
     ]);

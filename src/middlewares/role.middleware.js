@@ -1,4 +1,4 @@
-import AppError from "../shared/exceptions/AppError.js";
+import AppError from "../shared/exceptions/app-error.js";
 
 export const authorizeRoles = (...roles) => {
   return (req, _res, next) => {

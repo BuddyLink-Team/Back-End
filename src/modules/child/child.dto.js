@@ -5,9 +5,10 @@ export class ChildPublicProfileDTO {
    * Shape a child document (with populated parentId) into a safe public-facing response.
    * Visibility (hidden / blocked parents) is enforced by ChildService before shaping.
    * @param {Object} child - Mongoose lean document with parentId populated
+   * @param {string} [connectionStatus='none'] - VIEWER_CONNECTION_STATUS between the viewer and this parent
    * @returns {Object}
    */
-  static toResponse(child) {
+  static toResponse(child, connectionStatus = 'none') {
     const parent = child.parentId || {};
 
     const ageYears = calculateAgeYears(child.dateOfBirth);
@@ -20,6 +21,7 @@ export class ChildPublicProfileDTO {
       interests: child.interests || [],
       favoriteActivities: child.favoriteActivities || [],
       personality: child.personality || [],
+      connectionStatus,
       parent: {
         fullName: parent.fullName || null,
         avatarUrl: parent.avatarUrl || null,
@@ -39,7 +41,11 @@ export class ChildPublicProfileDTO {
 }
 
 export class ChildResponseDTO {
-  static toResponse(child) {
+  /**
+   * @param {Object} child
+   * @param {Set<string>} [lockedIds] - Children locked by the Free plan (see ChildService.getLockedChildIds)
+   */
+  static toResponse(child, lockedIds = null) {
     if (!child) return null;
 
     const age = calculateAgeYears(child.dateOfBirth);
@@ -56,11 +62,13 @@ export class ChildResponseDTO {
       personality: child.personality || [],
       createdAt: child.createdAt,
       updatedAt: child.updatedAt,
+      // Past the Free plan's child limit: visible and editable, but not usable for discovery or playdates
+      isLocked: lockedIds ? lockedIds.has(child._id.toString()) : false,
     };
   }
 
-  static toResponseList(children) {
+  static toResponseList(children, lockedIds = null) {
     if (!Array.isArray(children)) return [];
-    return children.map((c) => ChildResponseDTO.toResponse(c));
+    return children.map((c) => ChildResponseDTO.toResponse(c, lockedIds));
   }
 }

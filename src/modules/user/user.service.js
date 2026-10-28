@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import userRepository from './user.repository.js';
 import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import { UserProfileDTO } from './user.dto.js';
 import { normalizePhone } from '../../shared/helpers/phone.helper.js';
@@ -172,6 +172,24 @@ class UserService {
     await this.updatePassword(userId, newPasswordHash);
 
     return { success: true };
+  }
+
+  /**
+   * Page of accounts of one role for admin lists (see userRepository.findPageByRole)
+   * @param {Object} options
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async getUsersPageByRole(options) {
+    return userRepository.findPageByRole(options);
+  }
+
+  /**
+   * Accounts of one role by status, for admin statistics
+   * @param {string} role
+   * @returns {Promise<{ total: number, active: number, locked: number }>}
+   */
+  async countUsersByStatus(role) {
+    return userRepository.countByRoleAndStatus(role);
   }
 }
 

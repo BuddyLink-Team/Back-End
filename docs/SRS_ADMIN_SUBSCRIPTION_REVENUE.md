@@ -410,7 +410,7 @@ Base path: `/api/v1/admin`
 
 ### 4.3. Payments Endpoints
 
-#### 4.3.1. `GET /api/v1/admin/payments`
+#### 4.3.1. `GET /api/v1/admin/transactions`
 - **Mô tả**: Danh sách lịch sử giao dịch thanh toán PayOS có phân trang và bộ lọc chuyên sâu.
 - **Headers**: `Authorization: Bearer <admin_token>`
 - **Query Params**:
@@ -468,7 +468,7 @@ Base path: `/api/v1/admin`
 }
 ```
 
-#### 4.3.2. `GET /api/v1/admin/payments/:id`
+#### 4.3.2. `GET /api/v1/admin/transactions/:id`
 - **Mô tả**: Xem chi tiết đối soát chuyên sâu của một giao dịch thanh toán.
 - **Headers**: `Authorization: Bearer <admin_token>`
 - **Params**: `id` (ObjectId của payment).
@@ -725,8 +725,8 @@ Bổ sung các test suite vào `Back-End/test/integration/admin-portal.test.js`:
    - Cập nhật giá và quota gói Premium thành công.
    - Xác nhận các trường `planCode`, `durationMonths`, `billingCycle`, `currency` không bị sửa đổi.
 3. `GET /api/v1/admin/subscriptions`: Kiểm tra danh sách thuê bao có phân trang và join thông tin parent.
-4. `GET /api/v1/admin/payments`: Kiểm tra lọc theo status (6 trạng thái), planCode, parentId và date range `createdAt`.
-5. `GET /api/v1/admin/payments/:id`: Kiểm tra chi tiết và xác nhận không có `checkoutUrl`, `qrCode`.
+4. `GET /api/v1/admin/transactions`: Kiểm tra lọc theo status (6 trạng thái), planCode, parentId và date range `createdAt`.
+5. `GET /api/v1/admin/transactions/:id`: Kiểm tra chi tiết và xác nhận không có `checkoutUrl`, `qrCode`.
 6. `GET /api/v1/admin/revenue/summary`: Kiểm tra tính toán tổng doanh thu theo `paidAt`, doanh thu tháng, conversion rate và churn rate (bao gồm trường hợp gia hạn sớm).
 
 ---

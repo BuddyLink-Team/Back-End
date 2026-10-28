@@ -1,4 +1,4 @@
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 
 export function ensureRatingEligibility(playdate, parentId) {
   if (!playdate) throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');

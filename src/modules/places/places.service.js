@@ -2,11 +2,17 @@ import placesRepository from './places.repository.js';
 import overpassAdapter from '../../integrations/maps/overpass.adapter.js';
 import geocodingAdapter from '../../integrations/maps/geocoding.adapter.js';
 import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import logger from '../../shared/logger/index.js';
 import { wait } from '../../shared/helpers/async.helper.js';
 import env from '../../config/env.js';
-import { PLACES_DEFAULTS, PLACES_SYNC_DEFAULTS, PLACES_AUTO_SYNC_DEFAULTS } from './places.constants.js';
+import {
+  PLACES_DEFAULTS,
+  PLACES_SYNC_DEFAULTS,
+  PLACES_AUTO_SYNC_DEFAULTS,
+  PLACES_ADDRESS_LOOKUP_DEFAULTS,
+  OSM_ID_REGEX,
+} from './places.constants.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const METERS_PER_DEG_LAT = 111320;
@@ -63,9 +69,14 @@ const distanceMeters = ([lng1, lat1], [lng2, lat2]) => {
   return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
+// "osm-way-123" -> https://www.openstreetmap.org/way/123; null for a place that is not an OSM element
+export const osmUrlOf = (osmId) => {
+  const match = OSM_ID_REGEX.exec(osmId || '');
+  return match ? `https://www.openstreetmap.org/${match[1]}/${match[2]}` : null;
+};
+
 const toPlaceResponse = (place, center) => {
   const coordinates = place.coordinates?.coordinates || null;
-  const [osmType, osmNumber] = (place.osmId || '').replace(/^osm-/, '').split('-');
   return {
     id: place._id.toString(),
     placeId: place.osmId,
@@ -77,7 +88,7 @@ const toPlaceResponse = (place, center) => {
     openingHours: place.openingHours || '',
     phone: place.phone || '',
     website: place.website || '',
-    osmUrl: osmType && osmNumber ? `https://www.openstreetmap.org/${osmType}/${osmNumber}` : null,
+    osmUrl: osmUrlOf(place.osmId),
   };
 };
 
@@ -86,6 +97,48 @@ class PlacesService {
     // Background syncs run one after another (see syncAround)
     this._autoSyncQueue = Promise.resolve();
     this._lastAutoSyncAt = 0;
+    // Background address lookups (see queueAddressLookups): ids waiting, and the running chain
+    this._addressLookupIds = new Set();
+    this._addressLookupQueue = Promise.resolve();
+    this.addressLookupIntervalMs = PLACES_ADDRESS_LOOKUP_DEFAULTS.INTERVAL_MS;
+  }
+
+  /**
+   * Resolve the missing addresses of some places in the background, one Nominatim request per
+   * second (its usage policy). OpenStreetMap rarely has addr:* tags: without an address the place is
+   * shown with its name only and Google Maps can only be opened on its coordinates.
+   * Places already waiting are not queued twice; the queue is capped so a big sync never floods Nominatim.
+   * @param {Array<Object>} places - places_cache documents
+   * @returns {Promise<void>} Resolved once these lookups are done (callers never wait for it)
+   */
+  queueAddressLookups(places = []) {
+    if (!env.PLACES.ADDRESS_LOOKUP) return this._addressLookupQueue;
+    const waiting = places.filter(
+      (place) =>
+        !place.address &&
+        Array.isArray(place.coordinates?.coordinates) &&
+        !this._addressLookupIds.has(String(place._id)) &&
+        this._addressLookupIds.size < PLACES_ADDRESS_LOOKUP_DEFAULTS.MAX_QUEUED &&
+        this._addressLookupIds.add(String(place._id))
+    );
+    if (!waiting.length) return this._addressLookupQueue;
+
+    this._addressLookupQueue = this._addressLookupQueue.then(async () => {
+      for (const place of waiting) {
+        try {
+          const [lng, lat] = place.coordinates.coordinates;
+          const address = await geocodingAdapter.reverseGeocode(lng, lat);
+          // Only fills a missing address: a sync or a lookup may have set one meanwhile
+          if (address) await placesRepository.setAddressIfMissing(place._id, address);
+        } catch (error) {
+          logger.warn(`[PlacesService] Address lookup failed for ${place.osmId}: ${error.message}`);
+        } finally {
+          this._addressLookupIds.delete(String(place._id));
+        }
+        if (this.addressLookupIntervalMs > 0) await wait(this.addressLookupIntervalMs);
+      }
+    });
+    return this._addressLookupQueue;
   }
 
   /**
@@ -161,6 +214,8 @@ class PlacesService {
       filterQuery,
       limit: parsedLimit,
     });
+    // Places shown without an address get one for the next search (name + address find them on Google Maps)
+    this.queueAddressLookups(places);
     return { places: places.map((p) => toPlaceResponse(p, center)), areaSyncing };
   }
 
@@ -216,6 +271,8 @@ class PlacesService {
     try {
       const places = await overpassAdapter.searchArea(cell.bbox, overpassOptions);
       await placesRepository.bulkUpsert(places);
+      // Places deleted from OpenStreetMap (or no longer kid-friendly / named) leave the cache
+      await placesRepository.deleteOsmPlacesInBboxExcept(cell.bbox, places.map((place) => place.osmId));
       await placesRepository.saveSyncTileResult(cell, { placesCount: places.length });
       return { places: places.length };
     } catch (error) {

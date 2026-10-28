@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import env from "../../config/env.js";
-import AppError from "../exceptions/AppError.js";
+import AppError from "../exceptions/app-error.js";
 import { AUTH_COOKIE_NAMES, TOKEN_AUDIENCES, TOKEN_TYPES } from "../../modules/auth/auth.constants.js";
 
 const parseExpiresInToMs = (value, fallbackMs) => {

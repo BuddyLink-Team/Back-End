@@ -11,6 +11,7 @@ import Swipe from '../../src/modules/discovery/discovery.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { QUOTA_PERIOD_TYPES } from '../../src/modules/subscription/subscription.constants.js';
+import { grantPremium } from '../helpers/subscriptionHelper.js';
 
 describe('Discovery & Smart Matching Integration Flow', () => {
   // Parent A: the searcher
@@ -464,6 +465,7 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(res.body.data.meta.remainingViews).toBe(5);
     });
 
+    // Registers 6 parents (bcrypt): slow when every suite runs in parallel
     it('should block swipe when Free daily quota is exceeded', async () => {
       // Create 5 target children from different parents to exhaust quota
       const targetChildIds = [];
@@ -523,7 +525,7 @@ describe('Discovery & Smart Matching Integration Flow', () => {
       expect(res.body.success).toBe(false);
       expect(res.body.error.code).toBe('QUOTA_EXCEEDED');
       expect(res.body.error.details.feature).toBe('discovery_swipes');
-    });
+    }, 20000);
   });
 
   // ============================================
@@ -630,6 +632,7 @@ describe('Discovery & Smart Matching Integration Flow', () => {
         .set('Authorization', `Bearer ${a.token}`)
         .send({ targetChildId: b.childId, isLike: true });
 
+      await grantPremium(b.parentId);
       const secondChild = await Child.create({
         parentId: b.parentId,
         displayName: 'Second Child',
@@ -747,6 +750,7 @@ describe('Discovery candidate pool and selected child', () => {
     await Parent.findByIdAndUpdate(parentId, {
       $set: { 'location.coordinates': { type: 'Point', coordinates } },
     });
+    if (children.length > 1) await grantPremium(parentId);
     const childIds = [];
     for (const child of children) {
       const created = await Child.create({ parentId, dateOfBirth: new Date('2020-01-01'), gender: 'girl', ...child });
@@ -830,6 +834,7 @@ describe('Discovery swipes per own child', () => {
     await Parent.findByIdAndUpdate(parentId, {
       $set: { 'location.coordinates': { type: 'Point', coordinates } },
     });
+    if (children.length > 1) await grantPremium(parentId);
     const childIds = [];
     for (const child of children) {
       const created = await Child.create({ parentId, dateOfBirth: new Date('2020-01-01'), gender: 'girl', ...child });

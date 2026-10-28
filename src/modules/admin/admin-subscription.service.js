@@ -2,7 +2,7 @@ import subscriptionPlanRepository from '../subscription/subscription-plan.reposi
 import subscriptionRepository from '../subscription/subscription.repository.js';
 import paymentRepository from '../subscription/payment.repository.js';
 import Parent from '../parent/parent.model.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { SUBSCRIPTION_PLAN_CODES } from '../subscription/subscription.constants.js';
 import {
   toPlanDto,
@@ -80,7 +80,7 @@ class AdminSubscriptionService {
   /**
    * Get paginated payment transactions list
    */
-  async getPayments(queryParams) {
+  async getTransactions(queryParams) {
     const { items, pagination } = await paymentRepository.findPaginated(queryParams);
     return {
       items: items.map(toPaymentSummaryDto),
@@ -91,7 +91,7 @@ class AdminSubscriptionService {
   /**
    * Get single payment audit detail (checkoutUrl and qrCode omitted)
    */
-  async getPaymentDetail(id) {
+  async getTransactionDetail(id) {
     const payment = await paymentRepository.findByIdWithDetail(id);
     if (!payment) {
       throw new AppError('Payment transaction not found', 404, 'PAYMENT_NOT_FOUND');
@@ -117,7 +117,7 @@ class AdminSubscriptionService {
 
     const [metrics, activePremiumSubscribers, totalParents] = await Promise.all([
       paymentRepository.getRevenueMetrics({ fromDate: start, toDate: end }),
-      subscriptionRepository.countActivePremium(end),
+      subscriptionRepository.countActivePaid(end),
       Parent.countDocuments(),
     ]);
 

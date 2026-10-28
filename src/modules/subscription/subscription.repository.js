@@ -1,6 +1,13 @@
 import Subscription from './subscription.model.js';
 import { SUBSCRIPTION_PLAN_CODES, SUBSCRIPTION_STATUS } from './subscription.constants.js';
 
+// Paid subscription in effect: active and not past its end date
+const activePaidFilter = (now) => ({
+  status: SUBSCRIPTION_STATUS.ACTIVE,
+  planCode: { $ne: SUBSCRIPTION_PLAN_CODES.FREE },
+  endDate: { $gt: now },
+});
+
 class SubscriptionRepository {
   /**
    * Find subscription by parentId with optional mongoose session
@@ -11,6 +18,30 @@ class SubscriptionRepository {
       query.session(session);
     }
     return query;
+  }
+
+  /**
+   * Subscriptions of several parents in one query
+   * @param {Array<string|ObjectId>} parentIds
+   */
+  async findByParentIds(parentIds) {
+    if (!parentIds.length) return [];
+    return Subscription.find({ parentId: { $in: parentIds } }).lean();
+  }
+
+  /**
+   * Paid subscriptions in effect (active and not past their end date)
+   */
+  async countActivePaid(now = new Date()) {
+    return Subscription.countDocuments(activePaidFilter(now));
+  }
+
+  /**
+   * Parents of the paid subscriptions in effect
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findActivePaidParentIds(now = new Date()) {
+    return Subscription.distinct('parentId', activePaidFilter(now));
   }
 
   /**
@@ -110,17 +141,6 @@ class SubscriptionRepository {
       },
       options
     );
-  }
-
-  /**
-   * Count active premium subscriptions whose end date is in the future
-   */
-  async countActivePremium(now = new Date()) {
-    return Subscription.countDocuments({
-      status: SUBSCRIPTION_STATUS.ACTIVE,
-      planCode: { $in: [SUBSCRIPTION_PLAN_CODES.PREMIUM_MONTHLY, SUBSCRIPTION_PLAN_CODES.PREMIUM_YEARLY] },
-      endDate: { $gt: now },
-    });
   }
 
   /**

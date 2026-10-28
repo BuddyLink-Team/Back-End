@@ -5,7 +5,7 @@ import childService from '../child/child.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import connectionService from '../connection/connection.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { DiscoveryProfileDTO } from './discovery.dto.js';
 import { DISCOVERY_DEFAULTS } from './discovery.constants.js';
 import { calculateMatchScore, calculateChildPairScore } from './matching.rules.js';
@@ -71,7 +71,8 @@ class DiscoveryService {
     // Step 4: Load quota info (do not consume here), current children and exclusion lists
     const [quotaSummary, currentChildren, blockedParentIds] = await Promise.all([
       subscriptionService.getQuotaSummary(parent._id),
-      childService.getActiveChildrenByParentId(parent._id),
+      // Children locked by the Free plan cannot be searched for
+      childService.getUsableChildrenByParentId(parent._id),
       safetyService.getBlockedParentIds(parent._id),
     ]);
 
@@ -80,6 +81,7 @@ class DiscoveryService {
       ? currentChildren.filter((c) => c._id.toString() === queryFilters.childId)
       : currentChildren;
     if (queryFilters.childId && matchingChildren.length === 0) {
+      await childService.assertChildUsable(queryFilters.childId, parent._id);
       throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
     }
 
@@ -238,8 +240,19 @@ class DiscoveryService {
       );
     }
 
-    // Step 3: Resolve the own child the swipe is for
-    const ownChildren = await childService.getActiveChildrenByParentId(parent._id);
+    // Children locked by the Free plan of either family, in one lookup
+    const [allOwnChildren, lockedIds] = await Promise.all([
+      childService.getActiveChildrenByParentId(parent._id),
+      childService.getLockedChildIds([parent._id, targetChild.parentId]),
+    ]);
+    // A locked child is not discoverable
+    if (lockedIds.has(targetChild._id.toString())) {
+      throw new AppError('Target child profile not found', 404, 'CHILD_NOT_FOUND');
+    }
+
+    // Step 3: Resolve the own child the swipe is for (a locked one cannot swipe)
+    await childService.assertChildUsable(forChildId, parent._id, lockedIds);
+    const ownChildren = allOwnChildren.filter((c) => !lockedIds.has(c._id.toString()));
     const forChild = this._resolveSwipeChild(ownChildren, forChildId);
 
     // Step 4: Check if already swiped for this child (legacy swipes without a child count for every child)

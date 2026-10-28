@@ -1,13 +1,20 @@
 import mongoose from 'mongoose';
-import { PLACE_TYPES } from './places.constants.js';
+import { PLACE_TYPES, PLACE_SOURCES } from './places.constants.js';
 
 const placesCacheSchema = new mongoose.Schema(
   {
-    // OpenStreetMap element id: "osm-node-123" | "osm-way-456" | "osm-relation-789"
+    // OpenStreetMap element id: "osm-node-123" | "osm-way-456" | "osm-relation-789",
+    // or "seed-…" for a place added by hand that has no OSM element
     osmId: {
       type: String,
       required: true,
       unique: true,
+    },
+    // 'osm': fetched by the places sync, removed when OSM drops it; 'manual': added by hand (seed), always kept
+    source: {
+      type: String,
+      enum: Object.values(PLACE_SOURCES),
+      default: PLACE_SOURCES.OSM,
     },
     name: {
       type: String,

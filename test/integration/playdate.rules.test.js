@@ -213,6 +213,60 @@ describe('Playdate rules', () => {
     });
   });
 
+  describe('leave', () => {
+    const leave = (parent, playdateId) =>
+      request(app).post(`/api/v1/playdates/${playdateId}/leave`).set('Authorization', `Bearer ${parent.token}`);
+
+    let leaveHost;
+    let leaverA;
+    let leaverB;
+
+    // Own host: the shared host already used its monthly creation quota
+    beforeAll(async () => {
+      leaveHost = await registerParent('leave-host');
+      leaverA = await registerParent('leave-a');
+      leaverB = await registerParent('leave-b');
+      await connect(leaveHost, leaverA);
+      await connect(leaveHost, leaverB);
+    });
+
+    it('drops the leaver from a pending reschedule and applies it once the others agreed', async () => {
+      const created = await createPlaydate(leaveHost, [leaverA, leaverB], { scheduledDate: isoDay(25) });
+      const playdateId = created.body.data.id;
+      await respond(leaverA, playdateId, 'accepted');
+      await respond(leaverB, playdateId, 'accepted');
+
+      const proposal = await reschedule(leaveHost, playdateId, { newDate: isoDay(26), newStartTime: '16:00' });
+      const requestId = proposal.body.data.rescheduleRequest.id;
+      await vote(leaverA, playdateId, { requestId, status: 'accepted' });
+
+      const res = await leave(leaverB, playdateId);
+      expect(res.status).toBe(200);
+
+      const stored = await RescheduleRequest.findById(requestId).lean();
+      expect(stored.status).toBe('accepted');
+      expect(stored.responses.map((r) => r.parentId.toString())).toEqual([leaverA.parentId]);
+
+      const playdate = await Playdate.findById(playdateId).lean();
+      expect(playdate.time).toBe('16:00');
+      expect(playdate.participants.find((p) => p.parentId.toString() === leaverB.parentId).status).toBe('declined');
+    });
+
+    it('rejects leaving twice and leaving as the host', async () => {
+      const created = await createPlaydate(leaveHost, [leaverA], { scheduledDate: isoDay(27) });
+      const playdateId = created.body.data.id;
+
+      expect((await leave(leaverA, playdateId)).status).toBe(200);
+      const again = await leave(leaverA, playdateId);
+      expect(again.status).toBe(400);
+      expect(again.body.error.code).toBe('ALREADY_LEFT');
+
+      const asHost = await leave(leaveHost, playdateId);
+      expect(asHost.status).toBe(400);
+      expect(asHost.body.error.code).toBe('HOST_CANNOT_LEAVE');
+    });
+  });
+
   describe('daily auto-close job', () => {
     it('completes past playdates with an accepted participant and cancels those nobody joined', async () => {
       const base = {

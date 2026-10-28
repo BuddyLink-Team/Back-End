@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { REPORT_TARGET_TYPES, REPORT_STATUS } from './safety.constants.js';
+import { REPORT_TARGET_TYPES, REPORT_STATUS, REPORT_CATEGORIES } from './safety.constants.js';
 
 const reportSchema = new mongoose.Schema(
   {
@@ -30,9 +30,17 @@ const reportSchema = new mongoose.Schema(
       ref: 'Playdate',
       default: null,
     },
+    category: {
+      type: String,
+      enum: Object.values(REPORT_CATEGORIES),
+      required: true,
+      // Reports created before categories existed are read (and saved again) as "other"
+      default: REPORT_CATEGORIES.OTHER,
+      index: true,
+    },
     reason: {
       type: String,
-      required: true,
+      default: '',
       trim: true,
     },
     description: {

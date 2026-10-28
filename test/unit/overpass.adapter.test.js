@@ -4,6 +4,7 @@ import {
   mapElementToPlace,
   classifyPlaceType,
   buildAddressFromTags,
+  pickPlaceName,
 } from '../../src/integrations/maps/overpass.adapter.js';
 
 describe('Overpass adapter helpers', () => {
@@ -35,6 +36,15 @@ describe('Overpass adapter helpers', () => {
       openingHours: '05:00-22:00',
     });
     expect(place).not.toHaveProperty('rating');
+  });
+
+  it('names a place in Vietnamese or Latin letters, and skips one only named in another script', () => {
+    expect(pickPlaceName({ name: 'APEC Park', 'name:vi': 'Công viên APEC' })).toBe('Công viên APEC');
+    expect(pickPlaceName({ name: 'Demen cà phê', 'name:en': 'Demen World' })).toBe('Demen cà phê');
+    expect(pickPlaceName({ name: 'Sân chơi 29/3 (Khu A) & café' })).toBe('Sân chơi 29/3 (Khu A) & café');
+    expect(pickPlaceName({ name: '儿童乐园', 'name:en': 'Kids Park' })).toBe('Kids Park');
+    expect(pickPlaceName({ name: 'Боксёрский клуб' })).toBe('');
+    expect(mapElementToPlace({ type: 'node', id: 3, lat: 16, lon: 108, tags: { leisure: 'sports_centre', name: 'Боксёрский клуб' } })).toBeNull();
   });
 
   it('skips unnamed or unsupported elements', () => {
