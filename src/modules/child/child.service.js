@@ -374,7 +374,8 @@ class ChildService {
    */
   async getChildByIdRaw(childId) {
     return childRepository.findById(childId);
-  }
+  }
+
 
   /**
    * Page of child profiles for admin lists. Ages are whole years: a child is `age` years old
@@ -426,15 +427,15 @@ class ChildService {
   }
 
   /**
-   * Every child locked by the Free plan across the platform (see getLockedChildIds): only parents with
-   * more children than the Free limit can have some
+   * Every child locked by its parent's plan across the platform (see getLockedChildIds): only parents with
+   * more children than the lowest plan limit can have some
    * @returns {Promise<Set<string>>}
    */
   async getAllPlanLockedChildIds() {
-    const freeLimit = await subscriptionService.getFreeChildProfileLimit();
-    if (freeLimit === -1) return new Set();
+    const lowestLimit = await subscriptionService.getLowestChildProfileLimit();
+    if (lowestLimit === -1) return new Set();
 
-    const overLimitParents = await childRepository.findParentsWithActiveChildrenAbove(freeLimit);
+    const overLimitParents = await childRepository.findParentsWithActiveChildrenAbove(lowestLimit);
     if (!overLimitParents.length) return new Set();
     return this.getLockedChildIds(overLimitParents.map((row) => row._id));
   }

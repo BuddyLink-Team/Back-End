@@ -19,3 +19,6 @@ export const ADMIN_SEARCH_MAX_LENGTH = 100;
 
 // Reason an admin gives when cancelling a playdate or removing a connection
 export const ADMIN_REASON_MAX_LENGTH = 500;
+
+// Revenue overview without a date range: this many calendar months back, current month included
+export const REVENUE_DEFAULT_MONTHS = 6;

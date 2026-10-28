@@ -17,7 +17,18 @@ import {
   QUOTA_FEATURES,
   QUOTA_ACTIONS,
   QUOTA_ACTION_ALIASES,
+  SUBSCRIPTION_PLAN_DEFAULTS,
 } from './subscription.constants.js';
+
+const UNLIMITED = -1;
+
+// Limits of a plan when its row is missing (default seed values)
+const getDefaultPlanFeatures = (planCode) =>
+  SUBSCRIPTION_PLAN_DEFAULTS.find((plan) => plan.planCode === planCode)?.features ||
+  SUBSCRIPTION_PLAN_DEFAULTS[0].features;
+
+// Units left under a limit; null when unlimited
+const toRemaining = (limit, used) => (limit === UNLIMITED ? null : Math.max(0, limit - used));
 
 /**
  * Helper to calculate calendar month expiration in Asia/Ho_Chi_Minh timezone
@@ -188,6 +199,23 @@ class SubscriptionService {
   }
 
   /**
+   * Limits in effect for a subscription: those of its paid plan while active, of Free otherwise.
+   * A paid plan taken off sale keeps applying to the parents who bought it.
+   * @param {Object|null} subscription
+   * @returns {Promise<{ isPremium: boolean, effectivePlanCode: string, features: Object }>} -1 = unlimited
+   */
+  async getPlanLimits(subscription) {
+    const isPremium = this.isSubscriptionActive(subscription);
+    const effectivePlanCode = isPremium ? subscription.planCode : SUBSCRIPTION_PLAN_CODES.FREE;
+    const plan = await subscriptionPlanRepository.findByPlanCodeAnyStatus(effectivePlanCode);
+    return {
+      isPremium,
+      effectivePlanCode,
+      features: { ...getDefaultPlanFeatures(effectivePlanCode), ...(plan?.features || {}) },
+    };
+  }
+
+  /**
    * Get parent effective subscription status and usage quota details
    * @param {string|mongoose.Types.ObjectId} parentId
    */
@@ -196,8 +224,7 @@ class SubscriptionService {
       this.getSubscriptionByParentId(parentId),
       childService.countChildrenByParentId(parentId),
     ]);
-    const isPremium = this.isSubscriptionActive(subscription);
-    const effectivePlanCode = isPremium ? subscription.planCode : SUBSCRIPTION_PLAN_CODES.FREE;
+    const { isPremium, effectivePlanCode, features } = await this.getPlanLimits(subscription);
 
     const todayStr = getVietnamPeriodValue(QUOTA_PERIOD_TYPES.DAILY);
     const thisMonthStr = getVietnamPeriodValue(QUOTA_PERIOD_TYPES.MONTHLY);
@@ -207,18 +234,12 @@ class SubscriptionService {
       usageQuotaRepository.getCounters(parentId, QUOTA_PERIOD_TYPES.MONTHLY, thisMonthStr),
     ]);
 
-    const activePlan = await subscriptionPlanRepository.findByPlanCode(effectivePlanCode);
-    const features = activePlan?.features || {
-      childProfilesLimit: 1,
-      discoveryViewLimitPerDay: 5,
-      playdatesLimitPerMonth: 3,
-    };
     const discoveryLimit = features[QUOTA_ACTIONS.discovery.limitKey];
     const playdatesLimit = features[QUOTA_ACTIONS.playdateCreate.limitKey];
 
     const discoveryUsed = dailyCounters[QUOTA_ACTIONS.discovery.counterField] || 0;
     const playdatesUsed = monthlyCounters[QUOTA_ACTIONS.playdateCreate.counterField] || 0;
-    const aiAssistantLimit = features[QUOTA_ACTIONS.aiAssistant.limitKey] ?? 5;
+    const aiAssistantLimit = features[QUOTA_ACTIONS.aiAssistant.limitKey];
     const aiAssistantUsed = monthlyCounters[QUOTA_ACTIONS.aiAssistant.counterField] || 0;
 
     return {
@@ -235,31 +256,31 @@ class SubscriptionService {
       },
       usage: {
         [QUOTA_FEATURES.CHILD_PROFILES]: {
-          limit: isPremium ? -1 : features.childProfilesLimit,
+          limit: features.childProfilesLimit,
           used: currentChildCount,
-          remaining: isPremium ? null : Math.max(0, features.childProfilesLimit - currentChildCount),
+          remaining: toRemaining(features.childProfilesLimit, currentChildCount),
           periodType: null,
           resetAt: null,
         },
         [QUOTA_FEATURES.DISCOVERY_SWIPES]: {
-          limit: isPremium ? -1 : discoveryLimit,
+          limit: discoveryLimit,
           used: discoveryUsed,
-          remaining: isPremium ? null : Math.max(0, discoveryLimit - discoveryUsed),
+          remaining: toRemaining(discoveryLimit, discoveryUsed),
           periodType: QUOTA_PERIOD_TYPES.DAILY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.DAILY),
         },
         [QUOTA_FEATURES.PLAYDATES_CREATED]: {
-          limit: isPremium ? -1 : playdatesLimit,
+          limit: playdatesLimit,
           used: playdatesUsed,
-          remaining: isPremium ? null : Math.max(0, playdatesLimit - playdatesUsed),
+          remaining: toRemaining(playdatesLimit, playdatesUsed),
           periodType: QUOTA_PERIOD_TYPES.MONTHLY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
         },
         // AI assistant: one unit per chat session (ai-assistant.service.js)
         [QUOTA_FEATURES.AI_ASSISTANT]: {
-          limit: isPremium ? -1 : aiAssistantLimit,
+          limit: aiAssistantLimit,
           used: aiAssistantUsed,
-          remaining: isPremium || aiAssistantLimit === -1 ? null : Math.max(0, aiAssistantLimit - aiAssistantUsed),
+          remaining: toRemaining(aiAssistantLimit, aiAssistantUsed),
           periodType: QUOTA_PERIOD_TYPES.MONTHLY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
         },
@@ -280,20 +301,15 @@ class SubscriptionService {
     }
 
     const subscription = await this.getSubscriptionByParentId(parentId);
-    const isPremium = this.isSubscriptionActive(subscription);
+    const { isPremium, features } = await this.getPlanLimits(subscription);
     const counters = await usageQuotaRepository.getCounters(
       parentId,
       action.periodType,
       getVietnamPeriodValue(action.periodType)
     );
     const used = counters[action.counterField] || 0;
-    if (isPremium) {
-      return { isPremium, limit: -1, used, remaining: -1 };
-    }
-
-    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
-    const limit = freePlan?.features?.[action.limitKey] ?? 0;
-    return { isPremium, limit, used, remaining: limit === -1 ? -1 : Math.max(0, limit - used) };
+    const limit = features[action.limitKey] ?? 0;
+    return { isPremium, limit, used, remaining: limit === UNLIMITED ? UNLIMITED : Math.max(0, limit - used) };
   }
 
   /**
@@ -1017,33 +1033,27 @@ class SubscriptionService {
   }
 
   /**
-   * Check if parent has reached the child profiles limit of the Free plan (childProfilesLimit)
+   * Check if parent has reached the child profiles limit of the plan in effect (childProfilesLimit)
    * @param {string|mongoose.Types.ObjectId} parentId
    * @param {number} currentChildCount
    * @param {mongoose.ClientSession} [session]
    */
   async checkChildProfileQuota(parentId, currentChildCount = 0, session = null) {
     const subscription = await this.getSubscriptionByParentId(parentId, session);
-    const isPremium = this.isSubscriptionActive(subscription);
-
-    if (isPremium) {
-      return { allowed: true, limit: -1, currentUsed: currentChildCount };
+    const { features } = await this.getPlanLimits(subscription);
+    const limit = features.childProfilesLimit ?? 1;
+    if (limit === UNLIMITED) {
+      return { allowed: true, limit: UNLIMITED, currentUsed: currentChildCount };
     }
 
-    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
-    const freeLimit = freePlan?.features?.childProfilesLimit ?? 1;
-    if (freeLimit === -1) {
-      return { allowed: true, limit: -1, currentUsed: currentChildCount };
-    }
-
-    if (currentChildCount >= freeLimit) {
+    if (currentChildCount >= limit) {
       throw new AppError(
-        `Child profile limit reached (${freeLimit}) on the Free plan. Upgrade to Premium for unlimited child profiles.`,
+        `Child profile limit reached (${limit}) on the current plan.`,
         403,
         'CHILD_QUOTA_EXCEEDED',
         {
           feature: QUOTA_FEATURES.CHILD_PROFILES,
-          limit: freeLimit,
+          limit,
           currentUsed: currentChildCount,
           periodType: null,
           resetAt: null,
@@ -1051,16 +1061,18 @@ class SubscriptionService {
       );
     }
 
-    return { allowed: true, limit: freeLimit, currentUsed: currentChildCount };
+    return { allowed: true, limit, currentUsed: currentChildCount };
   }
 
   /**
-   * Child profiles allowed on the Free plan (-1 = unlimited)
+   * Lowest child profile limit of all plans (-1 when every plan is unlimited): a parent with
+   * no more children than this cannot have a locked child
    * @returns {Promise<number>}
    */
-  async getFreeChildProfileLimit() {
-    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
-    return freePlan?.features?.childProfilesLimit ?? 1;
+  async getLowestChildProfileLimit() {
+    const plans = await subscriptionPlanRepository.findAll();
+    const limits = plans.map((plan) => plan.features?.childProfilesLimit).filter((limit) => limit >= 0);
+    return limits.length ? Math.min(...limits) : UNLIMITED;
   }
 
   /**
@@ -1089,15 +1101,20 @@ class SubscriptionService {
     const limits = new Map();
     if (!uniqueIds.length) return limits;
 
-    const [subscriptions, freeLimit] = await Promise.all([
+    const [subscriptions, plans] = await Promise.all([
       subscriptionRepository.findByParentIds(uniqueIds),
-      this.getFreeChildProfileLimit(),
+      subscriptionPlanRepository.findAll(),
     ]);
-    const premiumParentIds = new Set(
-      subscriptions.filter((sub) => this.isSubscriptionActive(sub)).map((sub) => sub.parentId.toString())
+    const limitOf = (planCode) =>
+      (plans.find((plan) => plan.planCode === planCode)?.features || getDefaultPlanFeatures(planCode))
+        .childProfilesLimit;
+    const planCodeByParentId = new Map(
+      subscriptions
+        .filter((sub) => this.isSubscriptionActive(sub))
+        .map((sub) => [sub.parentId.toString(), sub.planCode])
     );
 
-    uniqueIds.forEach((id) => limits.set(id, premiumParentIds.has(id) ? -1 : freeLimit));
+    uniqueIds.forEach((id) => limits.set(id, limitOf(planCodeByParentId.get(id) || SUBSCRIPTION_PLAN_CODES.FREE)));
     return limits;
   }
 
@@ -1139,20 +1156,10 @@ class SubscriptionService {
     }
 
     const subscription = await this.getSubscriptionByParentId(parentId);
-    const isPremium = this.isSubscriptionActive(subscription);
+    const { features } = await this.getPlanLimits(subscription);
     const { feature, periodType, counterField } = action;
     const periodValue = getVietnamPeriodValue(periodType);
-
-    // Premium: unlimited, usage is still recorded for statistics
-    if (isPremium) {
-      if (consume) {
-        await usageQuotaRepository.incrementCounter(parentId, periodType, periodValue, counterField, 1);
-      }
-      return { allowed: true, limit: -1, currentUsed: 0, remaining: -1 };
-    }
-
-    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
-    const limit = freePlan?.features?.[action.limitKey] ?? 0;
+    const limit = features[action.limitKey] ?? 0;
     const quotaExceeded = (currentUsed) =>
       new AppError(action.message(limit), 403, 'QUOTA_EXCEEDED', {
         feature,
@@ -1162,11 +1169,12 @@ class SubscriptionService {
         resetAt: getNextResetTime(periodType),
       });
 
-    if (limit === -1) {
+    // Unlimited: usage is still recorded for statistics
+    if (limit === UNLIMITED) {
       if (consume) {
         await usageQuotaRepository.incrementCounter(parentId, periodType, periodValue, counterField, 1);
       }
-      return { allowed: true, limit: -1, currentUsed: 0, remaining: -1 };
+      return { allowed: true, limit: UNLIMITED, currentUsed: 0, remaining: UNLIMITED };
     }
 
     if (!consume) {
@@ -1217,7 +1225,8 @@ class SubscriptionService {
         playdatesCreatedThisMonth: quotaData.usage?.[QUOTA_FEATURES.PLAYDATES_CREATED]?.used ?? 0,
       },
     };
-  }
+  }
+
 
   /**
    * Subscriptions of several parents as stored (no downgrade-on-read), for bulk lists
@@ -1253,6 +1262,125 @@ class SubscriptionService {
       startDate: expiredPaidPlanAt || subscription?.startDate || null,
       endDate: null,
       purchasedMonths: 0,
+    };
+  }
+
+  // ---- Admin portal: plans, subscriptions, payments and revenue ----
+
+  /**
+   * Every plan, inactive ones included
+   */
+  async getAllPlans() {
+    return subscriptionPlanRepository.findAll();
+  }
+
+  /**
+   * One plan, also when taken off sale
+   * @param {string} id
+   */
+  async getPlanById(id) {
+    const plan = await subscriptionPlanRepository.findById(id);
+    if (!plan) {
+      throw new AppError('Subscription plan not found', 404, 'PLAN_NOT_FOUND');
+    }
+    return plan;
+  }
+
+  /**
+   * Update a plan's name, price, active flag and feature limits (-1 = unlimited, see getPlanLimits).
+   * planCode, durationMonths, billingCycle and currency never change.
+   * @param {string} id
+   * @param {{ name?: string, price?: number, isActive?: boolean, features?: Object }} update
+   */
+  async updatePlanByAdmin(id, { name, price, isActive, features } = {}) {
+    const plan = await subscriptionPlanRepository.findById(id);
+    if (!plan) {
+      throw new AppError('Subscription plan not found', 404, 'PLAN_NOT_FOUND');
+    }
+
+    const isFree = plan.planCode === SUBSCRIPTION_PLAN_CODES.FREE;
+    if (isFree && price !== undefined && price !== 0) {
+      throw new AppError('Free plan price must remain 0', 400, 'FREE_PLAN_IMMUTABLE');
+    }
+    if (isFree && isActive === false) {
+      throw new AppError('Free plan cannot be deactivated', 400, 'FREE_PLAN_IMMUTABLE');
+    }
+    if (!isFree && price !== undefined && price <= 0) {
+      throw new AppError('Premium plan price must be greater than 0', 400, 'INVALID_PRICE');
+    }
+
+    const payload = {};
+    if (name !== undefined) payload.name = name;
+    if (price !== undefined) payload.price = price;
+    if (isActive !== undefined) payload.isActive = isActive;
+    if (features !== undefined) payload.features = { ...plan.toObject().features, ...features };
+
+    return subscriptionPlanRepository.updateById(id, payload);
+  }
+
+  /**
+   * Page of subscriptions for the admin portal
+   * @param {{ planCode?: string, status?: string, parentIds?: Array|null, page: number, limit: number }} options
+   */
+  async getSubscriptionsPageForAdmin(options) {
+    return subscriptionRepository.findPageForAdmin(options);
+  }
+
+  /**
+   * One subscription for the admin portal, as stored
+   * @param {string} id
+   */
+  async getSubscriptionForAdmin(id) {
+    const subscription = await subscriptionRepository.findByIdLean(id);
+    if (!subscription) {
+      throw new AppError('Subscription not found', 404, 'SUBSCRIPTION_NOT_FOUND');
+    }
+    return subscription;
+  }
+
+  /**
+   * Page of payments of every parent for the admin portal
+   * @param {Object} options - see PaymentRepository.findPageForAdmin
+   */
+  async getPaymentsPageForAdmin(options) {
+    return paymentRepository.findPageForAdmin(options);
+  }
+
+  /**
+   * One payment for the admin portal (payment link fields left out)
+   * @param {string} id
+   */
+  async getPaymentForAdmin(id) {
+    const payment = await paymentRepository.findByIdForAdmin(id);
+    if (!payment) {
+      throw new AppError('Payment transaction not found', 404, 'PAYMENT_NOT_FOUND');
+    }
+    return payment;
+  }
+
+  /**
+   * Revenue figures of a period, months grouped in APP_TIMEZONE.
+   * Churned = parents whose latest paid period ended in the period and who did not buy again.
+   * @param {{ fromDate: Date, toDate: Date }} period
+   */
+  async getRevenueMetrics({ fromDate, toDate }) {
+    const [overview, monthlyRevenue, allTimePayingParents, premiumAtStart, churnedParents, activePremium] =
+      await Promise.all([
+        paymentRepository.sumSuccessfulPaidBetween(fromDate, toDate),
+        paymentRepository.sumSuccessfulPaidByMonth(fromDate, toDate, env.APP_TIMEZONE),
+        paymentRepository.countDistinctSuccessfulParents(),
+        paymentRepository.countParentsWithGrantCovering(fromDate),
+        paymentRepository.countParentsWithLastGrantEndBetween(fromDate, toDate),
+        subscriptionRepository.countActivePaid(toDate),
+      ]);
+
+    return {
+      ...overview,
+      monthlyRevenue,
+      allTimePayingParents,
+      premiumAtStart,
+      churnedParents,
+      activePremium,
     };
   }
 }

@@ -1,5 +1,8 @@
-import mongoose from 'mongoose';
 import Payment from './payment.model.js';
+import { PAYMENT_STATUS } from './subscription.constants.js';
+
+// Payment link and raw PayOS data are never sent to the admin portal
+const ADMIN_HIDDEN_FIELDS = '-checkoutUrl -qrCode -rawWebhookData';
 
 class PaymentRepository {
   /**
@@ -154,280 +157,124 @@ class PaymentRepository {
   }
 
   /**
-   * Paginated list of payments with parent and user lookup for admin portal
+   * Page of payments for the admin portal, newest first (payment link fields left out)
+   * @param {Object} options
+   * @param {string} [options.status]
+   * @param {string} [options.planCode]
+   * @param {Date} [options.fromDate] - Created at or after
+   * @param {Date} [options.toDate] - Created at or before
+   * @param {Array<ObjectId>|null} [options.searchParentIds] - Search box: payments of these parents...
+   * @param {number|null} [options.searchOrderCode] - ...or the payment with this order code; null lists all
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
-  async findPaginated({ status, planCode, parentId, fromDate, toDate, search, page = 1, limit = 10 } = {}) {
-    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
-    const parsedLimit = Math.max(1, parseInt(limit, 10) || 10);
-    const skip = (parsedPage - 1) * parsedLimit;
-
-    const pipeline = [
-      {
-        $lookup: {
-          from: 'parents',
-          localField: 'parentId',
-          foreignField: '_id',
-          as: 'parent',
-        },
-      },
-      {
-        $unwind: {
-          path: '$parent',
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'parent.userId',
-          foreignField: '_id',
-          as: 'user',
-        },
-      },
-      {
-        $unwind: {
-          path: '$user',
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-    ];
-
-    const matchConditions = {};
-
-    if (status) {
-      matchConditions.status = status;
-    }
-
-    if (planCode) {
-      matchConditions['planSnapshot.planCode'] = planCode;
-    }
-
-    if (parentId) {
-      matchConditions.parentId = mongoose.Types.ObjectId.isValid(parentId)
-        ? new mongoose.Types.ObjectId(parentId)
-        : parentId;
-    }
-
+  async findPageForAdmin({ status, planCode, fromDate, toDate, searchParentIds = null, searchOrderCode = null, page, limit }) {
+    const filter = {};
+    if (status) filter.status = status;
+    if (planCode) filter['planSnapshot.planCode'] = planCode;
     if (fromDate || toDate) {
-      matchConditions.createdAt = {};
-      if (fromDate) matchConditions.createdAt.$gte = new Date(fromDate);
-      if (toDate) matchConditions.createdAt.$lte = new Date(toDate);
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = fromDate;
+      if (toDate) filter.createdAt.$lte = toDate;
+    }
+    if (searchParentIds) {
+      filter.$or = [{ parentId: { $in: searchParentIds } }];
+      if (searchOrderCode !== null) filter.$or.push({ orderCode: searchOrderCode });
     }
 
-    if (search && search.trim()) {
-      const trimmed = search.trim();
-      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const orConditions = [
-        { 'parent.fullName': { $regex: escaped, $options: 'i' } },
-        { 'user.email': { $regex: escaped, $options: 'i' } },
-      ];
-      if (!isNaN(Number(trimmed))) {
-        orConditions.unshift({ orderCode: Number(trimmed) });
-      }
-      matchConditions.$or = orConditions;
-    }
+    const [items, total] = await Promise.all([
+      Payment.find(filter)
+        .select(ADMIN_HIDDEN_FIELDS)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Payment.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
 
-    if (Object.keys(matchConditions).length > 0) {
-      pipeline.push({ $match: matchConditions });
-    }
+  /**
+   * One payment for the admin portal (payment link fields left out)
+   */
+  async findByIdForAdmin(id) {
+    return Payment.findById(id).select(ADMIN_HIDDEN_FIELDS).lean();
+  }
 
-    pipeline.push({
-      $facet: {
-        items: [
-          { $sort: { createdAt: -1, _id: -1 } },
-          { $skip: skip },
-          { $limit: parsedLimit },
-          {
-            $project: {
-              _id: 1,
-              orderCode: 1,
-              parentId: 1,
-              subscriptionId: 1,
-              planSnapshot: 1,
-              amount: 1,
-              currency: 1,
-              status: 1,
-              paymentMethod: 1,
-              grantResult: 1,
-              paidAt: 1,
-              createdAt: 1,
-              parent: {
-                _id: '$parent._id',
-                fullName: '$parent.fullName',
-                avatarUrl: '$parent.avatarUrl',
-                email: '$user.email',
-              },
-            },
-          },
-        ],
-        totalCount: [{ $count: 'count' }],
+  /**
+   * Successful payments paid in a period: amount, count and distinct parents
+   * @returns {Promise<{ totalRevenue: number, successfulTransactions: number, payingParentsCount: number }>}
+   */
+  async sumSuccessfulPaidBetween(fromDate, toDate) {
+    const [row] = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, paidAt: { $gte: fromDate, $lte: toDate } } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$amount' },
+          successfulTransactions: { $sum: 1 },
+          parentIds: { $addToSet: '$parentId' },
+        },
       },
+    ]);
+    return {
+      totalRevenue: row?.totalRevenue || 0,
+      successfulTransactions: row?.successfulTransactions || 0,
+      payingParentsCount: row?.parentIds.length || 0,
+    };
+  }
+
+  /**
+   * Successful payments paid in a period, grouped by calendar month in a time zone
+   * @returns {Promise<Array<{ month: string, revenue: number, transactionCount: number }>>} month = 'YYYY-MM', sorted
+   */
+  async sumSuccessfulPaidByMonth(fromDate, toDate, timeZone) {
+    const rows = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, paidAt: { $gte: fromDate, $lte: toDate } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m', date: '$paidAt', timezone: timeZone } },
+          revenue: { $sum: '$amount' },
+          transactionCount: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map((row) => ({ month: row._id, revenue: row.revenue, transactionCount: row.transactionCount }));
+  }
+
+  /**
+   * Parents with at least one successful payment, ever
+   */
+  async countDistinctSuccessfulParents() {
+    const parentIds = await Payment.distinct('parentId', { status: PAYMENT_STATUS.SUCCESS });
+    return parentIds.length;
+  }
+
+  /**
+   * Parents with a paid Premium period covering an instant
+   */
+  async countParentsWithGrantCovering(date) {
+    const parentIds = await Payment.distinct('parentId', {
+      status: PAYMENT_STATUS.SUCCESS,
+      'grantResult.effectiveStartDate': { $lte: date },
+      'grantResult.effectiveEndDate': { $gt: date },
     });
-
-    const result = await Payment.aggregate(pipeline);
-    const items = result[0]?.items || [];
-    const total = result[0]?.totalCount[0]?.count || 0;
-
-    return {
-      items,
-      pagination: {
-        page: parsedPage,
-        limit: parsedLimit,
-        total,
-        totalPages: Math.ceil(total / parsedLimit) || 1,
-      },
-    };
+    return parentIds.length;
   }
 
   /**
-   * Find single payment detail for admin audit (stripping checkoutUrl and qrCode)
+   * Parents whose latest paid Premium period ends in [fromDate, toDate]
    */
-  async findByIdWithDetail(id) {
-    if (!mongoose.Types.ObjectId.isValid(id)) return null;
-
-    const result = await Payment.aggregate([
-      { $match: { _id: new mongoose.Types.ObjectId(id) } },
-      {
-        $lookup: {
-          from: 'parents',
-          localField: 'parentId',
-          foreignField: '_id',
-          as: 'parent',
-        },
-      },
-      {
-        $unwind: {
-          path: '$parent',
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'parent.userId',
-          foreignField: '_id',
-          as: 'user',
-        },
-      },
-      {
-        $unwind: {
-          path: '$user',
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $project: {
-          _id: 1,
-          orderCode: 1,
-          transactionId: 1,
-          parentId: 1,
-          subscriptionId: 1,
-          planSnapshot: 1,
-          amount: 1,
-          currency: 1,
-          status: 1,
-          paymentMethod: 1,
-          bankInfo: 1,
-          expiresAt: 1,
-          paidAt: 1,
-          fulfilledAt: 1,
-          failureReason: 1,
-          grantResult: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          parent: {
-            _id: '$parent._id',
-            fullName: '$parent.fullName',
-            avatarUrl: '$parent.avatarUrl',
-            email: '$user.email',
-          },
-          // checkoutUrl and qrCode are intentionally omitted
-        },
-      },
+  async countParentsWithLastGrantEndBetween(fromDate, toDate) {
+    const [row] = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, 'grantResult.effectiveEndDate': { $ne: null } } },
+      { $group: { _id: '$parentId', lastEndDate: { $max: '$grantResult.effectiveEndDate' } } },
+      { $match: { lastEndDate: { $gte: fromDate, $lte: toDate } } },
+      { $count: 'count' },
     ]);
-
-    return result[0] || null;
-  }
-
-  /**
-   * Get revenue aggregation and statistics for admin portal
-   */
-  async getRevenueMetrics({ fromDate, toDate }) {
-    const successMatch = {
-      status: 'success',
-      paidAt: { $gte: fromDate, $lte: toDate },
-    };
-
-    const [overviewAgg, monthlyAgg, allPayingParents, activeAtStart, churnedInPeriod] = await Promise.all([
-      Payment.aggregate([
-        { $match: successMatch },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: { $sum: '$amount' },
-            successfulTransactions: { $sum: 1 },
-            payingParents: { $addToSet: '$parentId' },
-          },
-        },
-      ]),
-      Payment.aggregate([
-        { $match: successMatch },
-        {
-          $group: {
-            _id: {
-              $dateToString: { format: '%Y-%m', date: '$paidAt', timezone: '+07:00' },
-            },
-            revenue: { $sum: '$amount' },
-            transactionCount: { $sum: 1 },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]),
-      // All-time distinct paying parents (with at least 1 success payment)
-      Payment.distinct('parentId', { status: 'success' }),
-      // Parents with an active Premium period at fromDate (Denominator for churn rate)
-      Payment.distinct('parentId', {
-        status: 'success',
-        'grantResult.effectiveStartDate': { $lte: fromDate },
-        'grantResult.effectiveEndDate': { $gt: fromDate },
-      }),
-      // Parents whose last Premium period ended within [fromDate, toDate] (Numerator for churn rate)
-      Payment.aggregate([
-        { $match: { status: 'success', 'grantResult.effectiveEndDate': { $ne: null } } },
-        {
-          $group: {
-            _id: '$parentId',
-            lastEffectiveEndDate: { $max: '$grantResult.effectiveEndDate' },
-          },
-        },
-        {
-          $match: {
-            lastEffectiveEndDate: { $gte: fromDate, $lte: toDate },
-          },
-        },
-      ]),
-    ]);
-
-    const overviewData = overviewAgg[0] || {
-      totalRevenue: 0,
-      successfulTransactions: 0,
-      payingParents: [],
-    };
-
-    return {
-      totalRevenue: overviewData.totalRevenue || 0,
-      successfulTransactions: overviewData.successfulTransactions || 0,
-      payingParentsCount: overviewData.payingParents?.length || 0,
-      allTimePayingParentsCount: allPayingParents.length,
-      monthlyRevenue: monthlyAgg.map((item) => ({
-        month: item._id,
-        label: `T${item._id.split('-')[1]}/${item._id.split('-')[0]}`,
-        revenue: item.revenue,
-        transactionCount: item.transactionCount,
-      })),
-      activeParentsAtStartCount: activeAtStart.length,
-      churnedParentsCount: churnedInPeriod.length,
-    };
+    return row?.count || 0;
   }
 }
 

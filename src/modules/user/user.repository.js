@@ -56,6 +56,27 @@ class UserRepository {
     return users.map((u) => u._id.toString());
   }
 
+  /**
+   * IDs of the accounts whose email contains the text (case-insensitive)
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findIdsByEmail(search, limit = 500) {
+    const users = await User.find({ email: { $regex: escapeRegExp(search), $options: 'i' }, deletedAt: null })
+      .select('_id')
+      .limit(limit)
+      .lean();
+    return users.map((u) => u._id);
+  }
+
+  /**
+   * Emails of several accounts
+   * @returns {Promise<Array<{ _id: ObjectId, email: string }>>}
+   */
+  async findEmailsByIds(ids) {
+    if (!ids.length) return [];
+    return User.find({ _id: { $in: ids } }).select('email').lean();
+  }
+
   async hardDeleteById(id) {
     return User.deleteOne({ _id: id });
   }
@@ -78,7 +99,8 @@ class UserRepository {
       { $set: { passwordHash } },
       { new: true }
     );
-  }
+  }
+
 
   /**
    * Page of non-deleted accounts of one role (no password hash), newest first

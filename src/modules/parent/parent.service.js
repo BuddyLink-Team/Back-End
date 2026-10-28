@@ -303,7 +303,8 @@ class ParentService {
     return {
       avatarUrl: updatedParent.avatarUrl,
     };
-  }
+  }
+
 
   /**
    * User IDs of the parents matching a name search and / or a verification state (admin lists)
@@ -320,6 +321,14 @@ class ParentService {
 
   async getParentsByIds(ids) {
     return parentRepository.findByIds(ids);
+  }
+
+  /**
+   * Parent profiles on the platform, for admin statistics
+   * @returns {Promise<number>}
+   */
+  async countParents() {
+    return parentRepository.countAll();
   }
 }
 

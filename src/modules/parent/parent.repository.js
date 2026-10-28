@@ -124,7 +124,8 @@ class ParentRepository {
 
     parent.verification = newVerification;
     return parent.save();
-  }
+  }
+
 
   /**
    * User IDs of the parents matching a name search and / or a verification state
@@ -147,6 +148,10 @@ class ParentRepository {
   async findByIds(ids) {
     if (!ids.length) return [];
     return Parent.find({ _id: { $in: ids } }).lean();
+  }
+
+  async countAll() {
+    return Parent.countDocuments();
   }
 }
 

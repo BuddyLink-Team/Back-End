@@ -19,17 +19,12 @@ import {
   adminGetConnectionsValidation,
   adminDeleteConnectionValidation,
   mongoIdParamValidation,
+  updatePlanValidation,
+  listSubscriptionsValidation,
+  listTransactionsValidation,
+  revenueSummaryValidation,
 } from './admin.validation.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
-
-import adminSubscriptionController from './admin-subscription.controller.js';
-import {
-  updatePlanValidation,
-  getSubscriptionsValidation,
-  getTransactionsValidation,
-  getTransactionDetailValidation,
-  getRevenueSummaryValidation,
-} from './admin-subscription.validation.js';
 
 const router = Router();
 
@@ -74,16 +69,14 @@ router.get('/connections/:id', validate(mongoIdParamValidation), adminController
 router.delete('/connections/:id', validate(adminDeleteConnectionValidation), adminController.removeConnection);
 
 // Subscription plans & revenue management
-router.get('/plans', adminSubscriptionController.getPlans);
-router.patch('/plans/:id', validate(updatePlanValidation), adminSubscriptionController.updatePlan);
-router.get('/subscriptions', validate(getSubscriptionsValidation), adminSubscriptionController.getSubscriptions);
-router.get('/transactions', validate(getTransactionsValidation), adminSubscriptionController.getTransactions);
-router.get(
-  '/transactions/:id',
-  validate(getTransactionDetailValidation),
-  adminSubscriptionController.getTransactionDetail
-);
-router.get('/revenue/summary', validate(getRevenueSummaryValidation), adminSubscriptionController.getRevenueSummary);
+router.get('/plans', adminController.getPlans);
+router.get('/plans/:id', validate(mongoIdParamValidation), adminController.getPlanDetail);
+router.patch('/plans/:id', validate(updatePlanValidation), adminController.updatePlan);
+router.get('/subscriptions', validate(listSubscriptionsValidation), adminController.getSubscriptions);
+router.get('/subscriptions/:id', validate(mongoIdParamValidation), adminController.getSubscriptionDetail);
+router.get('/transactions', validate(listTransactionsValidation), adminController.getTransactions);
+router.get('/transactions/:id', validate(mongoIdParamValidation), adminController.getTransactionDetail);
+router.get('/revenue/summary', validate(revenueSummaryValidation), adminController.getRevenueSummary);
 
 export default router;
 

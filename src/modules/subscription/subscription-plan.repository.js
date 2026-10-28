@@ -15,6 +15,13 @@ class SubscriptionPlanRepository {
     return SubscriptionPlan.findOne({ planCode, isActive: true });
   }
 
+  /**
+   * Plan by code, also when taken off sale (its limits still apply to the parents who bought it)
+   */
+  async findByPlanCodeAnyStatus(planCode) {
+    return SubscriptionPlan.findOne({ planCode }).lean();
+  }
+
   async findById(id) {
     return SubscriptionPlan.findById(id);
   }

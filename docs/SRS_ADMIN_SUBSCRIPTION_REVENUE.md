@@ -37,7 +37,7 @@ Cung cấp phân hệ quản trị toàn diện dành cho Quản trị viên (Ad
     2. **Gói dịch vụ (Subscription Plans)**: Danh sách thẻ các gói, form cập nhật tên, giá, hạn mức quota (có switch bật/tắt "Không giới hạn" cho giá trị `-1`), trạng thái Active/Inactive. Hộp thoại xác nhận (`ConfirmDialog`) trước khi lưu thay đổi giá.
     3. **Thuê bao (Subscribers)**: Bảng dữ liệu (`DataTable`), tìm kiếm phụ huynh (tên/email), bộ lọc gói và trạng thái (`active` / `expired`), phân trang (`useServerTable`).
     4. **Giao dịch (Transactions)**: Bảng kiểm toán giao dịch (`DataTable`), tìm kiếm mã đơn / tên phụ huynh, chip trạng thái thanh toán (đầy đủ 6 trạng thái), lọc ngày, modal chi tiết giao dịch khi nhấp vào hàng.
-  - Các hàm gọi API đặt trong `src/modules/admin/api/adminSubscriptionApi.js`.
+  - Các hàm gọi API đặt trong `src/modules/admin/api/adminApi.js` (endpoint trong `API_ENDPOINTS.ADMIN`).
   - Tuân thủ Stitch Design System: typography `Plus Jakarta Sans`, gam màu Soft Matcha Green `#7BAE7F`, card hairline border `#EDF2F0`, không sử dụng arbitrary Tailwind values.
 
 ### 1.3. Ngoài phạm vi (Out-of-Scope)
@@ -69,6 +69,8 @@ Cung cấp phân hệ quản trị toàn diện dành cho Quản trị viên (Ad
 4. **Ràng buộc toàn vẹn gói**:
    - Gói `free` **bắt buộc** phải giữ `price = 0` và **không được phép hủy kích hoạt** (`isActive` luôn là `true`). Bất kỳ thao tác đổi giá hoặc tắt active gói `free` đều bị từ chối với mã lỗi `FREE_PLAN_IMMUTABLE`.
    - Các gói Premium (`premium_monthly`, `premium_yearly`) **bắt buộc** phải có `price > 0`.
+   - **Mọi gói** đều sửa được `features` (`-1` = không giới hạn). Hệ thống quota áp dụng hạn mức của **gói đang hiệu lực** của phụ huynh: gói Premium đã mua khi còn hạn, Free khi chưa mua hoặc đã hết hạn. Gói Premium bị tạm ngưng bán vẫn giữ hạn mức cho phụ huynh đã mua. Mặc định Premium có mọi hạn mức `-1`.
+   - Đổi hạn mức của một gói Premium có hiệu lực **ngay** với các thuê bao đang dùng gói đó (khác với giá, chỉ áp dụng cho lượt mua mới).
 5. **Tính bất biến của giao dịch trong quá khứ**:
    - Khi Admin đổi giá hoặc quota của gói, các bản ghi `Payment` đã phát sinh trước đó **hoàn toàn không bị ảnh hưởng**, vì mỗi `Payment` lưu trữ một bản sao độc lập (`planSnapshot`) tại thời điểm checkout.
    - Giá mới chỉ áp dụng cho các phiên tạo checkout phát sinh sau thời điểm cập nhật.
@@ -109,11 +111,12 @@ Cung cấp phân hệ quản trị toàn diện dành cho Quản trị viên (Ad
    - `expired`: Hết hạn thanh toán (mặc định sau 15 phút).
 2. **Lọc thời gian giao dịch**:
    - Tham số `fromDate` và `toDate` thống nhất lọc theo thời gian tạo đơn `createdAt` của bản ghi Payment.
+   - Ngày dạng `YYYY-MM-DD` được hiểu theo múi giờ nghiệp vụ `APP_TIMEZONE` (mặc định `Asia/Ho_Chi_Minh`): `fromDate` là 00:00 của ngày đó, `toDate` là 23:59:59.999 của ngày đó (**bao gồm trọn ngày cuối**). Quy tắc này áp dụng cho cả `GET /revenue/summary`.
 3. **Thời hạn hiệu lực (Effective Period)**:
    - Với các giao dịch `success`, hiển thị khoảng thời hạn quyền lợi được cấp tương ứng từ `grantResult.effectiveStartDate` đến `grantResult.effectiveEndDate` và số tháng được cộng `grantResult.monthsGranted`.
 4. **Bảo mật dữ liệu (Data Stripping & Privacy)**:
-   - Khi trả về chi tiết giao dịch `GET /payments/:id`, Backend **tuyệt đối không trả về** `checkoutUrl` và `qrCode` để bảo mật cổng thanh toán và tránh tình trạng thanh toán ngoài ý muốn.
-   - `parentId` được hỗ trợ làm tham số query (`GET /payments?parentId=...`) để Drawer chi tiết phụ huynh tại màn hình `/admin/users` có thể tải lịch sử thanh toán của riêng phụ huynh đó.
+   - Khi trả về chi tiết giao dịch `GET /transactions/:id`, Backend **tuyệt đối không trả về** `checkoutUrl` và `qrCode` để bảo mật cổng thanh toán và tránh tình trạng thanh toán ngoài ý muốn.
+   - `parentId` được hỗ trợ làm tham số query (`GET /transactions?parentId=...`) để Drawer chi tiết phụ huynh tại màn hình `/admin/users` có thể tải lịch sử thanh toán của riêng phụ huynh đó.
 
 ### BR-05: Công thức & Thuật toán thống kê doanh thu (Revenue Metrics & Statistics)
 
@@ -233,7 +236,7 @@ Hệ thống tận dụng và tái sử dụng trực tiếp các Model Mongoose
     effectiveEndDate: Date,
     monthsGranted: Number
   },
-  createdAt: Date,         // Dùng lọc thời gian fromDate/toDate trong GET /payments
+  createdAt: Date,         // Dùng lọc thời gian fromDate/toDate trong GET /transactions
   updatedAt: Date
 }
 ```
@@ -350,12 +353,13 @@ Base path: `/api/v1/admin`
 - **Validation Rules**:
   - `name`: Chuỗi không rỗng, tối đa 100 ký tự (optional).
   - `price`: Số nguyên `>= 0` (optional). Nếu gói là `free`, `price` bắt buộc phải là 0; nếu gói là `premium_*`, `price` bắt buộc `> 0`.
-  - `features.*`: Số nguyên `>= -1`.
+  - `features.*`: Số nguyên `>= -1`, áp dụng cho mọi gói.
   - `isActive`: Boolean (optional). Với gói `free`, không cho phép chuyển thành `false`.
   - Nghiêm cấm nhận hoặc sửa đổi: `planCode`, `durationMonths`, `billingCycle`, `currency` (nếu gửi lên sẽ bị bỏ qua hoặc trả 400).
 - **Mã lỗi đặc thù**:
   - `400 BAD_REQUEST`: Giá trị đầu vào không hợp lệ hoặc cố gắng thay đổi `price != 0` cho gói free.
-  - `400 FREE_PLAN_IMMUTABLE`: Không thể vô hiệu hóa gói Free (`isActive: false`).
+  - `400 FREE_PLAN_IMMUTABLE`: Không thể đổi giá khác 0 hoặc vô hiệu hóa gói Free (`isActive: false`).
+  - `400 INVALID_PRICE`: Giá gói Premium phải `> 0`.
   - `404 PLAN_NOT_FOUND`: Không tìm thấy gói theo `id`.
 
 ---
@@ -528,8 +532,9 @@ Base path: `/api/v1/admin`
 - **Mô tả**: Tính toán và trả về toàn bộ các chỉ số đo lường hiệu quả kinh doanh, doanh thu theo tháng, tỷ lệ chuyển đổi và tỷ lệ rời bỏ.
 - **Headers**: `Authorization: Bearer <admin_token>`
 - **Query Params**:
-  - `fromDate`: (Optional) Ngày bắt đầu lọc (YYYY-MM-DD hoặc ISO). Mặc định là đầu năm hiện tại hoặc 6 tháng trước.
-  - `toDate`: (Optional) Ngày kết thúc lọc. Mặc định là thời điểm hiện tại.
+  - `fromDate`: (Optional) Ngày bắt đầu lọc (YYYY-MM-DD hoặc ISO). Mặc định là ngày 1 của tháng cách đây 5 tháng (tổng cộng 6 tháng tính cả tháng hiện tại).
+  - `toDate`: (Optional) Ngày kết thúc lọc, bao gồm trọn ngày. Mặc định là thời điểm hiện tại.
+  - `monthlyRevenue` liệt kê **mọi tháng** trong khoảng (gom theo `APP_TIMEZONE`); tháng không có giao dịch có `revenue = 0`.
 - **Phản hồi thành công (200 OK)**:
 ```json
 {
@@ -593,19 +598,29 @@ Base path: `/api/v1/admin`
 ```text
 Front-End/src/modules/admin/
 ├── api/
-│   └── adminSubscriptionApi.js       # Gọi các endpoint /api/v1/admin/plans, subscriptions, payments, revenue
+│   └── adminApi.js                   # + getPlans, updatePlan, getSubscriptions, getTransactions(Detail), getRevenueSummary (API_ENDPOINTS.ADMIN)
+├── redux/
+│   └── adminSlice.js                 # + thunk tương ứng (createApiThunk)
 ├── components/
-│   ├── subscription/
-│   │   ├── RevenueKpiCards.jsx       # 4 KPI cards: Doanh thu, Thuê bao, Conversion, Churn
-│   │   ├── MonthlyRevenueChart.jsx   # Biểu đồ Recharts BarChart / AreaChart
-│   │   ├── PlanEditCard.jsx          # Thẻ gói dịch vụ với form chỉnh sửa quota & giá
-│   │   ├── PriceChangeConfirmModal.jsx # Modal cảnh báo khi đổi giá bán
-│   │   ├── SubscribersTable.jsx      # Bảng danh sách thuê bao phụ huynh
-│   │   ├── TransactionsTable.jsx     # Bảng danh sách giao dịch
-│   │   └── PaymentDetailModal.jsx    # Modal chi tiết giao dịch kiểm toán
+│   ├── AdminStatStrip.jsx            # Dùng lại cho 4 KPI (REVENUE_STAT_CARDS, có `format` theo từng thẻ)
+│   └── subscription/
+│       ├── RevenueOverview.jsx       # DateRangeFilter + AdminStatStrip + BarChart dùng chung (components/charts)
+│       ├── PlanEditCard.jsx          # Thẻ gói: giá, trạng thái mở bán, hạn mức (Premium = không giới hạn)
+│       ├── EditPlanModal.jsx         # Modal + React Hook Form + Zod; ConfirmDialog khi đổi giá Premium
+│       ├── SubscribersTable.jsx      # Bảng thuê bao (AdminListToolbar + DataTable + Modal chi tiết)
+│       ├── TransactionsTable.jsx     # Bảng giao dịch (lọc trạng thái, gói, khoảng ngày)
+│       └── PaymentDetailModal.jsx    # Modal chi tiết giao dịch kiểm toán
 ├── hooks/
-│   ├── useAdminPlans.js              # State & mutations cho danh mục gói cước
-│   ├── useAdminRevenueSummary.js     # State & API fetching cho thống kê doanh thu (fetch theo filter, không tự động polling định kỳ)
+│   ├── useAdminPlans.js              # Danh mục gói cước & cập nhật gói
+│   ├── useEditPlanForm.js            # Form sửa gói (schema theo Free / Premium)
+│   ├── useAdminRevenueSummary.js     # Thống kê doanh thu theo khoảng ngày & xuất CSV
+│   ├── useAdminSubscriptions.js      # useServerTable cho danh sách thuê bao
+│   └── useAdminTransactions.js       # useServerTable cho danh sách giao dịch & chi tiết
+├── validation/
+│   └── planValidation.js             # getPlanFormSchema(isFree)
+├── mock/
+│   ├── adminSubscriptionMockData.js
+│   └── adminSubscriptionMockService.js # Đăng ký trong adminMockHandlers.js
 ├── pages/
 │   └── AdminSubscriptionManagementPage.jsx # Trang chính gồm 4 tabs
 ```
@@ -700,16 +715,16 @@ Thay thế placeholder tại path `subscriptions`:
 
 | Mã AC | Điều kiện kiểm tra & Kết quả mong đợi |
 | :--- | :--- |
-| **AC-01** | **Xác thực Admin Guard**: Người dùng chưa đăng nhập hoặc có role `PARENT` truy cập bất kỳ endpoint `/api/v1/admin/plans`, `/subscriptions`, `/payments`, `/revenue/summary` đều nhận mã lỗi `401 Unauthorized` hoặc `403 Forbidden`. |
+| **AC-01** | **Xác thực Admin Guard**: Người dùng chưa đăng nhập hoặc có role `PARENT` truy cập bất kỳ endpoint `/api/v1/admin/plans`, `/subscriptions`, `/transactions`, `/revenue/summary` đều nhận mã lỗi `401 Unauthorized` hoặc `403 Forbidden`. |
 | **AC-02** | **Danh sách gói cước (GET /plans)**: Trả về đầy đủ 3 gói dịch vụ (`free`, `premium_monthly`, `premium_yearly`), đầy đủ các trường quota trong `features`, kể cả khi có gói có `isActive: false`. |
 | **AC-03** | **Bảo vệ tính bất biến gói Free**: Thao tác `PATCH /plans/:id` với gói Free có `price != 0` hoặc `isActive: false` lập tức bị từ chối với HTTP 400 và thông báo lỗi rõ ràng (`FREE_PLAN_IMMUTABLE`). |
-| **AC-04** | **Cập nhật gói Premium & Kiểm tra Read-only**: `PATCH /plans/:id` thành công cho phép cập nhật tên gói, giá bán (`> 0`), các hạn mức quota (hỗ trợ giá trị `-1`) và trạng thái `isActive`. Các trường `planCode`, `durationMonths`, `billingCycle`, `currency` không bị thay đổi (read-only) và được kiểm thử tính bất biến. |
+| **AC-04** | **Cập nhật gói Premium & Kiểm tra Read-only**: `PATCH /plans/:id` thành công cho phép cập nhật tên gói, giá bán (`> 0`), các hạn mức quota (hỗ trợ giá trị `-1`) và trạng thái `isActive`; hạn mức mới áp dụng ngay cho thuê bao của gói. Các trường `planCode`, `durationMonths`, `billingCycle`, `currency` không bị thay đổi (read-only) và được kiểm thử tính bất biến. |
 | **AC-05** | **Không ảnh hưởng đơn cũ**: Thay đổi giá của `premium_monthly` không làm thay đổi `amount` hoặc `planSnapshot` của các bản ghi `payments` đã tạo trước đó. |
 | **AC-06** | **Tra cứu thuê bao (GET /subscriptions)**: Phân trang chính xác theo `PAGINATION`, dữ liệu phụ huynh được join chính xác từ collection `parents` và `users`. Lọc theo `planCode` và `status` hoạt động đúng. |
 | **AC-07** | **Tìm kiếm thuê bao**: Nhập từ khóa tên phụ huynh hoặc email tìm kiếm trả về danh sách thuê bao khớp chính xác mà không phân biệt chữ hoa / thường. |
-| **AC-08** | **Tra cứu giao dịch (GET /payments)**: Phân trang, sắp xếp mới nhất lên đầu, lọc theo trạng thái (đủ 6 trạng thái) và khoảng ngày `createdAt` (`fromDate`, `toDate`) trả về dữ liệu chuẩn xác. |
+| **AC-08** | **Tra cứu giao dịch (GET /transactions)**: Phân trang, sắp xếp mới nhất lên đầu, lọc theo trạng thái (đủ 6 trạng thái) và khoảng ngày `createdAt` (`fromDate`, `toDate`) trả về dữ liệu chuẩn xác. |
 | **AC-09** | **Tra cứu giao dịch theo parentId**: Truyền `parentId` trả về danh sách lịch sử thanh toán của riêng phụ huynh đó, phục vụ User Drawer tại màn hình quản lý người dùng. |
-| **AC-10** | **Bảo mật chi tiết giao dịch (GET /payments/:id)**: Trả về chi tiết đối soát gồm `transactionId`, `bankInfo`, `grantResult`, nhưng **không chứa** `checkoutUrl` và `qrCode`. |
+| **AC-10** | **Bảo mật chi tiết giao dịch (GET /transactions/:id)**: Trả về chi tiết đối soát gồm `transactionId`, `bankInfo`, `grantResult`, nhưng **không chứa** `checkoutUrl` và `qrCode`. |
 | **AC-11** | **Thống kê tổng doanh thu**: Tổng doanh thu trong `GET /revenue/summary` bằng tổng trường `amount` của các đơn `status = 'success'` có `paidAt` trong khoảng thời gian chọn (không fallback sang `createdAt`). |
 | **AC-12** | **Thống kê Conversion Rate**: Tính toán chuẩn theo công thức (Số phụ huynh có ít nhất 1 đơn Payment success / Tổng số phụ huynh) × 100%. Nếu tổng số phụ huynh = 0, trả về 0%. |
 | **AC-13** | **Thống kê Churn Rate**: Tính toán chuẩn xác theo công thức Churn Rate: Số phụ huynh có kỳ Premium cuối cùng (`effectiveEndDate`) kết thúc trong khoảng lọc và không có đơn Payment success nào sau đó ÷ Số phụ huynh có chu kỳ Premium đang hoạt động tại thời điểm bắt đầu khoảng lọc (`fromDate`). Phụ huynh gia hạn sớm không bị tính là churn. Xử lý mẫu số = 0 an toàn không gây lỗi NaN. |
@@ -742,8 +757,17 @@ Bổ sung các test suite vào `Back-End/test/integration/admin-portal.test.js`:
 2. [ ] **Mã nguồn Frontend**:
    - Xây dựng `modules/admin/pages/AdminSubscriptionManagementPage.jsx` gồm đầy đủ 4 tab: Tổng quan, Gói dịch vụ, Thuê bao, Giao dịch.
    - Thay thế subscriptions placeholder trong `AdminRoutes.jsx`.
-   - Các API calls đặt trong `modules/admin/api/adminSubscriptionApi.js`.
+   - Các API calls đặt trong `modules/admin/api/adminApi.js` (endpoint trong `API_ENDPOINTS.ADMIN`).
    - Giao diện tuân thủ Stitch admin design và không có lỗi lint/build.
 3. [ ] **Tài liệu & Quy trình Git**:
    - Tài liệu SRS được lưu tại `Back-End/docs/SRS_ADMIN_SUBSCRIPTION_REVENUE.md` và `Front-End/docs/SRS_ADMIN_SUBSCRIPTION_REVENUE.md`.
    - Commit code tuân thủ Conventional Commits theo quy định Git của dự án (`feat(admin): ...`).
+
+---
+
+## Phụ lục: Bổ sung sau review
+
+- `GET /api/v1/admin/plans/:id`: trả về 1 gói như đang lưu (`{ plan }`); modal sửa gói gọi lại mỗi lần mở, nên form luôn bắt đầu từ dữ liệu mới nhất (không giữ giá trị đã gõ rồi bấm Hủy).
+- `GET /api/v1/admin/subscriptions/:id`: 1 thuê bao kèm phụ huynh; modal chi tiết thuê bao gọi lại mỗi lần mở (modal giao dịch gọi `GET /transactions/:id` tương tự). Lỗi `404 SUBSCRIPTION_NOT_FOUND`.
+- **Xuất báo cáo**: file Excel `.xlsx` (thư viện `exceljs`, chỉ tải khi bấm xuất), gồm các sheet `Tổng quan`, `Doanh thu theo tháng` (có dòng Tổng cộng), `Gói dịch vụ` (giá, chu kỳ, trạng thái, từng hạn mức), `Thuê bao` (toàn bộ), `Giao dịch` (các payment tạo trong khoảng thời gian của báo cáo). Danh sách được đọc hết theo trang 100 dòng.
+

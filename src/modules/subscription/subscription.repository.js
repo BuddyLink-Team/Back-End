@@ -143,109 +143,31 @@ class SubscriptionRepository {
     );
   }
 
+  async findByIdLean(id) {
+    return Subscription.findById(id).lean();
+  }
+
   /**
-   * Paginated list of subscriptions with parent and user lookup for admin portal
+   * Page of subscriptions for the admin portal, newest first
+   * @param {{ planCode?: string, status?: string, parentIds?: Array<ObjectId>|null, page: number, limit: number }} options
+   *   parentIds null = any parent
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
-  async findPaginated({ planCode, status, search, page = 1, limit = 10 } = {}) {
-    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
-    const parsedLimit = Math.max(1, parseInt(limit, 10) || 10);
-    const skip = (parsedPage - 1) * parsedLimit;
+  async findPageForAdmin({ planCode, status, parentIds = null, page, limit }) {
+    const filter = {};
+    if (planCode) filter.planCode = planCode;
+    if (status) filter.status = status;
+    if (parentIds) filter.parentId = { $in: parentIds };
 
-    const pipeline = [
-      {
-        $lookup: {
-          from: 'parents',
-          localField: 'parentId',
-          foreignField: '_id',
-          as: 'parent',
-        },
-      },
-      {
-        $unwind: {
-          path: '$parent',
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'parent.userId',
-          foreignField: '_id',
-          as: 'user',
-        },
-      },
-      {
-        $unwind: {
-          path: '$user',
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-    ];
-
-    const matchConditions = {};
-
-    if (planCode) {
-      matchConditions.planCode = planCode;
-    }
-
-    if (status) {
-      matchConditions.status = status;
-    }
-
-    if (search && search.trim()) {
-      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      matchConditions.$or = [
-        { 'parent.fullName': { $regex: escaped, $options: 'i' } },
-        { 'user.email': { $regex: escaped, $options: 'i' } },
-      ];
-    }
-
-    if (Object.keys(matchConditions).length > 0) {
-      pipeline.push({ $match: matchConditions });
-    }
-
-    pipeline.push({
-      $facet: {
-        items: [
-          { $sort: { createdAt: -1, _id: -1 } },
-          { $skip: skip },
-          { $limit: parsedLimit },
-          {
-            $project: {
-              _id: 1,
-              parentId: 1,
-              planCode: 1,
-              status: 1,
-              startDate: 1,
-              endDate: 1,
-              purchasedMonths: 1,
-              createdAt: 1,
-              parent: {
-                _id: '$parent._id',
-                fullName: '$parent.fullName',
-                avatarUrl: '$parent.avatarUrl',
-                email: '$user.email',
-              },
-            },
-          },
-        ],
-        totalCount: [{ $count: 'count' }],
-      },
-    });
-
-    const result = await Subscription.aggregate(pipeline);
-    const items = result[0]?.items || [];
-    const total = result[0]?.totalCount[0]?.count || 0;
-
-    return {
-      items,
-      pagination: {
-        page: parsedPage,
-        limit: parsedLimit,
-        total,
-        totalPages: Math.ceil(total / parsedLimit) || 1,
-      },
-    };
+    const [items, total] = await Promise.all([
+      Subscription.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Subscription.countDocuments(filter),
+    ]);
+    return { items, total };
   }
 }
 
