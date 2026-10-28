@@ -1,6 +1,6 @@
 import discoveryService from '../../discovery/discovery.service.js';
 import { DISCOVERY_DEFAULTS } from '../../discovery/discovery.constants.js';
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import { AI_TOOL_NAMES, AI_CARD_TYPES, AI_STEPS, AI_LIMITS, AI_OPTION_IDS } from '../ai-assistant.constants.js';
 import { makeChoiceCard } from './plan-steps.js';
 import { toMatchItem, tagsOf } from './tool-sanitizer.js';

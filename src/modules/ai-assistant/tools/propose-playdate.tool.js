@@ -3,7 +3,7 @@ import playdateService from '../../playdate/playdate.service.js';
 import placesService from '../../places/places.service.js';
 import subscriptionService from '../../subscription/subscription.service.js';
 import { QUOTA_FEATURES } from '../../subscription/subscription.constants.js';
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import { AI_TOOL_NAMES, AI_CARD_TYPES, AI_LIMITS, AI_DRAFT_WARNING_CODES } from '../ai-assistant.constants.js';
 import { emptyDraft, clampDuration, normalizeAgenda, isValidDate, isValidTime } from '../plan-draft.rules.js';
 import { advancePlan, resolveActivity } from './plan-steps.js';

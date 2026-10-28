@@ -4,7 +4,7 @@ import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import connectionService from '../connection/connection.service.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { MESSAGE_PRIVACY } from '../parent/parent.constants.js';
 import { CONVERSATION_TYPES, MESSAGE_TYPES } from './chat.constants.js';
 

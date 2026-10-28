@@ -2,7 +2,7 @@ import placesRepository from './places.repository.js';
 import overpassAdapter from '../../integrations/maps/overpass.adapter.js';
 import geocodingAdapter from '../../integrations/maps/geocoding.adapter.js';
 import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import logger from '../../shared/logger/index.js';
 import { wait } from '../../shared/helpers/async.helper.js';
 import env from '../../config/env.js';

@@ -3,7 +3,7 @@ import aiAssistantRepository from './ai-assistant.repository.js';
 import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import geminiAdapter from '../../integrations/ai/gemini.adapter.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import logger from '../../shared/logger/index.js';
 import {
   AI_MESSAGE_ROLES,

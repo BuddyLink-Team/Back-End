@@ -670,11 +670,13 @@ describe('Admin Playdates & Connections Oversight', () => {
     });
 
     // Create Connections
+    const pairIds = [childA._id.toString(), childB._id.toString()].sort();
     pendingConnection = await Connection.create({
       parents: [parentA.id, parentB.id],
       requesterId: parentA.id,
       recipientId: parentB.id,
       status: 'pending',
+      childPairs: [{ childIds: pairIds, pairKey: pairIds.join('_'), source: 'discovery', matchScore: 80 }],
     });
 
     const regC = await request(app).post('/api/v1/auth/register').send({
@@ -712,6 +714,26 @@ describe('Admin Playdates & Connections Oversight', () => {
       expect(item.host.child.displayName).toBe('Child Alpha');
       expect(item.numberOfParticipants).toBe(1);
       expect(item.status).toBe('upcoming');
+    });
+
+    it('GET /api/v1/admin/playdates/stats counts every playdate by status', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/playdates/stats')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      const { total, upcoming, completed, cancelled } = res.body.data;
+      expect(upcoming).toBeGreaterThanOrEqual(1);
+      expect(completed).toBeGreaterThanOrEqual(1);
+      expect(total).toBe(upcoming + completed + cancelled);
+    });
+
+    it('rejects a toDate before fromDate', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/playdates?fromDate=2026-11-10&toDate=2026-11-01')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(400);
     });
 
     it('filters playdates by status', async () => {
@@ -858,6 +880,18 @@ describe('Admin Playdates & Connections Oversight', () => {
       expect(res.body.data.items.some((c) => c.id === acceptedConnection._id.toString())).toBe(true);
     });
 
+    it('GET /api/v1/admin/connections/stats counts every connection by status', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/connections/stats')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      const { total, pending, accepted, declined, removed } = res.body.data;
+      expect(pending).toBeGreaterThanOrEqual(1);
+      expect(accepted).toBeGreaterThanOrEqual(1);
+      expect(total).toBe(pending + accepted + declined + removed);
+    });
+
     it('searches connections by parent name', async () => {
       const res = await request(adminApp)
         .get('/api/v1/admin/connections?search=Gamma')
@@ -879,6 +913,12 @@ describe('Admin Playdates & Connections Oversight', () => {
       expect(res.body.data.requester.userId).toBeDefined();
       expect(res.body.data.recipient.fullName).toBe('Invited Parent Beta');
       expect(res.body.data.recipient.isActive).toBe(true);
+      // Ward and city only: the parent's address and coordinates are not sent
+      expect(Object.keys(res.body.data.requester.location).sort()).toEqual(['area', 'city']);
+      // Matched children with their names, not raw ids
+      const [pair] = res.body.data.childPairs;
+      expect(pair.source).toBe('discovery');
+      expect(pair.children.map((c) => c.displayName).sort()).toEqual(['Child Alpha', 'Child Beta']);
     });
 
     it('DELETE /api/v1/admin/connections/:id soft-removes connection', async () => {
@@ -892,14 +932,26 @@ describe('Admin Playdates & Connections Oversight', () => {
       expect(res.body.data.removedAt).toBeDefined();
       expect(res.body.data.removedByAdmin).toBe(true);
       expect(res.body.data.removalReason).toBe('Dispute between parents');
+      // Returned with both parents, like the detail endpoint
+      expect(res.body.data.requester.fullName).toBe('Host Parent Alpha');
+      expect(res.body.data.recipient.fullName).toBe('Invited Parent Beta');
     });
 
-    it('DELETE /api/v1/admin/connections/:id returns 400 if already removed', async () => {
+    it('DELETE /api/v1/admin/connections/:id rejects a reason over the max length', async () => {
+      const res = await request(adminApp)
+        .delete(`/api/v1/admin/connections/${acceptedConnection._id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ reason: 'x'.repeat(501) });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('DELETE /api/v1/admin/connections/:id returns 409 if already removed', async () => {
       const res = await request(adminApp)
         .delete(`/api/v1/admin/connections/${pendingConnection._id}`)
         .set('Authorization', `Bearer ${adminToken}`);
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       expect(res.body.error.code).toBe('INVALID_CONNECTION_STATE');
     });
   });

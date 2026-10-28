@@ -1,6 +1,6 @@
 import { query, param, body } from 'express-validator';
 import { CHILD_GENDERS } from '../child/child.constants.js';
-import { ADMIN_SEARCH_MAX_LENGTH } from './admin.constants.js';
+import { ADMIN_SEARCH_MAX_LENGTH, ADMIN_REASON_MAX_LENGTH } from './admin.constants.js';
 import { PLAYDATE_STATUS } from '../playdate/playdate.constants.js';
 import { CONNECTION_STATUS } from '../connection/connection.constants.js';
 
@@ -164,7 +164,10 @@ export const adminGetPlaydatesValidation = [
   query('toDate')
     .optional()
     .isISO8601()
-    .withMessage('Invalid toDate (must be ISO8601 date string)'),
+    .withMessage('Invalid toDate (must be ISO8601 date string)')
+    .bail()
+    .custom((value, { req }) => !req.query.fromDate || new Date(req.query.fromDate) <= new Date(value))
+    .withMessage('toDate must be on or after fromDate'),
 ];
 
 export const adminCancelPlaydateValidation = [
@@ -172,11 +175,13 @@ export const adminCancelPlaydateValidation = [
     .isMongoId()
     .withMessage('Invalid playdate ID'),
   body('reason')
+    .isString()
+    .withMessage('Cancellation reason must be a string')
     .trim()
     .notEmpty()
     .withMessage('Cancellation reason is required')
-    .isString()
-    .withMessage('Cancellation reason must be a string'),
+    .isLength({ max: ADMIN_REASON_MAX_LENGTH })
+    .withMessage(`Cancellation reason must be at most ${ADMIN_REASON_MAX_LENGTH} characters`),
 ];
 
 export const adminGetConnectionsValidation = [
@@ -206,7 +211,9 @@ export const adminDeleteConnectionValidation = [
     .withMessage('Invalid connection ID'),
   body('reason')
     .optional()
-    .trim()
     .isString()
-    .withMessage('Removal reason must be a string'),
+    .withMessage('Removal reason must be a string')
+    .trim()
+    .isLength({ max: ADMIN_REASON_MAX_LENGTH })
+    .withMessage(`Removal reason must be at most ${ADMIN_REASON_MAX_LENGTH} characters`),
 ];

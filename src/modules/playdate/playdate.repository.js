@@ -191,6 +191,21 @@ class PlaydateRepository {
   }
 
   /**
+   * Playdates across the platform counted by status
+   * @returns {Promise<{ total: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async countByStatus() {
+    const rows = await Playdate.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+    const countOf = (status) => rows.find((row) => row._id === status)?.count || 0;
+    return {
+      total: rows.reduce((sum, row) => sum + row.count, 0),
+      upcoming: countOf(PLAYDATE_STATUS.UPCOMING),
+      completed: countOf(PLAYDATE_STATUS.COMPLETED),
+      cancelled: countOf(PLAYDATE_STATUS.CANCELLED),
+    };
+  }
+
+  /**
    * Count playdates by status tabs using MongoDB Aggregation
    * Avoids loading all documents into application memory
    * @param {string|ObjectId} parentId
@@ -600,30 +615,27 @@ class PlaydateRepository {
   }
 
   /**
-   * Find paginated list of playdates for admin oversight
+   * One page of playdates for admin oversight, newest scheduled first
    * @param {Object} options
-   * @param {string} [options.status]
-   * @param {string} [options.search]
+   * @param {string} [options.status] - Playdate status, or 'all' / empty for every status
+   * @param {string} [options.search] - Matched against activity, place name and host parent
+   * @param {Array<string|ObjectId>} [options.hostParentIds] - Hosts whose name matches the search
    * @param {string|Date} [options.fromDate]
-   * @param {string|Date} [options.toDate]
-   * @param {number} [options.page=1]
-   * @param {number} [options.limit=10]
-   * @param {Array<string|ObjectId>} [options.hostParentIds]
-   * @returns {Promise<{ items: Array, pagination: Object }>}
+   * @param {string|Date} [options.toDate] - A YYYY-MM-DD date includes the whole day
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
-  async findPageForAdmin({ status, search, fromDate, toDate, page = 1, limit = 10, hostParentIds } = {}) {
+  async findPageForAdmin({ status, search, hostParentIds, fromDate, toDate, page, limit }) {
     const andConditions = [];
 
     if (status && status !== 'all') {
       andConditions.push({ status: status.toLowerCase() });
     }
 
-    if (search && search.trim()) {
-      const escaped = escapeRegExp(search.trim());
-      const searchOr = [
-        { activity: { $regex: escaped, $options: 'i' } },
-        { 'location.name': { $regex: escaped, $options: 'i' } },
-      ];
+    if (search) {
+      const regex = new RegExp(escapeRegExp(search), 'i');
+      const searchOr = [{ activity: regex }, { 'location.name': regex }];
       if (Array.isArray(hostParentIds) && hostParentIds.length > 0) {
         searchOr.push({ hostParentId: { $in: hostParentIds } });
       }
@@ -643,34 +655,20 @@ class PlaydateRepository {
       andConditions.push({ scheduledDate: dateCond });
     }
 
-    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
+    const filter = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
 
-    const parsedLimit = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || PAGINATION.DEFAULT_LIMIT));
-    const parsedPage = Math.max(PAGINATION.DEFAULT_PAGE, parseInt(page, 10) || PAGINATION.DEFAULT_PAGE);
-    const skip = (parsedPage - 1) * parsedLimit;
-
-    const [total, items] = await Promise.all([
-      Playdate.countDocuments(query),
-      Playdate.find(query)
+    // The list only shows the number of participants, so they are not populated
+    const [items, total] = await Promise.all([
+      Playdate.find(filter)
         .sort({ scheduledDate: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(parsedLimit)
-        .populate('hostParentId', 'fullName avatarUrl userId verification location')
-        .populate('hostChildId', 'displayName dateOfBirth gender interests')
-        .populate('participants.parentId', 'fullName avatarUrl userId verification location')
-        .populate('participants.childId', 'displayName dateOfBirth gender interests')
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('hostParentId', 'fullName avatarUrl userId verification')
+        .populate('hostChildId', 'displayName dateOfBirth gender')
         .lean(),
+      Playdate.countDocuments(filter),
     ]);
-
-    return {
-      items,
-      pagination: {
-        page: parsedPage,
-        limit: parsedLimit,
-        total,
-        totalPages: Math.ceil(total / parsedLimit) || 1,
-      },
-    };
+    return { items, total };
   }
 }
 

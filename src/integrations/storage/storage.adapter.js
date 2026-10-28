@@ -1,7 +1,7 @@
 import { v2 as cloudinary } from 'cloudinary';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 
 /**
  * Single Cloud Storage adapter (Cloudinary) for all image uploads (avatars, chat attachments...).

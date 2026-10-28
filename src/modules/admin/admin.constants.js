@@ -16,3 +16,6 @@ export const LOGIN_METHODS = Object.freeze({
 });
 
 export const ADMIN_SEARCH_MAX_LENGTH = 100;
+
+// Reason an admin gives when cancelling a playdate or removing a connection
+export const ADMIN_REASON_MAX_LENGTH = 500;

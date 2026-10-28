@@ -177,8 +177,6 @@ export class AdminPlaydateDTO {
         }
       : null;
 
-    const participantCount = (playdate.participants || []).length;
-
     return {
       id: toId(playdate),
       activity: playdate.activity || '',
@@ -190,8 +188,7 @@ export class AdminPlaydateDTO {
         parent: hostParent,
         child: hostChild,
       },
-      numberOfParticipants: participantCount,
-      participantCount,
+      numberOfParticipants: (playdate.participants || []).length,
       status: playdate.status,
       createdAt: playdate.createdAt,
     };
@@ -212,7 +209,7 @@ export class AdminPlaydateDTO {
           fullName: playdate.hostParentId.fullName || '',
           avatarUrl: playdate.hostParentId.avatarUrl || '',
           isVerified: Boolean(playdate.hostParentId.verification?.isVerifiedParent),
-          location: playdate.hostParentId.location || null,
+          location: toArea(playdate.hostParentId.location),
         }
       : null;
 
@@ -231,6 +228,7 @@ export class AdminPlaydateDTO {
       parent: p.parentId && typeof p.parentId === 'object'
         ? {
             id: toId(p.parentId),
+            userId: toId(p.parentId.userId),
             fullName: p.parentId.fullName || '',
             avatarUrl: p.parentId.avatarUrl || '',
             isVerified: Boolean(p.parentId.verification?.isVerifiedParent),
@@ -259,8 +257,6 @@ export class AdminPlaydateDTO {
         }
       : null;
 
-    const participantCount = participants.length;
-
     return {
       id: toId(playdate),
       activity: playdate.activity || '',
@@ -275,8 +271,7 @@ export class AdminPlaydateDTO {
         child: hostChild,
       },
       participants,
-      numberOfParticipants: participantCount,
-      participantCount,
+      numberOfParticipants: participants.length,
       cancellation,
       completedAt: playdate.completedAt || null,
       pendingReschedule: pendingReschedule ? RescheduleResponseDTO.toResponse(pendingReschedule) : null,
@@ -298,8 +293,31 @@ export class AdminConnectionDTO {
       email: userObj?.email || '',
       isActive: userObj?.isActive ?? true,
       isVerified: Boolean(parent.verification?.isVerifiedParent),
-      location: parent.location || null,
+      location: toArea(parent.location),
       bio: parent.bio || '',
+    };
+  }
+
+  /**
+   * Children matched on the connection (archived ones are kept and flagged, the admin sees the whole history)
+   */
+  static formatChildPair(pair) {
+    return {
+      children: (pair.childIds || []).map((child) =>
+        child && typeof child === 'object'
+          ? {
+              id: toId(child),
+              parentId: toId(child.parentId),
+              displayName: child.displayName || '',
+              age: calculateAgeYears(child.dateOfBirth),
+              gender: child.gender,
+              isArchived: child.isArchived || false,
+            }
+          : { id: toId(child), parentId: null, displayName: '', age: null, gender: null, isArchived: false }
+      ),
+      source: pair.source,
+      matchScore: pair.matchScore ?? null,
+      createdAt: pair.createdAt || null,
     };
   }
 
@@ -337,7 +355,7 @@ export class AdminConnectionDTO {
       removedAt: conn.removedAt || null,
       removalReason: conn.removalReason || null,
       removedByAdmin: Boolean(conn.removedByAdmin),
-      childPairs: conn.childPairs || [],
+      childPairs: (conn.childPairs || []).map((pair) => AdminConnectionDTO.formatChildPair(pair)),
       createdAt: conn.createdAt,
       updatedAt: conn.updatedAt,
     };

@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import userRepository from './user.repository.js';
 import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import { UserProfileDTO } from './user.dto.js';
 import { normalizePhone } from '../../shared/helpers/phone.helper.js';

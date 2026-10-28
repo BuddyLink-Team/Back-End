@@ -5,7 +5,7 @@ import childService from '../child/child.service.js';
 import connectionService from '../connection/connection.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import logger from '../../shared/logger/index.js';
 import {
   getScheduledStart,
@@ -1111,6 +1111,14 @@ class PlaydateService {
 
 
   /**
+   * Admin oversight: playdates across the platform counted by status
+   * @returns {Promise<{ total: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async getPlaydateStats() {
+    return playdateRepository.countByStatus();
+  }
+
+  /**
    * Playdates a parent hosts or is invited to, counted by status
    * @param {string|ObjectId} parentId
    * @returns {Promise<{ all: number, upcoming: number, completed: number, cancelled: number }>}
@@ -1121,23 +1129,13 @@ class PlaydateService {
   }
 
   /**
-   * Admin oversight: paginated list of all playdates across the platform
+   * Admin oversight: one page of all playdates across the platform
+   * @param {{ status?: string, search?: string, fromDate?: string, toDate?: string, page: number, limit: number }} options
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
-  async getPlaydatesForAdmin({ status, search, fromDate, toDate, page, limit } = {}) {
-    let hostParentIds;
-    if (search && search.trim()) {
-      hostParentIds = await parentService.findParentIdsByName(search.trim());
-    }
-
-    return playdateRepository.findPageForAdmin({
-      status,
-      search,
-      fromDate,
-      toDate,
-      page,
-      limit,
-      hostParentIds,
-    });
+  async getPlaydatesForAdmin({ status, search, fromDate, toDate, page, limit }) {
+    const hostParentIds = search ? await parentService.findParentIdsByName(search) : [];
+    return playdateRepository.findPageForAdmin({ status, search, hostParentIds, fromDate, toDate, page, limit });
   }
 
   /**

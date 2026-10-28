@@ -1,5 +1,5 @@
 import logger from '../../../shared/logger/index.js';
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import { getMyChildrenTool } from './get-my-children.tool.js';
 import { findMatchesTool } from './find-matches.tool.js';
 import { findNearbyPlacesTool } from './find-nearby-places.tool.js';

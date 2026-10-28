@@ -1,8 +1,9 @@
 import Connection from './connection.model.js';
 import { CONNECTION_STATUS } from './connection.constants.js';
-import { PAGINATION } from '../../shared/constants/index.js';
-import '../user/user.model.js';
-import '../parent/parent.model.js';
+
+// Parent fields shown in the admin portal (the admin DTO reduces location to area / city)
+const ADMIN_PARENT_FIELDS = 'fullName avatarUrl userId verification location';
+const ADMIN_PARENT_USER_POPULATE = { path: 'userId', select: 'isActive email role' };
 
 class ConnectionRepository {
   /**
@@ -36,6 +37,22 @@ class ConnectionRepository {
    */
   async countAcceptedForParent(parentId) {
     return Connection.countDocuments({ parents: parentId, status: CONNECTION_STATUS.ACCEPTED });
+  }
+
+  /**
+   * Connections across the platform counted by status
+   * @returns {Promise<{ total: number, pending: number, accepted: number, declined: number, removed: number }>}
+   */
+  async countByStatus() {
+    const rows = await Connection.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+    const countOf = (status) => rows.find((row) => row._id === status)?.count || 0;
+    return {
+      total: rows.reduce((sum, row) => sum + row.count, 0),
+      pending: countOf(CONNECTION_STATUS.PENDING),
+      accepted: countOf(CONNECTION_STATUS.ACCEPTED),
+      declined: countOf(CONNECTION_STATUS.DECLINED),
+      removed: countOf(CONNECTION_STATUS.REMOVED),
+    };
   }
 
   /**
@@ -153,15 +170,15 @@ class ConnectionRepository {
   }
 
   /**
-   * One page of connections for admin oversight
+   * One page of connections for admin oversight, newest first
    * @param {Object} options
-   * @param {string} [options.status]
-   * @param {Array<string|ObjectId>} [options.searchParentIds]
-   * @param {number} [options.page=1]
-   * @param {number} [options.limit=10]
-   * @returns {Promise<{ items: Array<Object>, pagination: Object }>}
+   * @param {string} [options.status] - Connection status, or 'all' / empty for every status
+   * @param {Array<string|ObjectId>|null} [options.searchParentIds] - Only connections of these parents (null = no filter)
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
-  async findPageForAdmin({ status, searchParentIds, page = 1, limit = 10 } = {}) {
+  async findPageForAdmin({ status, searchParentIds = null, page, limit }) {
     const andConditions = [];
     if (status && status !== 'all') {
       andConditions.push({ status: status.toLowerCase() });
@@ -169,33 +186,19 @@ class ConnectionRepository {
     if (Array.isArray(searchParentIds)) {
       andConditions.push({ parents: { $in: searchParentIds } });
     }
+    const filter = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
 
-    const query = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
-    const parsedLimit = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || PAGINATION.DEFAULT_LIMIT));
-    const parsedPage = Math.max(PAGINATION.DEFAULT_PAGE, parseInt(page, 10) || PAGINATION.DEFAULT_PAGE);
-    const skip = (parsedPage - 1) * parsedLimit;
-
-    const parentFields = 'fullName avatarUrl userId verification location';
-    const [total, items] = await Promise.all([
-      Connection.countDocuments(query),
-      Connection.find(query)
+    const [items, total] = await Promise.all([
+      Connection.find(filter)
         .sort({ createdAt: -1, _id: -1 })
-        .skip(skip)
-        .limit(parsedLimit)
-        .populate({ path: 'requesterId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
-        .populate({ path: 'recipientId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({ path: 'requesterId', select: ADMIN_PARENT_FIELDS, populate: ADMIN_PARENT_USER_POPULATE })
+        .populate({ path: 'recipientId', select: ADMIN_PARENT_FIELDS, populate: ADMIN_PARENT_USER_POPULATE })
         .lean(),
+      Connection.countDocuments(filter),
     ]);
-
-    return {
-      items,
-      pagination: {
-        page: parsedPage,
-        limit: parsedLimit,
-        total,
-        totalPages: Math.ceil(total / parsedLimit) || 1,
-      },
-    };
+    return { items, total };
   }
 
   /**
@@ -204,10 +207,10 @@ class ConnectionRepository {
    * @returns {Promise<Object|null>}
    */
   async findWithDetailsForAdmin(id) {
-    const parentFields = 'fullName avatarUrl userId verification location bio';
     return Connection.findById(id)
-      .populate({ path: 'requesterId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
-      .populate({ path: 'recipientId', select: parentFields, populate: { path: 'userId', select: 'isActive email role' } })
+      .populate({ path: 'requesterId', select: `${ADMIN_PARENT_FIELDS} bio`, populate: ADMIN_PARENT_USER_POPULATE })
+      .populate({ path: 'recipientId', select: `${ADMIN_PARENT_FIELDS} bio`, populate: ADMIN_PARENT_USER_POPULATE })
+      .populate('childPairs.childIds', 'displayName dateOfBirth gender isArchived parentId')
       .lean();
   }
 

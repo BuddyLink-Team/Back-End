@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import logger from "../shared/logger/index.js";
 import { errorResponse } from "../shared/response/index.js";
-import AppError from "../shared/exceptions/AppError.js";
+import AppError from "../shared/exceptions/app-error.js";
 
 export const notFoundHandler = (req, res) => {
   return errorResponse(res, `Route not found: ${req.method} ${req.originalUrl}`, 404, {

@@ -1,5 +1,5 @@
 import playdateService from '../../playdate/playdate.service.js';
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import {
   AI_CARD_TYPES,
   AI_CHOICE_STATUS,

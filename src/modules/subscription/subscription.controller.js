@@ -2,7 +2,7 @@ import subscriptionService from './subscription.service.js';
 import parentService from '../parent/parent.service.js';
 import SubscriptionDTO from './subscription.dto.js';
 import { successResponse } from '../../shared/response/index.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 
 class SubscriptionController {
   constructor() {

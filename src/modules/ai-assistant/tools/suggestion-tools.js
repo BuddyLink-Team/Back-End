@@ -1,4 +1,4 @@
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import { PLACE_TYPES } from '../../places/places.constants.js';
 import { AI_TOOL_NAMES, AI_STEPS } from '../ai-assistant.constants.js';
 import { isValidDate } from '../plan-draft.rules.js';

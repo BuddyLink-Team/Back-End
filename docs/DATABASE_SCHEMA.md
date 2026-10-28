@@ -157,7 +157,7 @@ erDiagram
         ObjectId parentId FK "Ref: parents._id"
         string displayName
         date dateOfBirth "Tính tuổi chính xác"
-        string gender "boy | girl | other"
+        string gender "boy | girl"
         string[] interests "Lego, vẽ tranh, khủng long..."
         string[] favoriteActivities "Đạp xe, bơi lội, công viên..."
         string[] personality "Năng động, hòa đồng, sáng tạo..."
@@ -688,7 +688,7 @@ interface IChild {
 
   displayName: string; // Tên hoặc biệt danh
   dateOfBirth: Date; // Ngày sinh để tính tuổi chính xác
-  gender: "boy" | "girl" | "other";
+  gender: "boy" | "girl";
 
   interests: string[]; // ['Lego', 'Vẽ tranh', 'Khủng long', 'Âm nhạc']
   favoriteActivities: string[]; // ['Đạp xe', 'Bơi lội', 'Đi công viên', 'Đọc sách']

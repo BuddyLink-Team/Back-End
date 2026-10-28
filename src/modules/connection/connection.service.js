@@ -3,7 +3,7 @@ import parentService from '../parent/parent.service.js';
 import childService from '../child/child.service.js';
 import safetyService from '../safety/safety.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
 import { CONNECTION_STATUS, CHILD_PAIR_SOURCES, buildChildPairKey } from './connection.constants.js';
 import { PAGINATION } from '../../shared/constants/index.js';
@@ -64,6 +64,14 @@ class ConnectionService {
    */
   async getAcceptedConnections(parentId) {
     return connectionRepository.findAcceptedForParent(parentId);
+  }
+
+  /**
+   * Admin oversight: connections across the platform counted by status
+   * @returns {Promise<{ total: number, pending: number, accepted: number, declined: number, removed: number }>}
+   */
+  async getConnectionStats() {
+    return connectionRepository.countByStatus();
   }
 
   /**
@@ -393,24 +401,21 @@ class ConnectionService {
   }
 
   /**
-   * Admin oversight: paginated list of all connections
+   * Admin oversight: one page of all connections, searched by parent or child name
+   * @param {{ status?: string, search?: string, page: number, limit: number }} options
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
-  async getConnectionsForAdmin({ status, search, page, limit } = {}) {
-    let searchParentIds;
-    if (search && search.trim()) {
+  async getConnectionsForAdmin({ status, search, page, limit }) {
+    let searchParentIds = null;
+    if (search) {
       const [byName, byChildName] = await Promise.all([
-        parentService.findParentIdsByName(search.trim()),
-        childService.findParentIdsByChildName(search.trim()),
+        parentService.findParentIdsByName(search),
+        childService.findParentIdsByChildName(search),
       ]);
       searchParentIds = [...new Set([...byName, ...byChildName].map((id) => id.toString()))];
     }
 
-    return connectionRepository.findPageForAdmin({
-      status,
-      searchParentIds,
-      page,
-      limit,
-    });
+    return connectionRepository.findPageForAdmin({ status, searchParentIds, page, limit });
   }
 
   /**
@@ -425,7 +430,10 @@ class ConnectionService {
   }
 
   /**
-   * Admin oversight: soft-remove a connection (pending or accepted)
+   * Admin oversight: soft-remove a pending or accepted connection
+   * @param {string} id
+   * @param {string} [reason]
+   * @returns {Promise<Object>} Removed connection with both parents populated
    */
   async removeConnectionByAdmin(id, reason = '') {
     const connection = await connectionRepository.findById(id);
@@ -433,24 +441,18 @@ class ConnectionService {
       throw new AppError('Connection not found', 404, 'CONNECTION_NOT_FOUND');
     }
 
-    if (
-      connection.status !== CONNECTION_STATUS.PENDING &&
-      connection.status !== CONNECTION_STATUS.ACCEPTED
-    ) {
-      throw new AppError('Only pending or accepted connections can be removed', 400, 'INVALID_CONNECTION_STATE');
+    const removableStatuses = [CONNECTION_STATUS.PENDING, CONNECTION_STATUS.ACCEPTED];
+    if (!removableStatuses.includes(connection.status)) {
+      throw new AppError('Only pending or accepted connections can be removed', 409, 'INVALID_CONNECTION_STATE');
     }
 
-    const updated = await this._transition(
-      id,
-      connection.status,
-      CONNECTION_STATUS.REMOVED,
-      {
-        removedByAdmin: true,
-        ...(reason ? { removalReason: reason } : {}),
-      }
-    );
+    // Applies only while the status is unchanged, so a concurrent change also answers 409 INVALID_CONNECTION_STATE
+    await this._transition(id, connection.status, CONNECTION_STATUS.REMOVED, {
+      removedByAdmin: true,
+      ...(reason ? { removalReason: reason } : {}),
+    });
 
-    return updated;
+    return connectionRepository.findWithDetailsForAdmin(id);
   }
 }
 
