@@ -1,6 +1,8 @@
 import { query, param, body } from 'express-validator';
 import { CHILD_GENDERS } from '../child/child.constants.js';
-import { ADMIN_SEARCH_MAX_LENGTH } from './admin.constants.js';
+import { ADMIN_SEARCH_MAX_LENGTH, ADMIN_REASON_MAX_LENGTH } from './admin.constants.js';
+import { PLAYDATE_STATUS } from '../playdate/playdate.constants.js';
+import { CONNECTION_STATUS } from '../connection/connection.constants.js';
 
 /**
  * Validation rules for GET /api/v1/admin/users
@@ -128,4 +130,90 @@ export const listPaymentsValidation = [
     .optional()
     .isInt({ min: 1, max: 100 })
     .withMessage('Limit must be between 1 and 100'),
+];
+
+export const mongoIdParamValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid ID'),
+];
+
+export const adminGetPlaydatesValidation = [
+  query('status')
+    .optional()
+    .isIn([...Object.values(PLAYDATE_STATUS), 'all'])
+    .withMessage('Invalid playdate status'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+  query('search')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: ADMIN_SEARCH_MAX_LENGTH })
+    .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
+  query('fromDate')
+    .optional()
+    .isISO8601()
+    .withMessage('Invalid fromDate (must be ISO8601 date string)'),
+  query('toDate')
+    .optional()
+    .isISO8601()
+    .withMessage('Invalid toDate (must be ISO8601 date string)')
+    .bail()
+    .custom((value, { req }) => !req.query.fromDate || new Date(req.query.fromDate) <= new Date(value))
+    .withMessage('toDate must be on or after fromDate'),
+];
+
+export const adminCancelPlaydateValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid playdate ID'),
+  body('reason')
+    .isString()
+    .withMessage('Cancellation reason must be a string')
+    .trim()
+    .notEmpty()
+    .withMessage('Cancellation reason is required')
+    .isLength({ max: ADMIN_REASON_MAX_LENGTH })
+    .withMessage(`Cancellation reason must be at most ${ADMIN_REASON_MAX_LENGTH} characters`),
+];
+
+export const adminGetConnectionsValidation = [
+  query('status')
+    .optional()
+    .isIn([...Object.values(CONNECTION_STATUS), 'all'])
+    .withMessage('Invalid connection status'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+  query('search')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: ADMIN_SEARCH_MAX_LENGTH })
+    .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
+];
+
+export const adminDeleteConnectionValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid connection ID'),
+  body('reason')
+    .optional()
+    .isString()
+    .withMessage('Removal reason must be a string')
+    .trim()
+    .isLength({ max: ADMIN_REASON_MAX_LENGTH })
+    .withMessage(`Removal reason must be at most ${ADMIN_REASON_MAX_LENGTH} characters`),
 ];

@@ -6,7 +6,7 @@ import subscriptionService from '../subscription/subscription.service.js';
 import connectionService from '../connection/connection.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES, PAGINATION } from '../../shared/constants/index.js';
 import { CHILD_VISIBILITY, LOGIN_METHODS } from './admin.constants.js';
 import {
@@ -14,6 +14,8 @@ import {
   AdminUserDetailDTO,
   AdminChildListItemDTO,
   AdminChildDetailDTO,
+  AdminPlaydateDTO,
+  AdminConnectionDTO,
 } from './admin.dto.js';
 
 // Query string values arrive as strings ('true' / 'false'); absent means "no filter"
@@ -298,6 +300,90 @@ class AdminService {
     if (lockedChildIds.has(child._id.toString())) return CHILD_VISIBILITY.PLAN_LOCKED;
     if (parent.privacySettings?.isProfileHidden) return CHILD_VISIBILITY.PARENT_HIDDEN;
     return CHILD_VISIBILITY.VISIBLE;
+  }
+
+  /**
+   * Get paginated playdates across the platform
+   * @param {{ status?: string, search?: string, fromDate?: string, toDate?: string, page?: string, limit?: string }} queryParams
+   */
+  async getPlaydates(queryParams) {
+    const paging = toPaging(queryParams);
+    const { items, total } = await playdateService.getPlaydatesForAdmin({
+      status: queryParams.status,
+      search: queryParams.search?.trim() || '',
+      fromDate: queryParams.fromDate,
+      toDate: queryParams.toDate,
+      ...paging,
+    });
+    return { items: AdminPlaydateDTO.toResponseList(items), pagination: toPagination(paging, total) };
+  }
+
+  /**
+   * Playdates across the platform by status (not affected by the list filters)
+   * @returns {Promise<{ total: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async getPlaydateStats() {
+    return playdateService.getPlaydateStats();
+  }
+
+  /**
+   * Get a playdate with its participants and pending reschedule request
+   * @param {string} id
+   */
+  async getPlaydateDetail(id) {
+    const { playdate, pendingReschedule } = await playdateService.getPlaydateDetailForAdmin(id);
+    return AdminPlaydateDTO.toDetailResponse(playdate, pendingReschedule);
+  }
+
+  /**
+   * Force-cancel an upcoming playdate (participations are given back as for a host cancellation)
+   * @param {string} id
+   * @param {string} reason
+   */
+  async cancelPlaydate(id, reason) {
+    const updated = await playdateService.cancelPlaydateByAdmin(id, reason);
+    return AdminPlaydateDTO.toDetailResponse(updated);
+  }
+
+  /**
+   * Get paginated connections across the platform
+   * @param {{ status?: string, search?: string, page?: string, limit?: string }} queryParams
+   */
+  async getConnections(queryParams) {
+    const paging = toPaging(queryParams);
+    const { items, total } = await connectionService.getConnectionsForAdmin({
+      status: queryParams.status,
+      search: queryParams.search?.trim() || '',
+      ...paging,
+    });
+    return { items: AdminConnectionDTO.toResponseList(items), pagination: toPagination(paging, total) };
+  }
+
+  /**
+   * Connections across the platform by status (not affected by the list filters)
+   * @returns {Promise<{ total: number, pending: number, accepted: number, declined: number, removed: number }>}
+   */
+  async getConnectionStats() {
+    return connectionService.getConnectionStats();
+  }
+
+  /**
+   * Get a connection with both parents
+   * @param {string} id
+   */
+  async getConnectionDetail(id) {
+    const connection = await connectionService.getConnectionDetailForAdmin(id);
+    return AdminConnectionDTO.toDetailResponse(connection);
+  }
+
+  /**
+   * Soft-remove a pending or accepted connection
+   * @param {string} id
+   * @param {string} [reason]
+   */
+  async removeConnection(id, reason) {
+    const updated = await connectionService.removeConnectionByAdmin(id, reason);
+    return AdminConnectionDTO.toDetailResponse(updated);
   }
 }
 

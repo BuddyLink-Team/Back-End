@@ -3,7 +3,7 @@ import parentService from '../parent/parent.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import userService from '../user/user.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import { ChildResponseDTO, ChildPublicProfileDTO } from './child.dto.js';
 import { CHILD_EDITABLE_FIELDS } from './child.constants.js';

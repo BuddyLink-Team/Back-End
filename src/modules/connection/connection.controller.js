@@ -1,6 +1,6 @@
 import connectionService from './connection.service.js';
 import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { successResponse } from '../../shared/response/index.js';
 import ConnectionDTO from './connection.dto.js';
 

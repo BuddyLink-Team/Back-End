@@ -3,7 +3,7 @@ import playdateSuggestionService from '../../playdate/playdate-suggestion.servic
 import { PLAYDATE_ACTIVITIES } from '../../playdate/playdate.activities.js';
 import { distanceKmBetween } from '../../discovery/matching.rules.js';
 import { getScheduledStart, intervalsOverlap } from '../../../shared/helpers/date.helper.js';
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import {
   AI_CARD_TYPES,
   AI_CHOICE_STATUS,

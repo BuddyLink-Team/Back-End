@@ -4,7 +4,7 @@ import playdateService from '../playdate/playdate.service.js';
 import connectionService from '../connection/connection.service.js';
 import notificationService from '../notification/notification.service.js';
 import logger from '../../shared/logger/index.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { AchievementsDTO } from './gamification.dto.js';
 import { BADGE_DEFINITIONS } from './gamification.constants.js';
 import { buildMetrics, calculateStreak, weekKey, weekStart } from './gamification.rules.js';

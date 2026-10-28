@@ -1,6 +1,6 @@
 import safetyRepository from './safety.repository.js';
 import parentService from '../parent/parent.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import SafetyDTO from './safety.dto.js';
 import { emitSafetyEvent, SAFETY_EVENTS } from './safety.events.js';

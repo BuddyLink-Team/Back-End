@@ -1,5 +1,5 @@
 import discoveryService from '../../discovery/discovery.service.js';
-import AppError from '../../../shared/exceptions/AppError.js';
+import AppError from '../../../shared/exceptions/app-error.js';
 import { AI_TOOL_NAMES, AI_CARD_TYPES, AI_STEPS } from '../ai-assistant.constants.js';
 import { makeChoiceCard } from './plan-steps.js';
 import { normalizeName } from './propose-playdate.tool.js';

@@ -14,6 +14,11 @@ import {
   listChildrenValidation,
   childIdParamValidation,
   listPaymentsValidation,
+  adminGetPlaydatesValidation,
+  adminCancelPlaydateValidation,
+  adminGetConnectionsValidation,
+  adminDeleteConnectionValidation,
+  mongoIdParamValidation,
 } from './admin.validation.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 
@@ -46,6 +51,18 @@ router.get('/children/:id', validate(childIdParamValidation), adminController.ge
 
 // Payments history for parent detail drawer
 router.get('/payments', validate(listPaymentsValidation), adminController.getPayments);
+
+// Playdates oversight
+router.get('/playdates', validate(adminGetPlaydatesValidation), adminController.getPlaydates);
+router.get('/playdates/stats', adminController.getPlaydateStats);
+router.get('/playdates/:id', validate(mongoIdParamValidation), adminController.getPlaydateDetail);
+router.patch('/playdates/:id/cancel', validate(adminCancelPlaydateValidation), adminController.cancelPlaydate);
+
+// Connections oversight
+router.get('/connections', validate(adminGetConnectionsValidation), adminController.getConnections);
+router.get('/connections/stats', adminController.getConnectionStats);
+router.get('/connections/:id', validate(mongoIdParamValidation), adminController.getConnectionDetail);
+router.delete('/connections/:id', validate(adminDeleteConnectionValidation), adminController.removeConnection);
 
 export default router;
 

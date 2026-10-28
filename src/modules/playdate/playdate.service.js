@@ -5,7 +5,7 @@ import childService from '../child/child.service.js';
 import connectionService from '../connection/connection.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import logger from '../../shared/logger/index.js';
 import {
   getScheduledStart,
@@ -1107,7 +1107,16 @@ class PlaydateService {
 
     const rescheduleReq = await rescheduleRepository.findLatestByPlaydateId(id);
     return RescheduleResponseDTO.toResponse(rescheduleReq, parentId);
-  }
+  }
+
+
+  /**
+   * Admin oversight: playdates across the platform counted by status
+   * @returns {Promise<{ total: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async getPlaydateStats() {
+    return playdateRepository.countByStatus();
+  }
 
   /**
    * Playdates a parent hosts or is invited to, counted by status
@@ -1117,6 +1126,66 @@ class PlaydateService {
   async getPlaydateCountsForParent(parentId) {
     const { all, upcoming, completed, cancelled } = await playdateRepository.countByStatusesForParent(parentId);
     return { all, upcoming, completed, cancelled };
+  }
+
+  /**
+   * Admin oversight: one page of all playdates across the platform
+   * @param {{ status?: string, search?: string, fromDate?: string, toDate?: string, page: number, limit: number }} options
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async getPlaydatesForAdmin({ status, search, fromDate, toDate, page, limit }) {
+    const hostParentIds = search ? await parentService.findParentIdsByName(search) : [];
+    return playdateRepository.findPageForAdmin({ status, search, hostParentIds, fromDate, toDate, page, limit });
+  }
+
+  /**
+   * Admin oversight: full detail of a single playdate
+   */
+  async getPlaydateDetailForAdmin(id) {
+    const playdate = await playdateRepository.findById(id);
+    if (!playdate) {
+      throw new AppError('Playdate not found', 404, 'PLAYDATE_NOT_FOUND');
+    }
+
+    const pendingReschedule = await rescheduleRepository.findOne({
+      playdateId: id,
+      status: RESCHEDULE_STATUS.PENDING,
+    });
+
+    return {
+      playdate,
+      pendingReschedule,
+    };
+  }
+
+  /**
+   * Admin oversight: force-cancel an upcoming playdate
+   */
+  async cancelPlaydateByAdmin(id, reason = '') {
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status === PLAYDATE_STATUS.CANCELLED) {
+      throw new AppError('This playdate is already cancelled', 400, 'ALREADY_CANCELLED');
+    }
+    if (playdate.status === PLAYDATE_STATUS.COMPLETED) {
+      throw new AppError('Cannot cancel a completed playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    const before = await playdateRepository.cancelIfOpen(id, {
+      cancelledBy: null,
+      cancelledByAdmin: true,
+      reason: reason || 'Cancelled by admin',
+      cancelledAt: new Date(),
+    });
+    if (!before) {
+      throw new AppError('The playdate changed in the meantime, please reload it', 409, 'PLAYDATE_CHANGED');
+    }
+
+    await rescheduleRepository.cancelPendingByPlaydateId(id);
+    // Same as a host cancellation: families still in get their participation back
+    await this._refundJoinedParticipants(before);
+
+    return playdateRepository.findById(id);
   }
 }
 

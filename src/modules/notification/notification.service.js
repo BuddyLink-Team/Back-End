@@ -1,7 +1,7 @@
 import notificationRepository from './notification.repository.js';
 import { NOTIFICATION_TYPES } from './notification.constants.js';
 import { emitNotificationEvent, NOTIFICATION_EVENTS } from './notification.events.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import NotificationDTO from './notification.dto.js';
 
 class NotificationService {

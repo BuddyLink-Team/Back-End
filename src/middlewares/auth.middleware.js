@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import env from "../config/env.js";
 import userService from "../modules/user/user.service.js";
-import AppError from "../shared/exceptions/AppError.js";
+import AppError from "../shared/exceptions/app-error.js";
 import {
   getAccessTokenFromRequest,
   getRequestAudience,

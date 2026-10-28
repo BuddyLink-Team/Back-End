@@ -13,7 +13,7 @@ import Subscription from '../../src/modules/subscription/subscription.model.js';
 import { grantPremium } from '../helpers/subscriptionHelper.js';
 import AIChatSession from '../../src/modules/ai-assistant/ai-assistant.model.js';
 import geminiAdapter from '../../src/integrations/ai/gemini.adapter.js';
-import AppError from '../../src/shared/exceptions/AppError.js';
+import AppError from '../../src/shared/exceptions/app-error.js';
 import { AI_FALLBACK_REPLY, AI_CHOICE_FALLBACK_REPLY, AI_AGENDA_NOTE_HEADER } from '../../src/modules/ai-assistant/ai-assistant.constants.js';
 import { geminiText, geminiToolCall } from '../mocks/geminiMock.js';
 

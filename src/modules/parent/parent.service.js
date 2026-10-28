@@ -1,5 +1,5 @@
 import parentRepository from "./parent.repository.js";
-import AppError from "../../shared/exceptions/AppError.js";
+import AppError from "../../shared/exceptions/app-error.js";
 import { ParentProfileDTO } from "./parent.dto.js";
 import { PREFERENCE_LIMITS } from "./parent.constants.js";
 import geocodingAdapter from "../../integrations/maps/geocoding.adapter.js";

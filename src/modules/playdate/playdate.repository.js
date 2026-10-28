@@ -191,6 +191,21 @@ class PlaydateRepository {
   }
 
   /**
+   * Playdates across the platform counted by status
+   * @returns {Promise<{ total: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async countByStatus() {
+    const rows = await Playdate.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+    const countOf = (status) => rows.find((row) => row._id === status)?.count || 0;
+    return {
+      total: rows.reduce((sum, row) => sum + row.count, 0),
+      upcoming: countOf(PLAYDATE_STATUS.UPCOMING),
+      completed: countOf(PLAYDATE_STATUS.COMPLETED),
+      cancelled: countOf(PLAYDATE_STATUS.CANCELLED),
+    };
+  }
+
+  /**
    * Count playdates by status tabs using MongoDB Aggregation
    * Avoids loading all documents into application memory
    * @param {string|ObjectId} parentId
@@ -597,6 +612,63 @@ class PlaydateRepository {
       .populate('hostChildId', 'displayName dateOfBirth gender interests favoriteActivities personality')
       .populate('participants.parentId', 'fullName avatarUrl userId verification location')
       .populate('participants.childId', 'displayName dateOfBirth gender interests favoriteActivities personality');
+  }
+
+  /**
+   * One page of playdates for admin oversight, newest scheduled first
+   * @param {Object} options
+   * @param {string} [options.status] - Playdate status, or 'all' / empty for every status
+   * @param {string} [options.search] - Matched against activity, place name and host parent
+   * @param {Array<string|ObjectId>} [options.hostParentIds] - Hosts whose name matches the search
+   * @param {string|Date} [options.fromDate]
+   * @param {string|Date} [options.toDate] - A YYYY-MM-DD date includes the whole day
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPageForAdmin({ status, search, hostParentIds, fromDate, toDate, page, limit }) {
+    const andConditions = [];
+
+    if (status && status !== 'all') {
+      andConditions.push({ status: status.toLowerCase() });
+    }
+
+    if (search) {
+      const regex = new RegExp(escapeRegExp(search), 'i');
+      const searchOr = [{ activity: regex }, { 'location.name': regex }];
+      if (Array.isArray(hostParentIds) && hostParentIds.length > 0) {
+        searchOr.push({ hostParentId: { $in: hostParentIds } });
+      }
+      andConditions.push({ $or: searchOr });
+    }
+
+    if (fromDate || toDate) {
+      const dateCond = {};
+      if (fromDate) dateCond.$gte = new Date(fromDate);
+      if (toDate) {
+        const to = new Date(toDate);
+        if (typeof toDate === 'string' && toDate.length === 10) {
+          to.setUTCHours(23, 59, 59, 999);
+        }
+        dateCond.$lte = to;
+      }
+      andConditions.push({ scheduledDate: dateCond });
+    }
+
+    const filter = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
+
+    // The list only shows the number of participants, so they are not populated
+    const [items, total] = await Promise.all([
+      Playdate.find(filter)
+        .sort({ scheduledDate: -1, createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('hostParentId', 'fullName avatarUrl userId verification')
+        .populate('hostChildId', 'displayName dateOfBirth gender')
+        .lean(),
+      Playdate.countDocuments(filter),
+    ]);
+    return { items, total };
   }
 }
 

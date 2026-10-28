@@ -1,6 +1,10 @@
 import Connection from './connection.model.js';
 import { CONNECTION_STATUS } from './connection.constants.js';
 
+// Parent fields shown in the admin portal (the admin DTO reduces location to area / city)
+const ADMIN_PARENT_FIELDS = 'fullName avatarUrl userId verification location';
+const ADMIN_PARENT_USER_POPULATE = { path: 'userId', select: 'isActive email role' };
+
 class ConnectionRepository {
   /**
    * Find the accepted connection between two parents (direction-independent)
@@ -33,6 +37,22 @@ class ConnectionRepository {
    */
   async countAcceptedForParent(parentId) {
     return Connection.countDocuments({ parents: parentId, status: CONNECTION_STATUS.ACCEPTED });
+  }
+
+  /**
+   * Connections across the platform counted by status
+   * @returns {Promise<{ total: number, pending: number, accepted: number, declined: number, removed: number }>}
+   */
+  async countByStatus() {
+    const rows = await Connection.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+    const countOf = (status) => rows.find((row) => row._id === status)?.count || 0;
+    return {
+      total: rows.reduce((sum, row) => sum + row.count, 0),
+      pending: countOf(CONNECTION_STATUS.PENDING),
+      accepted: countOf(CONNECTION_STATUS.ACCEPTED),
+      declined: countOf(CONNECTION_STATUS.DECLINED),
+      removed: countOf(CONNECTION_STATUS.REMOVED),
+    };
   }
 
   /**
@@ -129,7 +149,7 @@ class ConnectionRepository {
    * @param {string} toStatus - accepted | declined | removed
    * @returns {Promise<Object|null>} Updated connection
    */
-  async transitionStatus(connectionId, fromStatus, toStatus) {
+  async transitionStatus(connectionId, fromStatus, toStatus, extraFields = {}) {
     const timestampField = {
       [CONNECTION_STATUS.ACCEPTED]: 'connectedAt',
       [CONNECTION_STATUS.DECLINED]: 'declinedAt',
@@ -138,9 +158,60 @@ class ConnectionRepository {
 
     return Connection.findOneAndUpdate(
       { _id: connectionId, status: fromStatus },
-      { $set: { status: toStatus, ...(timestampField ? { [timestampField]: new Date() } : {}) } },
+      {
+        $set: {
+          status: toStatus,
+          ...(timestampField ? { [timestampField]: new Date() } : {}),
+          ...extraFields,
+        },
+      },
       { new: true }
     ).lean();
+  }
+
+  /**
+   * One page of connections for admin oversight, newest first
+   * @param {Object} options
+   * @param {string} [options.status] - Connection status, or 'all' / empty for every status
+   * @param {Array<string|ObjectId>|null} [options.searchParentIds] - Only connections of these parents (null = no filter)
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPageForAdmin({ status, searchParentIds = null, page, limit }) {
+    const andConditions = [];
+    if (status && status !== 'all') {
+      andConditions.push({ status: status.toLowerCase() });
+    }
+    if (Array.isArray(searchParentIds)) {
+      andConditions.push({ parents: { $in: searchParentIds } });
+    }
+    const filter = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
+
+    const [items, total] = await Promise.all([
+      Connection.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({ path: 'requesterId', select: ADMIN_PARENT_FIELDS, populate: ADMIN_PARENT_USER_POPULATE })
+        .populate({ path: 'recipientId', select: ADMIN_PARENT_FIELDS, populate: ADMIN_PARENT_USER_POPULATE })
+        .lean(),
+      Connection.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  /**
+   * Find connection with populated parents and users for admin detail view
+   * @param {string|ObjectId} id
+   * @returns {Promise<Object|null>}
+   */
+  async findWithDetailsForAdmin(id) {
+    return Connection.findById(id)
+      .populate({ path: 'requesterId', select: `${ADMIN_PARENT_FIELDS} bio`, populate: ADMIN_PARENT_USER_POPULATE })
+      .populate({ path: 'recipientId', select: `${ADMIN_PARENT_FIELDS} bio`, populate: ADMIN_PARENT_USER_POPULATE })
+      .populate('childPairs.childIds', 'displayName dateOfBirth gender isArchived parentId')
+      .lean();
   }
 
   /**

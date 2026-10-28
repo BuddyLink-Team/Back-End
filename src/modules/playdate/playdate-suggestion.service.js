@@ -4,7 +4,7 @@ import childService from '../child/child.service.js';
 import connectionService from '../connection/connection.service.js';
 import safetyService from '../safety/safety.service.js';
 import placesService from '../places/places.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import {
   getStartOfZonedDay,

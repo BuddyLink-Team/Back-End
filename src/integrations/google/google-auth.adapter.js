@@ -1,6 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
 import env from '../../config/env.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { GoogleUserInfoDTO } from '../../modules/auth/auth.dto.js';
 
 class GoogleAuthAdapter {

@@ -96,6 +96,7 @@ const playdateSchema = new mongoose.Schema(
     },
     cancellation: {
       cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Parent', default: null },
+      cancelledByAdmin: { type: Boolean, default: false },
       reason: { type: String, default: '' },
       cancelledAt: { type: Date, default: null },
     },

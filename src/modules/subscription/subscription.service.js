@@ -6,7 +6,7 @@ import payosAdapter from '../../integrations/payos/payos.adapter.js';
 import childService from '../child/child.service.js';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import {
   SUBSCRIPTION_PLAN_CODES,

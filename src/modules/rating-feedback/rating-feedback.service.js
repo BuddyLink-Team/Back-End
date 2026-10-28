@@ -1,7 +1,7 @@
 import ratingFeedbackRepository from './rating-feedback.repository.js';
 import parentService from '../parent/parent.service.js';
 import playdateService from '../playdate/playdate.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { ensureRatingEligibility } from './rating-feedback.rules.js';
 
 async function getParent(userId) {

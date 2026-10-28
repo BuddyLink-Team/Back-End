@@ -5,7 +5,7 @@ import childService from '../child/child.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import safetyService from '../safety/safety.service.js';
 import connectionService from '../connection/connection.service.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 import { DiscoveryProfileDTO } from './discovery.dto.js';
 import { DISCOVERY_DEFAULTS } from './discovery.constants.js';
 import { calculateMatchScore, calculateChildPairScore } from './matching.rules.js';

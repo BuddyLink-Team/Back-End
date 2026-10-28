@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import PayOS from '@payos/node';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
-import AppError from '../../shared/exceptions/AppError.js';
+import AppError from '../../shared/exceptions/app-error.js';
 
 let payosInstance = null;
 

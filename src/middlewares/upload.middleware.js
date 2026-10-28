@@ -1,5 +1,5 @@
 import multer from 'multer';
-import AppError from '../shared/exceptions/AppError.js';
+import AppError from '../shared/exceptions/app-error.js';
 import { detectImageMimeType } from '../shared/helpers/image-signature.helper.js';
 
 // Memory storage keeps file buffer in memory for direct upload to Cloudinary/S3

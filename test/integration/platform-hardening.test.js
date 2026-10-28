@@ -5,7 +5,7 @@ import subscriptionService from '../../src/modules/subscription/subscription.ser
 import Subscription from '../../src/modules/subscription/subscription.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import { errorHandler } from '../../src/middlewares/error.middleware.js';
-import AppError from '../../src/shared/exceptions/AppError.js';
+import AppError from '../../src/shared/exceptions/app-error.js';
 
 const createResStub = () => {
   const res = {};

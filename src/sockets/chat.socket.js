@@ -4,7 +4,7 @@ import ChatDTO from '../modules/chat/chat.dto.js';
 import { SOCKET_EVENTS } from '../modules/chat/chat.constants.js';
 import { broadcastNewMessage, broadcastReadStatus } from './chat.broadcast.js';
 import logger from '../shared/logger/index.js';
-import AppError from '../shared/exceptions/AppError.js';
+import AppError from '../shared/exceptions/app-error.js';
 
 /**
  * Sanitize error messages sent to client, shielding internal DB/runtime details
