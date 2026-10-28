@@ -142,6 +142,33 @@ class SubscriptionRepository {
       options
     );
   }
+
+  async findByIdLean(id) {
+    return Subscription.findById(id).lean();
+  }
+
+  /**
+   * Page of subscriptions for the admin portal, newest first
+   * @param {{ planCode?: string, status?: string, parentIds?: Array<ObjectId>|null, page: number, limit: number }} options
+   *   parentIds null = any parent
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPageForAdmin({ planCode, status, parentIds = null, page, limit }) {
+    const filter = {};
+    if (planCode) filter.planCode = planCode;
+    if (status) filter.status = status;
+    if (parentIds) filter.parentId = { $in: parentIds };
+
+    const [items, total] = await Promise.all([
+      Subscription.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Subscription.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
 }
 
 export default new SubscriptionRepository();

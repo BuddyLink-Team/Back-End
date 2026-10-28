@@ -8,7 +8,8 @@ import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES, PAGINATION } from '../../shared/constants/index.js';
-import { CHILD_VISIBILITY, LOGIN_METHODS } from './admin.constants.js';
+import { getZonedParts, getZonedDayRange } from '../../shared/helpers/date.helper.js';
+import { CHILD_VISIBILITY, LOGIN_METHODS, REVENUE_DEFAULT_MONTHS } from './admin.constants.js';
 import {
   AdminUserListItemDTO,
   AdminUserDetailDTO,
@@ -16,6 +17,9 @@ import {
   AdminChildDetailDTO,
   AdminPlaydateDTO,
   AdminConnectionDTO,
+  AdminPlanDTO,
+  AdminSubscriptionDTO,
+  AdminTransactionDTO,
 } from './admin.dto.js';
 
 // Query string values arrive as strings ('true' / 'false'); absent means "no filter"
@@ -50,6 +54,35 @@ const toPagination = ({ page, limit }, total) => ({
   total,
   totalPages: Math.ceil(total / limit) || 1,
 });
+
+// Query date as an instant. A 'YYYY-MM-DD' day is taken in APP_TIMEZONE (payments are instants):
+// its start for a lower bound, its end for an upper bound, so the whole toDate day is included
+const toDateBound = (value, { endOfDay = false } = {}) => {
+  if (!value) return undefined;
+  if (typeof value === 'string' && value.length === 10) {
+    const { start, end } = getZonedDayRange(value);
+    return endOfDay ? end : start;
+  }
+  return new Date(value);
+};
+
+const toPercent = (part, whole) => (whole > 0 ? Number(((part / whole) * 100).toFixed(1)) : 0);
+
+// Every 'YYYY-MM' from the month of `from` to the month of `to`, in APP_TIMEZONE
+const listMonths = (from, to) => {
+  const end = getZonedParts(to);
+  let { year, month } = getZonedParts(from);
+  const months = [];
+  while (year < end.year || (year === end.year && month <= end.month)) {
+    months.push(`${year}-${String(month).padStart(2, '0')}`);
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return months;
+};
 
 class AdminService {
   /**
@@ -384,6 +417,177 @@ class AdminService {
   async removeConnection(id, reason) {
     const updated = await connectionService.removeConnectionByAdmin(id, reason);
     return AdminConnectionDTO.toDetailResponse(updated);
+  }
+
+  /**
+   * Every subscription plan, inactive ones included
+   */
+  async getPlans() {
+    const plans = await subscriptionService.getAllPlans();
+    return plans.map((plan) => AdminPlanDTO.toResponse(plan));
+  }
+
+  /**
+   * One plan as stored now (the edit form reloads it when opened)
+   * @param {string} id
+   */
+  async getPlanDetail(id) {
+    return AdminPlanDTO.toResponse(await subscriptionService.getPlanById(id));
+  }
+
+  /**
+   * Update a plan (rules in SubscriptionService.updatePlanByAdmin)
+   * @param {string} id
+   * @param {{ name?: string, price?: number, isActive?: boolean, features?: Object }} data
+   */
+  async updatePlan(id, data) {
+    const plan = await subscriptionService.updatePlanByAdmin(id, data);
+    return AdminPlanDTO.toResponse(plan);
+  }
+
+  /**
+   * Get paginated subscriptions with their parent
+   * @param {{ planCode?: string, status?: string, search?: string, page?: string, limit?: string }} queryParams
+   */
+  async getSubscriptions(queryParams) {
+    const paging = toPaging(queryParams);
+    const search = queryParams.search?.trim() || '';
+    const { items, total } = await subscriptionService.getSubscriptionsPageForAdmin({
+      planCode: queryParams.planCode || undefined,
+      status: queryParams.status || undefined,
+      parentIds: search ? await this._findParentIdsBySearch(search) : null,
+      ...paging,
+    });
+
+    const owners = await this._getParentOwners(items.map((item) => item.parentId));
+    return {
+      items: items.map((subscription) =>
+        AdminSubscriptionDTO.toListItem({ subscription, ...owners.get(subscription.parentId.toString()) })
+      ),
+      pagination: toPagination(paging, total),
+    };
+  }
+
+  /**
+   * One subscription with its parent (the detail modal reloads it when opened)
+   * @param {string} id
+   */
+  async getSubscriptionDetail(id) {
+    const subscription = await subscriptionService.getSubscriptionForAdmin(id);
+    const owners = await this._getParentOwners([subscription.parentId]);
+    return AdminSubscriptionDTO.toListItem({ subscription, ...owners.get(subscription.parentId.toString()) });
+  }
+
+  /**
+   * Get paginated payments of every parent. The search matches the order code, parent name or email.
+   * @param {{ status?: string, planCode?: string, fromDate?: string, toDate?: string, search?: string, page?: string, limit?: string }} queryParams
+   */
+  async getTransactions(queryParams) {
+    const paging = toPaging(queryParams);
+    const search = queryParams.search?.trim() || '';
+    const { items, total } = await subscriptionService.getPaymentsPageForAdmin({
+      status: queryParams.status || undefined,
+      planCode: queryParams.planCode || undefined,
+      fromDate: toDateBound(queryParams.fromDate),
+      toDate: toDateBound(queryParams.toDate, { endOfDay: true }),
+      searchParentIds: search ? await this._findParentIdsBySearch(search) : null,
+      searchOrderCode: /^\d+$/.test(search) ? Number(search) : null,
+      ...paging,
+    });
+
+    const owners = await this._getParentOwners(items.map((item) => item.parentId));
+    return {
+      items: items.map((payment) =>
+        AdminTransactionDTO.toListItem({ payment, ...owners.get(payment.parentId.toString()) })
+      ),
+      pagination: toPagination(paging, total),
+    };
+  }
+
+  /**
+   * Get one payment for audit
+   * @param {string} id
+   */
+  async getTransactionDetail(id) {
+    const payment = await subscriptionService.getPaymentForAdmin(id);
+    const owners = await this._getParentOwners([payment.parentId]);
+    return AdminTransactionDTO.toDetailResponse({ payment, ...owners.get(payment.parentId.toString()) });
+  }
+
+  /**
+   * Revenue overview of a period (default: the last REVENUE_DEFAULT_MONTHS calendar months).
+   * Conversion = parents who ever paid / all parents; churn = churned in the period / Premium at its start.
+   * @param {{ fromDate?: string, toDate?: string }} queryParams
+   */
+  async getRevenueSummary({ fromDate, toDate } = {}) {
+    const end = toDateBound(toDate, { endOfDay: true }) || new Date();
+    let start = toDateBound(fromDate);
+    if (!start) {
+      // 1st day of the month REVENUE_DEFAULT_MONTHS - 1 months before the end month
+      const { year, month } = getZonedParts(end);
+      const monthIndex = year * 12 + (month - 1) - (REVENUE_DEFAULT_MONTHS - 1);
+      const startMonth = String((monthIndex % 12) + 1).padStart(2, '0');
+      start = getZonedDayRange(`${Math.floor(monthIndex / 12)}-${startMonth}-01`).start;
+    }
+
+    const [metrics, totalParents] = await Promise.all([
+      subscriptionService.getRevenueMetrics({ fromDate: start, toDate: end }),
+      parentService.countParents(),
+    ]);
+
+    // Months without a payment are shown as 0 so the chart has no gap
+    const revenueByMonth = new Map(metrics.monthlyRevenue.map((row) => [row.month, row]));
+    const monthlyRevenue = listMonths(start, end).map((month) => {
+      const [year, monthNumber] = month.split('-');
+      return {
+        month,
+        label: `T${Number(monthNumber)}/${year}`,
+        revenue: revenueByMonth.get(month)?.revenue || 0,
+        transactionCount: revenueByMonth.get(month)?.transactionCount || 0,
+      };
+    });
+
+    return {
+      overview: {
+        totalRevenue: metrics.totalRevenue,
+        successfulTransactions: metrics.successfulTransactions,
+        payingParentsCount: metrics.payingParentsCount,
+        activePremiumSubscribers: metrics.activePremium,
+        conversionRate: toPercent(metrics.allTimePayingParents, totalParents),
+        churnRate: toPercent(metrics.churnedParents, metrics.premiumAtStart),
+      },
+      monthlyRevenue,
+      filter: { fromDate: start.toISOString(), toDate: end.toISOString() },
+    };
+  }
+
+  /**
+   * Parents whose name or account email contains the text
+   * @private
+   */
+  async _findParentIdsBySearch(search) {
+    const [nameMatchIds, emailUserIds] = await Promise.all([
+      parentService.findParentIdsByName(search),
+      userService.findUserIdsByEmail(search),
+    ]);
+    const emailParents = await parentService.getParentsByUserIds(emailUserIds);
+    const idByKey = new Map([...nameMatchIds, ...emailParents.map((parent) => parent._id)].map((id) => [String(id), id]));
+    return [...idByKey.values()];
+  }
+
+  /**
+   * Parent profile and account email of each parent id
+   * @private
+   * @returns {Promise<Map<string, { parent: Object, email: string }>>}
+   */
+  async _getParentOwners(parentIds) {
+    const uniqueIds = [...new Set(parentIds.map(String))];
+    const parents = await parentService.getParentsByIds(uniqueIds);
+    const users = await userService.getEmailsByIds(parents.map((parent) => parent.userId));
+    const emailByUserId = new Map(users.map((user) => [user._id.toString(), user.email]));
+    return new Map(
+      parents.map((parent) => [parent._id.toString(), { parent, email: emailByUserId.get(parent.userId.toString()) }])
+    );
   }
 }
 

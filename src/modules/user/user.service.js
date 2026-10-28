@@ -172,7 +172,8 @@ class UserService {
     await this.updatePassword(userId, newPasswordHash);
 
     return { success: true };
-  }
+  }
+
 
   /**
    * Page of accounts of one role for admin lists (see userRepository.findPageByRole)
@@ -190,6 +191,24 @@ class UserService {
    */
   async countUsersByStatus(role) {
     return userRepository.countByRoleAndStatus(role);
+  }
+
+  /**
+   * IDs of the accounts whose email contains the text (used by list searches of other modules)
+   * @param {string} search
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findUserIdsByEmail(search) {
+    return userRepository.findIdsByEmail(search);
+  }
+
+  /**
+   * Emails of several accounts
+   * @param {Array<string|ObjectId>} ids
+   * @returns {Promise<Array<{ _id: ObjectId, email: string }>>}
+   */
+  async getEmailsByIds(ids) {
+    return userRepository.findEmailsByIds(ids);
   }
 }
 

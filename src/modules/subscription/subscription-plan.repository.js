@@ -3,12 +3,35 @@ import { SUBSCRIPTION_PLAN_DEFAULTS } from './subscription.constants.js';
 import logger from '../../shared/logger/index.js';
 
 class SubscriptionPlanRepository {
+  async findAll() {
+    return SubscriptionPlan.find().sort({ price: 1 });
+  }
+
   async findAllActive() {
     return SubscriptionPlan.find({ isActive: true }).sort({ price: 1 });
   }
 
   async findByPlanCode(planCode) {
     return SubscriptionPlan.findOne({ planCode, isActive: true });
+  }
+
+  /**
+   * Plan by code, also when taken off sale (its limits still apply to the parents who bought it)
+   */
+  async findByPlanCodeAnyStatus(planCode) {
+    return SubscriptionPlan.findOne({ planCode }).lean();
+  }
+
+  async findById(id) {
+    return SubscriptionPlan.findById(id);
+  }
+
+  async updateById(id, updateData) {
+    return SubscriptionPlan.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
   }
 
   /**

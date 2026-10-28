@@ -19,6 +19,10 @@ import {
   adminGetConnectionsValidation,
   adminDeleteConnectionValidation,
   mongoIdParamValidation,
+  updatePlanValidation,
+  listSubscriptionsValidation,
+  listTransactionsValidation,
+  revenueSummaryValidation,
 } from './admin.validation.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 
@@ -63,6 +67,16 @@ router.get('/connections', validate(adminGetConnectionsValidation), adminControl
 router.get('/connections/stats', adminController.getConnectionStats);
 router.get('/connections/:id', validate(mongoIdParamValidation), adminController.getConnectionDetail);
 router.delete('/connections/:id', validate(adminDeleteConnectionValidation), adminController.removeConnection);
+
+// Subscription plans & revenue management
+router.get('/plans', adminController.getPlans);
+router.get('/plans/:id', validate(mongoIdParamValidation), adminController.getPlanDetail);
+router.patch('/plans/:id', validate(updatePlanValidation), adminController.updatePlan);
+router.get('/subscriptions', validate(listSubscriptionsValidation), adminController.getSubscriptions);
+router.get('/subscriptions/:id', validate(mongoIdParamValidation), adminController.getSubscriptionDetail);
+router.get('/transactions', validate(listTransactionsValidation), adminController.getTransactions);
+router.get('/transactions/:id', validate(mongoIdParamValidation), adminController.getTransactionDetail);
+router.get('/revenue/summary', validate(revenueSummaryValidation), adminController.getRevenueSummary);
 
 export default router;
 

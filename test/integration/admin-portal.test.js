@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import request from 'supertest';
 import bcrypt from 'bcryptjs';
 import app from '../../src/app.js';
@@ -12,6 +12,16 @@ import Parent from '../../src/modules/parent/parent.model.js';
 import Subscription from '../../src/modules/subscription/subscription.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { grantPremium } from '../helpers/subscriptionHelper.js';
+import SubscriptionPlan from '../../src/modules/subscription/subscription-plan.model.js';
+import { SUBSCRIPTION_PLAN_DEFAULTS } from '../../src/modules/subscription/subscription.constants.js';
+
+// Plans are shared by every suite (same test DB, suites run in parallel): undo each change right away
+const restoreDefaultPlans = () =>
+  SubscriptionPlan.bulkWrite(
+    SUBSCRIPTION_PLAN_DEFAULTS.map(({ planCode, name, price, features, isActive }) => ({
+      updateOne: { filter: { planCode }, update: { $set: { name, price, features, isActive } } },
+    }))
+  );
 
 describe('Admin portal separation (/api/v1/admin on the admin app)', () => {
   const password = 'AdminPortal123!';
@@ -956,3 +966,294 @@ describe('Admin Playdates & Connections Oversight', () => {
     });
   });
 });
+
+
+describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => {
+  const password = 'AdminPortal123!';
+  const adminEmail = `sub-admin-${Date.now()}@buddylink.com`;
+  let adminTokens = null;
+  let testParent = null;
+  let freePlan = null;
+  let monthlyPlan = null;
+  let createdPayment = null;
+  let parentEmail = '';
+
+  afterAll(restoreDefaultPlans);
+
+  beforeAll(async () => {
+    // Seed default plans
+    const { default: subscriptionPlanRepository } = await import('../../src/modules/subscription/subscription-plan.repository.js');
+    await subscriptionPlanRepository.seedDefaultPlans();
+
+    // Create admin user
+    const passwordHash = await bcrypt.hash(password, 10);
+    await User.create({ email: adminEmail, passwordHash, role: 'admin', isActive: true });
+
+    const adminLogin = await request(adminApp)
+      .post('/api/v1/admin/auth/login')
+      .send({ email: adminEmail, password });
+    adminTokens = adminLogin.body.data.tokens;
+
+    // Create a test parent user and parent profile
+    parentEmail = `parent-sub-${Date.now()}@example.com`;
+    const userParent = await User.create({ email: parentEmail, passwordHash, role: 'parent', isActive: true });
+    testParent = await Parent.create({
+      userId: userParent._id,
+      fullName: 'Test Parent Subscription',
+      location: { coordinates: [108.2022, 16.0544] },
+    });
+
+    // Create a subscription for this parent
+    await Subscription.create({
+      parentId: testParent._id,
+      planCode: 'premium_monthly',
+      status: 'active',
+      startDate: new Date('2026-10-01T00:00:00Z'),
+      endDate: new Date('2099-01-01T00:00:00Z'),
+      purchasedMonths: 1,
+    });
+
+    // Create test payments
+    const { default: Payment } = await import('../../src/modules/subscription/payment.model.js');
+    createdPayment = await Payment.create({
+      parentId: testParent._id,
+      orderCode: 99887766,
+      amount: 99000,
+      status: 'success',
+      paymentMethod: 'payos',
+      planSnapshot: {
+        planCode: 'premium_monthly',
+        name: 'Gói Cao Cấp 1 Tháng',
+        price: 99000,
+        currency: 'VND',
+        durationMonths: 1,
+      },
+      grantResult: {
+        effectiveStartDate: new Date('2026-10-01T00:00:00Z'),
+        effectiveEndDate: new Date('2026-11-01T00:00:00Z'),
+        monthsGranted: 1,
+      },
+      checkoutUrl: 'https://payos.vn/checkout-secret-url',
+      qrCode: 'qr-code-secret-payload',
+      paidAt: new Date('2026-10-01T10:00:00Z'),
+      expiresAt: new Date('2026-10-01T10:15:00Z'),
+      createdAt: new Date('2026-10-01T09:50:00Z'),
+    });
+  });
+
+  it('GET /api/v1/admin/plans returns all 3 plans with quotas', async () => {
+    const res = await request(adminApp)
+      .get('/api/v1/admin/plans')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const plans = res.body.data.plans;
+    expect(plans.length).toBeGreaterThanOrEqual(3);
+
+    freePlan = plans.find((p) => p.planCode === 'free');
+    monthlyPlan = plans.find((p) => p.planCode === 'premium_monthly');
+    expect(freePlan).toBeDefined();
+    expect(monthlyPlan).toBeDefined();
+    expect(freePlan.price).toBe(0);
+  });
+
+  it('PATCH /api/v1/admin/plans/:id rejects changing free plan price or deactivating', async () => {
+    const resPrice = await request(adminApp)
+      .patch(`/api/v1/admin/plans/${freePlan.id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`)
+      .send({ price: 50000 });
+
+    expect(resPrice.status).toBe(400);
+    expect(resPrice.body.error.code).toBe('FREE_PLAN_IMMUTABLE');
+
+    const resActive = await request(adminApp)
+      .patch(`/api/v1/admin/plans/${freePlan.id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`)
+      .send({ isActive: false });
+
+    expect(resActive.status).toBe(400);
+    expect(resActive.body.error.code).toBe('FREE_PLAN_IMMUTABLE');
+  });
+
+  it('PATCH /api/v1/admin/plans/:id updates premium plan and preserves read-only fields', async () => {
+    const res = await request(adminApp)
+      .patch(`/api/v1/admin/plans/${monthlyPlan.id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`)
+      .send({
+        name: 'Gói Tháng Cập Nhật',
+        price: 89000,
+        planCode: 'hacked_code',
+        durationMonths: 99,
+        billingCycle: 'yearly',
+        currency: 'USD',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.plan.name).toBe('Gói Tháng Cập Nhật');
+    expect(res.body.data.plan.price).toBe(89000);
+    // Read-only fields must NOT have been changed
+    expect(res.body.data.plan.planCode).toBe('premium_monthly');
+    expect(res.body.data.plan.durationMonths).toBe(1);
+    expect(res.body.data.plan.billingCycle).toBe('monthly');
+    expect(res.body.data.plan.currency).toBe('VND');
+    await restoreDefaultPlans();
+  });
+
+  it('PATCH /api/v1/admin/plans/:id sets premium limits, which then apply to its subscribers', async () => {
+    const res = await request(adminApp)
+      .patch(`/api/v1/admin/plans/${monthlyPlan.id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`)
+      .send({ features: { discoveryViewLimitPerDay: 20 } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.plan.features.discoveryViewLimitPerDay).toBe(20);
+    expect(res.body.data.plan.features.childProfilesLimit).toBe(-1);
+
+    const usage = await subscriptionService.getActionUsage(testParent._id, 'discovery');
+    await restoreDefaultPlans();
+    expect(usage).toMatchObject({ isPremium: true, limit: 20 });
+  });
+
+  it('GET /api/v1/admin/plans/:id returns the plan as stored now', async () => {
+    const res = await request(adminApp)
+      .get(`/api/v1/admin/plans/${monthlyPlan.id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.plan).toMatchObject({ id: monthlyPlan.id, planCode: 'premium_monthly', isActive: true });
+  });
+
+  it('PATCH /api/v1/admin/plans/:id updates free plan limits and keeps the other limits', async () => {
+    const res = await request(adminApp)
+      .patch(`/api/v1/admin/plans/${freePlan.id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`)
+      .send({ features: { discoveryViewLimitPerDay: 7 } });
+    await restoreDefaultPlans();
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.plan.features.discoveryViewLimitPerDay).toBe(7);
+    expect(res.body.data.plan.features.childProfilesLimit).toBe(freePlan.features.childProfilesLimit);
+  });
+
+  it('GET /api/v1/admin/subscriptions returns paginated subscriptions with parent details', async () => {
+    const res = await request(adminApp)
+      .get('/api/v1/admin/subscriptions?planCode=premium_monthly&status=active')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.items).toBeDefined();
+    expect(res.body.data.pagination).toBeDefined();
+
+    const item = res.body.data.items.find((s) => s.parent.fullName === 'Test Parent Subscription');
+    expect(item).toBeDefined();
+    expect(item.parent.email).toBeDefined();
+    expect(item.planCode).toBe('premium_monthly');
+  });
+
+  it('GET /api/v1/admin/subscriptions/:id returns one subscription with its parent', async () => {
+    const list = await request(adminApp)
+      .get('/api/v1/admin/subscriptions?planCode=premium_monthly')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+    const { id } = list.body.data.items.find((s) => s.parent.fullName === 'Test Parent Subscription');
+
+    const res = await request(adminApp)
+      .get(`/api/v1/admin/subscriptions/${id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ id, planCode: 'premium_monthly', parent: { email: parentEmail } });
+  });
+
+  it('GET /api/v1/admin/transactions returns paginated payment list with filters', async () => {
+    const res = await request(adminApp)
+      .get('/api/v1/admin/transactions?status=success&search=99887766')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
+
+    const payment = res.body.data.items[0];
+    expect(payment.orderCode).toBe(99887766);
+    expect(payment.parent.fullName).toBe('Test Parent Subscription');
+    expect(payment.effectivePeriod).toBeDefined();
+  });
+
+  it('GET /api/v1/admin/transactions searches by parent email', async () => {
+    const res = await request(adminApp)
+      .get(`/api/v1/admin/transactions?search=${encodeURIComponent(parentEmail)}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.map((item) => item.orderCode)).toContain(99887766);
+    expect(res.body.data.items[0].parent.email).toBe(parentEmail);
+  });
+
+  it('GET /api/v1/admin/transactions includes the whole toDate day', async () => {
+    const res = await request(adminApp)
+      .get('/api/v1/admin/transactions?fromDate=2026-10-01&toDate=2026-10-01')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.map((item) => item.orderCode)).toContain(99887766);
+  });
+
+  it('GET /api/v1/admin/transactions/:id returns detail without checkoutUrl and qrCode', async () => {
+    const res = await request(adminApp)
+      .get(`/api/v1/admin/transactions/${createdPayment._id}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const detail = res.body.data;
+    expect(detail.orderCode).toBe(99887766);
+    expect(detail.checkoutUrl).toBeUndefined();
+    expect(detail.qrCode).toBeUndefined();
+    expect(detail.grantResult).toBeDefined();
+  });
+
+  it('GET /api/v1/admin/revenue/summary calculates revenue, conversion, and churn rate', async () => {
+    const fromDate = '2026-10-01';
+    const toDate = '2026-10-31';
+    const res = await request(adminApp)
+      .get(`/api/v1/admin/revenue/summary?fromDate=${fromDate}&toDate=${toDate}`)
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const { overview, monthlyRevenue } = res.body.data;
+
+    expect(overview.totalRevenue).toBeGreaterThanOrEqual(99000);
+    expect(overview.successfulTransactions).toBeGreaterThanOrEqual(1);
+    expect(overview.payingParentsCount).toBeGreaterThanOrEqual(1);
+    expect(overview.activePremiumSubscribers).toBeGreaterThanOrEqual(1);
+    expect(typeof overview.conversionRate).toBe('number');
+    expect(typeof overview.churnRate).toBe('number');
+    expect(monthlyRevenue).toEqual([
+      expect.objectContaining({ month: '2026-10', label: 'T10/2026', transactionCount: expect.any(Number) }),
+    ]);
+  });
+
+  it('GET /api/v1/admin/revenue/summary counts a payment paid on the toDate day', async () => {
+    const res = await request(adminApp)
+      .get('/api/v1/admin/revenue/summary?fromDate=2026-10-01&toDate=2026-10-01')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.overview.totalRevenue).toBeGreaterThanOrEqual(99000);
+  });
+
+  it('GET /api/v1/admin/revenue/summary lists every month of the default range, empty ones as 0', async () => {
+    const res = await request(adminApp)
+      .get('/api/v1/admin/revenue/summary')
+      .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+    expect(res.status).toBe(200);
+    const { monthlyRevenue } = res.body.data;
+    expect(monthlyRevenue).toHaveLength(6);
+    monthlyRevenue.forEach((row) => expect(typeof row.revenue).toBe('number'));
+  });
+});
+

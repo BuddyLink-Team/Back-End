@@ -71,6 +71,20 @@ export const getScheduledStart = (scheduledDate, time, timeZone = DEFAULT_TIME_Z
 export const getStartOfZonedDay = (now = new Date(), timeZone = DEFAULT_TIME_ZONE) =>
   zonedWallTimeToDate(getZonedParts(now, timeZone), 0, 0, timeZone);
 
+/**
+ * First and last instants of a calendar day 'YYYY-MM-DD' in the business time zone.
+ * @param {string} dateString
+ * @param {string} [timeZone]
+ * @returns {{ start: Date, end: Date }}
+ */
+export const getZonedDayRange = (dateString, timeZone = DEFAULT_TIME_ZONE) => {
+  const [year, month, day] = dateString.split('-').map(Number);
+  const start = zonedWallTimeToDate({ year, month, day }, 0, 0, timeZone);
+  // Date.UTC rolls day + 1 over into the next month / year
+  const nextDay = zonedWallTimeToDate({ year, month, day: day + 1 }, 0, 0, timeZone);
+  return { start, end: new Date(nextDay.getTime() - 1) };
+};
+
 const MINUTE_MS = 60 * 1000;
 
 /**

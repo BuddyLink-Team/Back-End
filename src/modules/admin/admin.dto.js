@@ -1,6 +1,7 @@
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
 import { RescheduleResponseDTO } from '../playdate/playdate.dto.js';
+import { SUBSCRIPTION_PLAN_CODES, PAYMENT_STATUS } from '../subscription/subscription.constants.js';
 
 // Ward and city only: the address and the coordinates are never sent to the admin portal
 const toArea = (location) => ({
@@ -358,6 +359,95 @@ export class AdminConnectionDTO {
       childPairs: (conn.childPairs || []).map((pair) => AdminConnectionDTO.formatChildPair(pair)),
       createdAt: conn.createdAt,
       updatedAt: conn.updatedAt,
+    };
+  }
+}
+
+// Parent shown on a subscription or payment row; `email` comes from the parent's account
+const toParentSummary = ({ parentId, parent, email }) => ({
+  id: parent?._id || parentId,
+  fullName: parent?.fullName || '',
+  avatarUrl: parent?.avatarUrl || '',
+  email: email || '',
+});
+
+export class AdminPlanDTO {
+  static toResponse(plan) {
+    return {
+      id: plan._id,
+      planCode: plan.planCode,
+      name: plan.name,
+      price: plan.price,
+      currency: plan.currency,
+      durationMonths: plan.durationMonths,
+      billingCycle: plan.billingCycle,
+      features: plan.features,
+      isActive: plan.isActive,
+      isFree: plan.planCode === SUBSCRIPTION_PLAN_CODES.FREE,
+      createdAt: plan.createdAt,
+      updatedAt: plan.updatedAt,
+    };
+  }
+}
+
+export class AdminSubscriptionDTO {
+  /**
+   * @param {{ subscription: Object, parent?: Object|null, email?: string }} data
+   */
+  static toListItem({ subscription, parent = null, email = '' }) {
+    return {
+      id: subscription._id,
+      parent: toParentSummary({ parentId: subscription.parentId, parent, email }),
+      planCode: subscription.planCode,
+      status: subscription.status,
+      startDate: subscription.startDate,
+      endDate: subscription.endDate || null,
+      purchasedMonths: subscription.purchasedMonths || 0,
+      createdAt: subscription.createdAt,
+    };
+  }
+}
+
+export class AdminTransactionDTO {
+  /**
+   * @param {{ payment: Object, parent?: Object|null, email?: string }} data
+   */
+  static toListItem({ payment, parent = null, email = '' }) {
+    return {
+      id: payment._id,
+      orderCode: payment.orderCode,
+      parent: toParentSummary({ parentId: payment.parentId, parent, email }),
+      planSnapshot: payment.planSnapshot,
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      paymentMethod: payment.paymentMethod,
+      effectivePeriod:
+        payment.status === PAYMENT_STATUS.SUCCESS && payment.grantResult
+          ? {
+              effectiveStartDate: payment.grantResult.effectiveStartDate,
+              effectiveEndDate: payment.grantResult.effectiveEndDate,
+              monthsGranted: payment.grantResult.monthsGranted,
+            }
+          : null,
+      paidAt: payment.paidAt || null,
+      createdAt: payment.createdAt,
+    };
+  }
+
+  /**
+   * Audit detail; checkoutUrl and qrCode are never sent
+   * @param {{ payment: Object, parent?: Object|null, email?: string }} data
+   */
+  static toDetailResponse({ payment, parent = null, email = '' }) {
+    return {
+      ...AdminTransactionDTO.toListItem({ payment, parent, email }),
+      transactionId: payment.transactionId || null,
+      bankInfo: payment.bankInfo || null,
+      fulfilledAt: payment.fulfilledAt || null,
+      failureReason: payment.failureReason || null,
+      grantResult: payment.grantResult || null,
+      updatedAt: payment.updatedAt,
     };
   }
 }

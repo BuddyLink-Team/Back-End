@@ -1,4 +1,8 @@
 import Payment from './payment.model.js';
+import { PAYMENT_STATUS } from './subscription.constants.js';
+
+// Payment link and raw PayOS data are never sent to the admin portal
+const ADMIN_HIDDEN_FIELDS = '-checkoutUrl -qrCode -rawWebhookData';
 
 class PaymentRepository {
   /**
@@ -150,6 +154,127 @@ class PaymentRepository {
         totalPages: Math.ceil(total / parsedLimit) || 1,
       },
     };
+  }
+
+  /**
+   * Page of payments for the admin portal, newest first (payment link fields left out)
+   * @param {Object} options
+   * @param {string} [options.status]
+   * @param {string} [options.planCode]
+   * @param {Date} [options.fromDate] - Created at or after
+   * @param {Date} [options.toDate] - Created at or before
+   * @param {Array<ObjectId>|null} [options.searchParentIds] - Search box: payments of these parents...
+   * @param {number|null} [options.searchOrderCode] - ...or the payment with this order code; null lists all
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPageForAdmin({ status, planCode, fromDate, toDate, searchParentIds = null, searchOrderCode = null, page, limit }) {
+    const filter = {};
+    if (status) filter.status = status;
+    if (planCode) filter['planSnapshot.planCode'] = planCode;
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = fromDate;
+      if (toDate) filter.createdAt.$lte = toDate;
+    }
+    if (searchParentIds) {
+      filter.$or = [{ parentId: { $in: searchParentIds } }];
+      if (searchOrderCode !== null) filter.$or.push({ orderCode: searchOrderCode });
+    }
+
+    const [items, total] = await Promise.all([
+      Payment.find(filter)
+        .select(ADMIN_HIDDEN_FIELDS)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Payment.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  /**
+   * One payment for the admin portal (payment link fields left out)
+   */
+  async findByIdForAdmin(id) {
+    return Payment.findById(id).select(ADMIN_HIDDEN_FIELDS).lean();
+  }
+
+  /**
+   * Successful payments paid in a period: amount, count and distinct parents
+   * @returns {Promise<{ totalRevenue: number, successfulTransactions: number, payingParentsCount: number }>}
+   */
+  async sumSuccessfulPaidBetween(fromDate, toDate) {
+    const [row] = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, paidAt: { $gte: fromDate, $lte: toDate } } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$amount' },
+          successfulTransactions: { $sum: 1 },
+          parentIds: { $addToSet: '$parentId' },
+        },
+      },
+    ]);
+    return {
+      totalRevenue: row?.totalRevenue || 0,
+      successfulTransactions: row?.successfulTransactions || 0,
+      payingParentsCount: row?.parentIds.length || 0,
+    };
+  }
+
+  /**
+   * Successful payments paid in a period, grouped by calendar month in a time zone
+   * @returns {Promise<Array<{ month: string, revenue: number, transactionCount: number }>>} month = 'YYYY-MM', sorted
+   */
+  async sumSuccessfulPaidByMonth(fromDate, toDate, timeZone) {
+    const rows = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, paidAt: { $gte: fromDate, $lte: toDate } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m', date: '$paidAt', timezone: timeZone } },
+          revenue: { $sum: '$amount' },
+          transactionCount: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map((row) => ({ month: row._id, revenue: row.revenue, transactionCount: row.transactionCount }));
+  }
+
+  /**
+   * Parents with at least one successful payment, ever
+   */
+  async countDistinctSuccessfulParents() {
+    const parentIds = await Payment.distinct('parentId', { status: PAYMENT_STATUS.SUCCESS });
+    return parentIds.length;
+  }
+
+  /**
+   * Parents with a paid Premium period covering an instant
+   */
+  async countParentsWithGrantCovering(date) {
+    const parentIds = await Payment.distinct('parentId', {
+      status: PAYMENT_STATUS.SUCCESS,
+      'grantResult.effectiveStartDate': { $lte: date },
+      'grantResult.effectiveEndDate': { $gt: date },
+    });
+    return parentIds.length;
+  }
+
+  /**
+   * Parents whose latest paid Premium period ends in [fromDate, toDate]
+   */
+  async countParentsWithLastGrantEndBetween(fromDate, toDate) {
+    const [row] = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, 'grantResult.effectiveEndDate': { $ne: null } } },
+      { $group: { _id: '$parentId', lastEndDate: { $max: '$grantResult.effectiveEndDate' } } },
+      { $match: { lastEndDate: { $gte: fromDate, $lte: toDate } } },
+      { $count: 'count' },
+    ]);
+    return row?.count || 0;
   }
 }
 

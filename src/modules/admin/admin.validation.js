@@ -3,6 +3,12 @@ import { CHILD_GENDERS } from '../child/child.constants.js';
 import { ADMIN_SEARCH_MAX_LENGTH, ADMIN_REASON_MAX_LENGTH } from './admin.constants.js';
 import { PLAYDATE_STATUS } from '../playdate/playdate.constants.js';
 import { CONNECTION_STATUS } from '../connection/connection.constants.js';
+import {
+  SUBSCRIPTION_PLAN_CODES,
+  SUBSCRIPTION_STATUS,
+  PAYMENT_STATUS,
+  SUBSCRIPTION_PLAN_DEFAULTS,
+} from '../subscription/subscription.constants.js';
 
 /**
  * Validation rules for GET /api/v1/admin/users
@@ -217,3 +223,107 @@ export const adminDeleteConnectionValidation = [
     .isLength({ max: ADMIN_REASON_MAX_LENGTH })
     .withMessage(`Removal reason must be at most ${ADMIN_REASON_MAX_LENGTH} characters`),
 ];
+
+// Limits of a plan (`features` of subscription_plans), -1 = unlimited
+const PLAN_FEATURE_KEYS = Object.keys(SUBSCRIPTION_PLAN_DEFAULTS[0].features);
+
+const pagingValidation = [
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+  query('search')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: ADMIN_SEARCH_MAX_LENGTH })
+    .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
+];
+
+const dateRangeValidation = [
+  query('fromDate')
+    .optional()
+    .isISO8601()
+    .withMessage('fromDate must be a valid ISO8601 date'),
+  query('toDate')
+    .optional()
+    .isISO8601()
+    .withMessage('toDate must be a valid ISO8601 date'),
+];
+
+const planCodeQueryValidation = query('planCode')
+  .optional()
+  .isIn(Object.values(SUBSCRIPTION_PLAN_CODES))
+  .withMessage('Invalid plan code');
+
+/**
+ * Validation rules for PATCH /api/v1/admin/plans/:id
+ */
+export const updatePlanValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Valid plan ID is required'),
+  body('name')
+    .optional()
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage('Name cannot be empty')
+    .isLength({ max: 100 })
+    .withMessage('Name must not exceed 100 characters'),
+  body('price')
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage('Price must be an integer >= 0')
+    .toInt(),
+  body('isActive')
+    .optional()
+    .isBoolean()
+    .withMessage('isActive must be a boolean')
+    .toBoolean(),
+  body('features')
+    .optional()
+    .isObject()
+    .withMessage('features must be an object'),
+  ...PLAN_FEATURE_KEYS.map((key) =>
+    body(`features.${key}`)
+      .optional()
+      .isInt({ min: -1 })
+      .withMessage(`${key} must be >= -1`)
+      .toInt()
+  ),
+];
+
+/**
+ * Validation rules for GET /api/v1/admin/subscriptions
+ */
+export const listSubscriptionsValidation = [
+  ...pagingValidation,
+  planCodeQueryValidation,
+  query('status')
+    .optional()
+    .isIn(Object.values(SUBSCRIPTION_STATUS))
+    .withMessage('Invalid subscription status'),
+];
+
+/**
+ * Validation rules for GET /api/v1/admin/transactions
+ */
+export const listTransactionsValidation = [
+  ...pagingValidation,
+  ...dateRangeValidation,
+  planCodeQueryValidation,
+  query('status')
+    .optional()
+    .isIn(Object.values(PAYMENT_STATUS))
+    .withMessage('Invalid payment status'),
+];
+
+/**
+ * Validation rules for GET /api/v1/admin/revenue/summary
+ */
+export const revenueSummaryValidation = [...dateRangeValidation];
