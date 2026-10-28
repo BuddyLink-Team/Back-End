@@ -1,3 +1,5 @@
+import { PARTICIPANT_STATUS } from '../playdate/playdate.constants.js';
+
 export class ChatDTO {
   static formatParticipant(participant) {
     if (!participant) return null;
@@ -31,7 +33,8 @@ export class ChatDTO {
         }
       : null;
 
-    const participants = (playdate.participants || []).map((p) => ({
+    // Only the families in the group chat: the host and the accepted invitees (pending / declined ones are not members)
+    const participants = (playdate.participants || []).filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED).map((p) => ({
       parent: this.formatParticipant(p.parentId),
       child: p.childId && typeof p.childId === 'object'
         ? {
@@ -71,6 +74,19 @@ export class ChatDTO {
     // Identify the other participant in direct conversations
     const partner = participants.find((p) => p.id !== currentParentIdStr) || participants[0] || null;
 
+    const playdate = this.formatPlaydate(conversation.playdateId);
+
+    // Block state computed by the chat service; members may only appear in the playdate
+    const blockState = conversation._blockState || { blockedByMeIds: [], isBlockedByPartner: false };
+    const membersById = new Map(participants.filter(Boolean).map((p) => [p.id, p]));
+    if (playdate?.host) membersById.set(playdate.host.id, playdate.host);
+    (playdate?.participants || []).forEach(({ parent }) => {
+      if (parent && !membersById.has(parent.id)) membersById.set(parent.id, parent);
+    });
+    const blockedByMeParticipants = blockState.blockedByMeIds.map((id) => membersById.get(id) || { id });
+    const isBlockedByMe = blockedByMeParticipants.length > 0;
+    const isBlockedByPartner = Boolean(blockState.isBlockedByPartner);
+
     // Get unread count for current parent
     let unreadCount = 0;
     if (conversation.unreadCounts) {
@@ -86,7 +102,11 @@ export class ChatDTO {
       type: conversation.type,
       participants,
       partner,
-      playdate: this.formatPlaydate(conversation.playdateId),
+      blockedByMeParticipants,
+      isBlockedByMe,
+      isBlockedByPartner,
+      isBlocked: isBlockedByMe || isBlockedByPartner,
+      playdate,
       lastMessage: conversation.lastMessage
         ? {
             messageId: conversation.lastMessage.messageId?.toString() || null,

@@ -78,7 +78,9 @@ export const QUOTA_ACTIONS = Object.freeze({
     periodType: QUOTA_PERIOD_TYPES.MONTHLY,
     counterField: 'aiAssistantRequests',
     limitKey: 'aiAssistantLimitPerMonth',
-    message: (limit) => `Monthly AI assistant limit reached (${limit}). Upgrade to Premium for unlimited requests.`,
+    // Counted once per chat session (its first successful reply), not per message
+    message: (limit) =>
+      `Monthly AI assistant conversation limit reached (${limit}). Upgrade to Premium for unlimited conversations.`,
   },
 });
 

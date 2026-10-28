@@ -306,6 +306,17 @@ class ConnectionService {
   }
 
   /**
+   * Remove any active (pending or accepted) connection between two parents.
+   * Called when one parent blocks another.
+   * @param {string|ObjectId} parentIdA
+   * @param {string|ObjectId} parentIdB
+   * @returns {Promise<Object>}
+   */
+  async removeActiveConnectionBetween(parentIdA, parentIdB) {
+    return connectionRepository.removeActiveBetween(parentIdA, parentIdB);
+  }
+
+  /**
    * Replace the child ids of every pair with the active child documents (one query for all the
    * connections); pairs with an archived child are dropped.
    * @param {Array<Object>} connections

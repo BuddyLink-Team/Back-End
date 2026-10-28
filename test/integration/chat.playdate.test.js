@@ -4,6 +4,7 @@ import request from 'supertest';
 import app from '../../src/app.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
 import Conversation from '../../src/modules/chat/conversation.model.js';
+import Block from '../../src/modules/safety/block.model.js';
 import chatService from '../../src/modules/chat/chat.service.js';
 import { PARTICIPANT_STATUS } from '../../src/modules/playdate/playdate.constants.js';
 
@@ -65,7 +66,7 @@ describe('Playdate Group Chat Integration Tests', () => {
     expect(playdate.chatConversationId.toString()).toBe(conversationId);
   });
 
-  it('2. returns playdate details (host + participants) and only host & accepted members', async () => {
+  it('2. returns playdate details with only the chat members (host + accepted), never pending invitees', async () => {
     const res = await request(app)
       .get(`/api/v1/chat/playdate/${playdateId}`)
       .set('Authorization', `Bearer ${accepted.token}`);
@@ -75,7 +76,7 @@ describe('Playdate Group Chat Integration Tests', () => {
       [host.parentId, accepted.parentId].sort()
     );
     expect(res.body.data.playdate.host.id).toBe(host.parentId);
-    expect(res.body.data.playdate.participants).toHaveLength(2);
+    expect(res.body.data.playdate.participants.map((p) => p.parent.id)).toEqual([accepted.parentId]);
     expect(res.body.data.playdate.location.name).toBe('Tao Dan Park');
   });
 
@@ -86,7 +87,7 @@ describe('Playdate Group Chat Integration Tests', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.playdate.host.id).toBe(host.parentId);
-    expect(res.body.data.playdate.participants).toHaveLength(2);
+    expect(res.body.data.playdate.participants).toHaveLength(1);
   });
 
   it('4. rejects a pending participant', async () => {
@@ -145,5 +146,32 @@ describe('Playdate Group Chat Integration Tests', () => {
       .get('/api/v1/chat/conversations')
       .set('Authorization', `Bearer ${host.token}`);
     expect(listRes.body.data.find((c) => c.id === conversationId).unreadCount).toBe(0);
+  });
+
+  it('8. lists the members the caller blocked, but never tells a member who blocked them', async () => {
+    const conversation = await Conversation.findOne({ playdateId }).lean();
+    await Block.create({ blockerId: host.parentId, blockedId: conversation.participants.find((id) => id.toString() !== host.parentId) });
+
+    const forHost = await request(app)
+      .get(`/api/v1/chat/conversations/${conversationId}`)
+      .set('Authorization', `Bearer ${host.token}`);
+    expect(forHost.body.data.isBlockedByMe).toBe(true);
+    expect(forHost.body.data.blockedByMeParticipants.map((p) => p.id)).toHaveLength(1);
+
+    const blockedMember = await Promise.all(
+      [accepted, pending].map((member) =>
+        request(app).get(`/api/v1/chat/conversations/${conversationId}`).set('Authorization', `Bearer ${member.token}`)
+      )
+    );
+    expect(blockedMember.some((res) => res.status === 200)).toBe(true);
+    blockedMember
+      .filter((res) => res.status === 200)
+      .forEach((res) => {
+        expect(res.body.data.isBlockedByPartner).toBe(false);
+        expect(res.body.data.isBlocked).toBe(false);
+        expect(res.body.data.blockedMeParticipants).toBeUndefined();
+      });
+
+    await Block.deleteMany({ blockerId: host.parentId });
   });
 });

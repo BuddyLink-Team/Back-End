@@ -218,6 +218,8 @@ class SubscriptionService {
 
     const discoveryUsed = dailyCounters[QUOTA_ACTIONS.discovery.counterField] || 0;
     const playdatesUsed = monthlyCounters[QUOTA_ACTIONS.playdateCreate.counterField] || 0;
+    const aiAssistantLimit = features[QUOTA_ACTIONS.aiAssistant.limitKey] ?? 5;
+    const aiAssistantUsed = monthlyCounters[QUOTA_ACTIONS.aiAssistant.counterField] || 0;
 
     return {
       isPremium,
@@ -253,8 +255,45 @@ class SubscriptionService {
           periodType: QUOTA_PERIOD_TYPES.MONTHLY,
           resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
         },
+        // AI assistant: one unit per chat session (ai-assistant.service.js)
+        [QUOTA_FEATURES.AI_ASSISTANT]: {
+          limit: isPremium ? -1 : aiAssistantLimit,
+          used: aiAssistantUsed,
+          remaining: isPremium || aiAssistantLimit === -1 ? null : Math.max(0, aiAssistantLimit - aiAssistantUsed),
+          periodType: QUOTA_PERIOD_TYPES.MONTHLY,
+          resetAt: getNextResetTime(QUOTA_PERIOD_TYPES.MONTHLY),
+        },
       },
     };
+  }
+
+  /**
+   * Current usage of one bounded action, without checking or consuming it
+   * @param {string|mongoose.Types.ObjectId} parentId
+   * @param {string} actionType - A QUOTA_ACTIONS key or its QUOTA_FEATURES name
+   * @returns {Promise<{ isPremium: boolean, limit: number, used: number, remaining: number }>} -1 = unlimited
+   */
+  async getActionUsage(parentId, actionType) {
+    const action = QUOTA_ACTIONS[QUOTA_ACTION_ALIASES[actionType] || actionType];
+    if (!action) {
+      throw new AppError(`Unknown quota action: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
+    }
+
+    const subscription = await this.getSubscriptionByParentId(parentId);
+    const isPremium = this.isSubscriptionActive(subscription);
+    const counters = await usageQuotaRepository.getCounters(
+      parentId,
+      action.periodType,
+      getVietnamPeriodValue(action.periodType)
+    );
+    const used = counters[action.counterField] || 0;
+    if (isPremium) {
+      return { isPremium, limit: -1, used, remaining: -1 };
+    }
+
+    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
+    const limit = freePlan?.features?.[action.limitKey] ?? 0;
+    return { isPremium, limit, used, remaining: limit === -1 ? -1 : Math.max(0, limit - used) };
   }
 
   /**
@@ -1016,6 +1055,77 @@ class SubscriptionService {
   }
 
   /**
+   * Child profiles allowed on the Free plan (-1 = unlimited)
+   * @returns {Promise<number>}
+   */
+  async getFreeChildProfileLimit() {
+    const freePlan = await subscriptionPlanRepository.findByPlanCode(SUBSCRIPTION_PLAN_CODES.FREE);
+    return freePlan?.features?.childProfilesLimit ?? 1;
+  }
+
+  /**
+   * Parents with Premium in effect right now, for admin statistics
+   * @returns {Promise<number>}
+   */
+  async countPremiumParents() {
+    return subscriptionRepository.countActivePaid();
+  }
+
+  /**
+   * Parents with Premium in effect right now, for admin lists
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async getPremiumParentIds() {
+    return subscriptionRepository.findActivePaidParentIds();
+  }
+
+  /**
+   * Child profiles each parent may use, in one query (children past it are locked once Premium ends)
+   * @param {Array<string|mongoose.Types.ObjectId>} parentIds
+   * @returns {Promise<Map<string, number>>} parentId -> limit (-1 = unlimited)
+   */
+  async getChildProfileLimits(parentIds) {
+    const uniqueIds = [...new Set(parentIds.map(String))];
+    const limits = new Map();
+    if (!uniqueIds.length) return limits;
+
+    const [subscriptions, freeLimit] = await Promise.all([
+      subscriptionRepository.findByParentIds(uniqueIds),
+      this.getFreeChildProfileLimit(),
+    ]);
+    const premiumParentIds = new Set(
+      subscriptions.filter((sub) => this.isSubscriptionActive(sub)).map((sub) => sub.parentId.toString())
+    );
+
+    uniqueIds.forEach((id) => limits.set(id, premiumParentIds.has(id) ? -1 : freeLimit));
+    return limits;
+  }
+
+  /**
+   * Give back the unit consumed by an action that did not complete (current period, never below 0)
+   * @param {string|mongoose.Types.ObjectId} parentId
+   * @param {string} actionType - A QUOTA_ACTIONS key or its QUOTA_FEATURES name
+   * @param {Date} [consumedAt] - When the unit was used: nothing is given back if it belongs to a past period
+   * @returns {Promise<boolean>} true when a unit was given back
+   */
+  async refundQuota(parentId, actionType, consumedAt = null) {
+    const action = QUOTA_ACTIONS[QUOTA_ACTION_ALIASES[actionType] || actionType];
+    if (!action) {
+      throw new AppError(`Unknown quota action: ${actionType}`, 400, 'INVALID_QUOTA_ACTION');
+    }
+    if (consumedAt && getVietnamPeriodValue(action.periodType, consumedAt) !== getVietnamPeriodValue(action.periodType)) {
+      return false;
+    }
+    await usageQuotaRepository.decrementCounter(
+      parentId,
+      action.periodType,
+      getVietnamPeriodValue(action.periodType),
+      action.counterField
+    );
+    return true;
+  }
+
+  /**
    * Atomically check and consume quota for bounded actions
    * @param {string|mongoose.Types.ObjectId} parentId
    * @param {'discovery'|'connectionRequest'|'playdateCreate'|'playdateParticipate'|'aiAssistant'|string} actionType
@@ -1106,6 +1216,43 @@ class SubscriptionService {
         discoveryViewsToday: quotaData.usage?.[QUOTA_FEATURES.DISCOVERY_SWIPES]?.used ?? 0,
         playdatesCreatedThisMonth: quotaData.usage?.[QUOTA_FEATURES.PLAYDATES_CREATED]?.used ?? 0,
       },
+    };
+  }
+
+  /**
+   * Subscriptions of several parents as stored (no downgrade-on-read), for bulk lists
+   * @param {Array<string|ObjectId>} parentIds
+   */
+  async getSubscriptionsByParentIds(parentIds) {
+    if (!parentIds.length) return [];
+    return subscriptionRepository.findByParentIds(parentIds);
+  }
+
+  /**
+   * Plan in effect for a subscription: a paid plan past its end date counts as Free from that date,
+   * as getSubscriptionByParentId would store it on the next read.
+   * @param {Object|null} subscription
+   * @returns {{ planCode: string, isPremium: boolean, startDate: Date|null, endDate: Date|null, purchasedMonths: number }}
+   */
+  getEffectivePlan(subscription) {
+    if (this.isSubscriptionActive(subscription)) {
+      return {
+        planCode: subscription.planCode,
+        isPremium: true,
+        startDate: subscription.startDate || null,
+        endDate: subscription.endDate,
+        purchasedMonths: subscription.purchasedMonths || 0,
+      };
+    }
+
+    const expiredPaidPlanAt =
+      subscription && subscription.planCode !== SUBSCRIPTION_PLAN_CODES.FREE ? subscription.endDate : null;
+    return {
+      planCode: SUBSCRIPTION_PLAN_CODES.FREE,
+      isPremium: false,
+      startDate: expiredPaidPlanAt || subscription?.startDate || null,
+      endDate: null,
+      purchasedMonths: 0,
     };
   }
 }

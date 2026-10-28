@@ -303,6 +303,23 @@ class ParentService {
     return {
       avatarUrl: updatedParent.avatarUrl,
     };
+  }
+
+  /**
+   * User IDs of the parents matching a name search and / or a verification state (admin lists)
+   * @param {{ search?: string, isVerifiedParent?: boolean }} criteria
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findUserIdsByProfile(criteria) {
+    return parentRepository.findUserIds(criteria);
+  }
+
+  async getParentsByUserIds(userIds) {
+    return parentRepository.findByUserIds(userIds);
+  }
+
+  async getParentsByIds(ids) {
+    return parentRepository.findByIds(ids);
   }
 }
 

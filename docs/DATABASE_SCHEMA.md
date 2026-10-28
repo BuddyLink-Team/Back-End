@@ -253,7 +253,7 @@ erDiagram
         ObjectId _id PK
         ObjectId hostParentId FK "Ref: parents._id"
         ObjectId hostChildId FK "Ref: children._id"
-        array participants "Array of { parentId, childId, status, invitedAt, respondedAt }"
+        array participants "Array of { parentId, childId, status, invitedAt, respondedAt, quotaConsumedAt }"
         date scheduledDate "Ngày tổ chức"
         string time "Giờ bắt đầu, ví dụ: 09:00"
         int durationMinutes "Thời lượng 30 - 480 phút, mặc định 120"
@@ -365,9 +365,15 @@ erDiagram
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
         string title "Tiêu đề cuộc trò chuyện"
-        array messages "Array of { role, content, toolCalls, toolCallId, timestamp }"
+        array messages "Array of { role, content, toolCalls, toolCallId, toolName, cards, toolsUsed, choice, timestamp }"
+        object planDraft "Bản nháp playdate đang lên kế hoạch, null khi không có"
+        number messageCount "Số tin của phụ huynh trong phiên"
+        date quotaConsumedAt "Lúc phiên dùng lượt AI của tháng"
+        date pendingSince "Khóa khi đang sinh câu trả lời"
+        date lastMessageAt
         object tokenUsage "promptTokens, completionTokens, totalTokens"
         boolean isActive
+        date deletedAt
         date createdAt
         date updatedAt
     }
@@ -495,6 +501,7 @@ erDiagram
         ObjectId blockedId FK "Ref: parents._id (người bị chặn)"
         string reason "Lý do chặn"
         date createdAt
+        date updatedAt "Đổi khi chặn lại với lý do khác"
     }
 
     REPORTS {
@@ -504,7 +511,8 @@ erDiagram
         string targetType "user | message | playdate"
         ObjectId targetMessageId FK "Ref: messages._id (nếu báo cáo tin nhắn)"
         ObjectId targetPlaydateId FK "Ref: playdates._id (nếu báo cáo playdate)"
-        string reason "Lý do vi phạm"
+        string category "harassment | inappropriate_content | spam | fake_profile | child_safety | no_show | other"
+        string reason "Nhãn lý do (tùy chọn, mặc định = category)"
         string description "Mô tả chi tiết"
         string[] evidenceUrls "Ảnh chụp bằng chứng"
         string status "pending | reviewing | resolved | dismissed"
@@ -829,6 +837,7 @@ interface IPlaydateParticipant {
   status: "pending" | "accepted" | "declined";
   invitedAt: Date;
   respondedAt?: Date;
+  quotaConsumedAt?: Date | null; // Lần đầu chấp nhận đã dùng 1 lượt tham gia; rời rồi được mời lại và chấp nhận lại không trừ thêm. Chủ hủy buổi hẹn: hoàn lượt cho người còn tham gia nếu lượt thuộc tháng hiện tại
 }
 
 interface IPlaydate {
@@ -956,14 +965,15 @@ _Indexes:_
 
 ### 3.12 `ai_chat_sessions` Collection (AI Assistant Agent)
 
-_Ánh xạ: Mục 8._
+_Ánh xạ: Mục 8. API: `/api/v1/ai-assistant` (BUD-25)._
 
 ```typescript
 interface IAIChatSession {
   _id: ObjectId;
   parentId: ObjectId; // Tham chiếu parents._id
-  title: string;
+  title: string; // Sinh từ tin nhắn đầu tiên (tối đa 60 ký tự)
   messages: Array<{
+    _id: ObjectId;
     role: "user" | "assistant" | "system" | "tool";
     content: string;
     toolCalls?: Array<{
@@ -971,22 +981,35 @@ interface IAIChatSession {
       type: "function";
       function: {
         name: string;
-        arguments: string;
+        arguments: string; // JSON
       };
     }>;
     toolCallId?: string;
+    toolName?: string; // role 'tool': tên function đã chạy
+    cards?: Array<object>; // role 'assistant': Tool UI Cards (choices, place_suggestions, match_suggestions, playdate_draft, quota_notice)
+    toolsUsed?: string[]; // role 'assistant'
+    choice?: { messageId: ObjectId; stepId: string; optionIds: string[] }; // role 'user': gửi bằng cách bấm lựa chọn
     timestamp: Date;
   }>;
+  planDraft: object | null; // Bản nháp playdate đang lên kế hoạch từng bước (plan-draft.rules.js), chưa tạo playdate
+  messageCount: number; // Số tin của phụ huynh, giới hạn 30 (Free) / 100 (Premium) mỗi phiên
+  quotaConsumedAt: Date | null; // Phiên đã dùng 1 lượt AI của tháng (lấy khi gửi tin đầu tiên, hoàn lại nếu lượt đó thất bại)
+  pendingSince: Date | null; // Khóa khi đang sinh câu trả lời (mỗi phiên xử lý 1 tin một lúc, khóa quá 2 phút coi như hết hạn)
+  lastMessageAt: Date;
   tokenUsage?: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
   };
-  isActive: boolean;
+  isActive: boolean; // false = đã xóa (soft delete)
+  deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 ```
+
+- Index: `{ parentId: 1, isActive: 1, updatedAt: -1 }` (danh sách phiên mới nhất).
+- Hạn mức `usage_quotas.counters.aiAssistantRequests` đếm **số phiên** trong tháng (Free 5, Premium không giới hạn), không đếm từng tin nhắn.
 
 ---
 
@@ -1057,6 +1080,7 @@ interface IBlock {
   blockedId: ObjectId; // Tham chiếu parents._id (Người bị chặn)
   reason?: string;
   createdAt: Date;
+  updatedAt: Date; // Đổi khi chặn lại với lý do khác
 }
 ```
 
@@ -1075,7 +1099,8 @@ interface IReport {
   targetType: "user" | "message" | "playdate";
   targetMessageId?: ObjectId; // Tham chiếu messages._id (nếu báo cáo tin nhắn)
   targetPlaydateId?: ObjectId; // Tham chiếu playdates._id (nếu báo cáo playdate)
-  reason: string; // Lý do vi phạm
+  category: "harassment" | "inappropriate_content" | "spam" | "fake_profile" | "child_safety" | "no_show" | "other"; // Danh mục vi phạm (bắt buộc; report cũ chưa có được đọc là "other")
+  reason?: string; // Nhãn lý do hiển thị (tùy chọn, mặc định bằng category)
   description?: string; // Chi tiết phản ánh
   evidenceUrls?: string[]; // Ảnh chụp màn hình / bằng chứng
   status: "pending" | "reviewing" | "resolved" | "dismissed"; // Default: 'pending'
@@ -1091,6 +1116,7 @@ _Indexes:_
 
 - `{ status: 1, createdAt: -1 }` (Admin lọc danh sách report theo trạng thái)
 - `{ reportedUserId: 1 }` (Thống kê số lần bị report của một user)
+- `{ category: 1 }` (Admin lọc report theo danh mục vi phạm)
 
 #### D. `places_cache` Collection (Mục 7.2)
 

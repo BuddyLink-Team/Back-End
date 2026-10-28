@@ -247,6 +247,7 @@ The admin portal has its own API, separate from the parent app:
 - Tokens carry an audience (`aud`): `app` for the parent app, `admin` for the admin portal (`TOKEN_AUDIENCES` in `auth.constants.js`). `authenticate` and refresh only accept tokens issued for the app serving the request, so a parent token gets 401 on the admin API and an admin token gets 401 on the parent API (and on Socket.io).
 - Admin accounts cannot sign in on the parent app (`/auth/login`, `/auth/google` answer `403 ADMIN_PORTAL_REQUIRED`).
 - Admin endpoints so far: `POST /auth/login` (rate limited: 10 / 15 min), `POST /auth/refresh-token`, `POST /auth/logout`, `GET /auth/me`, `/user/*` (own profile & password). Everything after login requires `authenticate` + `authorizeRoles('admin')`.
+- Parent & child management (BUD-31): `GET /users` (search, `isActive`, `isVerified`, page, limit), `GET /users/:id`, `PATCH /users/:id/status` (`{ isActive }`: locking revokes the parent's refresh tokens; an open Socket.io connection is rejected and closed on its next chat action), `GET /children` (search, gender, `minAge` / `maxAge`, `isArchived`), `GET /children/:id`, `GET /payments?parentId=` (payment history of a parent).
 - Background jobs, seeding and Socket.io only run in `src/server.js` (parent API). `src/admin-server.js` only connects MongoDB and serves the admin API.
 
 ---

@@ -52,6 +52,27 @@ class ConnectionRepository {
   }
 
   /**
+   * Set any active (pending or accepted) connection between two parents to removed.
+   * @param {string|ObjectId} parentIdA
+   * @param {string|ObjectId} parentIdB
+   * @returns {Promise<Object>}
+   */
+  async removeActiveBetween(parentIdA, parentIdB) {
+    return Connection.updateMany(
+      {
+        parents: { $all: [parentIdA, parentIdB] },
+        status: { $in: [CONNECTION_STATUS.PENDING, CONNECTION_STATUS.ACCEPTED] },
+      },
+      {
+        $set: {
+          status: CONNECTION_STATUS.REMOVED,
+          removedAt: new Date(),
+        },
+      }
+    );
+  }
+
+  /**
    * Accept a pending connection request
    * @param {string|ObjectId} connectionId
    * @returns {Promise<Object|null>} The accepted connection, or null if it is no longer pending

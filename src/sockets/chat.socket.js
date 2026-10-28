@@ -1,4 +1,5 @@
 import chatService from '../modules/chat/chat.service.js';
+import userService from '../modules/user/user.service.js';
 import ChatDTO from '../modules/chat/chat.dto.js';
 import { SOCKET_EVENTS } from '../modules/chat/chat.constants.js';
 import { broadcastNewMessage, broadcastReadStatus } from './chat.broadcast.js';
@@ -34,11 +35,29 @@ export const registerChatSocket = (io, socket) => {
     return socket.parent;
   };
 
+  // The handshake checks the account only once: an account locked by an admin afterwards
+  // (from the admin API process, which cannot reach this socket) is rejected on its next action.
+  const assertCallerActive = async () => {
+    const user = await userService.getSessionUser(socket.userId);
+    if (!user?.isActive) {
+      throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
+    }
+  };
+
+  // Close the connection of a locked account once the error has been delivered
+  const disconnectIfDisabled = (error) => {
+    if (error?.code === 'ACCOUNT_DISABLED') {
+      socket.disconnect(true);
+    }
+  };
+
   // 1. Join Chat Room
   socket.on(SOCKET_EVENTS.JOIN_CHAT, async (payload, callback) => {
     try {
       const conversationId = typeof payload === 'string' ? payload : payload?.conversationId;
       if (!conversationId) return;
+
+      await assertCallerActive();
 
       // Verify participant access to the conversation before joining
       await chatService.getConversationById(getCallerParent(), conversationId);
@@ -61,6 +80,7 @@ export const registerChatSocket = (io, socket) => {
           code: error.code || 'JOIN_REJECTED',
         });
       }
+      disconnectIfDisabled(error);
     }
   });
 
@@ -84,6 +104,8 @@ export const registerChatSocket = (io, socket) => {
       if (!conversationId) {
         throw new AppError('conversationId is required', 400, 'BAD_REQUEST');
       }
+
+      await assertCallerActive();
 
       const result = await chatService.sendMessage(parent, conversationId, {
         content,
@@ -113,6 +135,7 @@ export const registerChatSocket = (io, socket) => {
           code: error.code || 'INTERNAL_ERROR',
         });
       }
+      disconnectIfDisabled(error);
     }
   });
 
