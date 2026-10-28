@@ -1,130 +1,127 @@
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
+import { CONNECTION_PRIVACY } from '../parent/parent.constants.js';
+
+// Ward and city only: the address and the coordinates are never sent to the admin portal
+const toArea = (location) => ({
+  area: location?.area || '',
+  city: location?.city || '',
+});
+
+const toVerification = (parent) => ({
+  isEmailVerified: parent?.verification?.isEmailVerified || false,
+  isPhoneVerified: parent?.verification?.isPhoneVerified || false,
+  isVerifiedParent: parent?.verification?.isVerifiedParent || false,
+});
 
 export class AdminUserListItemDTO {
-  static toResponse(item) {
-    if (!item) return null;
-
-    const parent = item.parent || {};
-    const subscription = Array.isArray(item.subscription) ? item.subscription[0] : item.subscription;
-
+  /**
+   * @param {{ user: Object, parent: Object|null, childrenCount: number, plan: Object }} data
+   */
+  static toResponse({ user, parent, childrenCount, plan }) {
     return {
-      id: item._id,
-      parentId: parent._id || item.parentId || null,
-      fullName: parent.fullName || item.fullName || '',
-      avatar: parent.avatarUrl || item.avatar || '',
-      email: item.email || '',
-      phone: item.phone || '',
-      city: parent.location?.city || item.city || '',
-      isActive: item.isActive !== undefined ? item.isActive : true,
-      verification: {
-        isEmailVerified: parent.verification?.isEmailVerified || false,
-        isPhoneVerified: parent.verification?.isPhoneVerified || false,
-        isVerifiedParent: parent.verification?.isVerifiedParent || false,
+      id: user._id,
+      fullName: parent?.fullName || '',
+      avatar: parent?.avatarUrl || '',
+      email: user.email || '',
+      phone: user.phone || '',
+      city: parent?.location?.city || '',
+      isActive: user.isActive !== false,
+      isProfileHidden: parent?.privacySettings?.isProfileHidden === true,
+      isVerifiedParent: parent?.verification?.isVerifiedParent || false,
+      childrenCount,
+      currentPlan: {
+        planCode: plan.planCode,
+        isPremium: plan.isPremium,
+        endDate: plan.endDate,
       },
-      childrenCount: typeof item.childrenCount === 'number'
-        ? item.childrenCount
-        : (Array.isArray(item.childrenCount) ? (item.childrenCount[0]?.count ?? 0) : 0),
-      currentPlan: subscription
-        ? {
-            planCode: subscription.planCode,
-            status: subscription.status,
-            startDate: subscription.startDate,
-            endDate: subscription.endDate,
-          }
-        : {
-            planCode: 'free',
-            status: 'active',
-            startDate: item.createdAt,
-            endDate: null,
-          },
-      createdAt: item.createdAt,
+      createdAt: user.createdAt,
     };
-  }
-
-  static toResponseList(items) {
-    if (!Array.isArray(items)) return [];
-    return items.map((i) => AdminUserListItemDTO.toResponse(i));
   }
 }
 
 export class AdminUserDetailDTO {
-  static toResponse({ user, parent, children = [], subscription = null }) {
-    if (!user) return null;
+  /**
+   * @param {Object} data
+   * @param {Object} data.user
+   * @param {Object} data.parent
+   * @param {Array<Object>} data.children - Including archived ones
+   * @param {Set<string>} data.lockedChildIds - Children over the Free plan limit
+   * @param {Object} data.plan - subscriptionService.getEffectivePlan result
+   * @param {string[]} data.loginMethods
+   * @param {{ connections: number, playdates: Object, reports: Object }} data.activity
+   */
+  static toResponse({ user, parent, children = [], lockedChildIds = new Set(), plan, loginMethods, activity }) {
+    const activeChildrenCount = children.filter((child) => !child.isArchived).length;
 
     return {
       id: user._id,
-      parentId: parent?._id || null,
-      fullName: parent?.fullName || '',
-      avatar: parent?.avatarUrl || '',
-      bio: parent?.bio || '',
+      parentId: parent._id,
+      fullName: parent.fullName || '',
+      avatar: parent.avatarUrl || '',
+      bio: parent.bio || '',
       email: user.email || '',
       phone: user.phone || '',
-      location: parent?.location || { address: '', area: '', city: '' },
-      isActive: user.isActive !== undefined ? user.isActive : true,
-      verification: {
-        isEmailVerified: parent?.verification?.isEmailVerified || false,
-        isPhoneVerified: parent?.verification?.isPhoneVerified || false,
-        isVerifiedParent: parent?.verification?.isVerifiedParent || false,
+      location: toArea(parent.location),
+      isActive: user.isActive !== false,
+      isProfileHidden: parent.privacySettings?.isProfileHidden === true,
+      connectionPrivacy: parent.privacySettings?.connectionPrivacy || CONNECTION_PRIVACY.EVERYONE,
+      loginMethods,
+      verification: toVerification(parent),
+      streak: {
+        currentWeeklyStreak: parent.streak?.currentWeeklyStreak || 0,
+        longestStreak: parent.streak?.longestStreak || 0,
       },
+      activeChildrenCount,
+      archivedChildrenCount: children.length - activeChildrenCount,
       children: children.map((child) => ({
         id: child._id,
         displayName: child.displayName,
-        dateOfBirth: child.dateOfBirth,
         age: calculateAgeYears(child.dateOfBirth),
         gender: child.gender,
         isArchived: child.isArchived || false,
+        isPlanLocked: lockedChildIds.has(child._id.toString()),
       })),
-      subscription: subscription
-        ? {
-            planCode: subscription.planCode,
-            status: subscription.status,
-            startDate: subscription.startDate,
-            endDate: subscription.endDate,
-            purchasedMonths: subscription.purchasedMonths || 0,
-          }
-        : {
-            planCode: 'free',
-            status: 'active',
-            startDate: user.createdAt,
-            endDate: null,
-            purchasedMonths: 0,
-          },
+      subscription: {
+        planCode: plan.planCode,
+        isPremium: plan.isPremium,
+        startDate: plan.startDate,
+        endDate: plan.endDate,
+        purchasedMonths: plan.purchasedMonths,
+      },
+      activity: {
+        connections: activity.connections,
+        playdates: activity.playdates,
+        reports: activity.reports,
+      },
       createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
     };
   }
 }
 
 export class AdminChildListItemDTO {
-  static toResponse(child) {
-    if (!child) return null;
-
-    const parent = child.parent || {};
-
+  /**
+   * @param {{ child: Object, parent: Object|null, visibility: string }} data
+   */
+  static toResponse({ child, parent, visibility }) {
     return {
       id: child._id,
       displayName: child.displayName,
       age: calculateAgeYears(child.dateOfBirth),
-      dateOfBirth: child.dateOfBirth,
       gender: child.gender,
-      parentName: parent.fullName || child.parentName || '',
-      parentId: child.parentId?._id || child.parentId || null,
-      parentUserId: parent.userId || child.parentUserId || null,
+      parentName: parent?.fullName || '',
+      parentUserId: parent?.userId || null,
       isArchived: child.isArchived || false,
+      visibility,
       createdAt: child.createdAt,
     };
-  }
-
-  static toResponseList(items) {
-    if (!Array.isArray(items)) return [];
-    return items.map((i) => AdminChildListItemDTO.toResponse(i));
   }
 }
 
 export class AdminChildDetailDTO {
-  static toResponse({ child, parent, user }) {
-    if (!child) return null;
-
+  /**
+   * @param {{ child: Object, parent: Object|null, user: Object|null, visibility: string }} data
+   */
+  static toResponse({ child, parent, user, visibility }) {
     return {
       id: child._id,
       displayName: child.displayName,
@@ -135,23 +132,20 @@ export class AdminChildDetailDTO {
       favoriteActivities: child.favoriteActivities || [],
       personality: child.personality || [],
       isArchived: child.isArchived || false,
+      visibility,
       createdAt: child.createdAt,
       updatedAt: child.updatedAt,
       parent: parent
         ? {
-            parentId: parent._id,
             parentUserId: parent.userId,
             fullName: parent.fullName || '',
             avatar: parent.avatarUrl || '',
             email: user?.email || '',
             phone: user?.phone || '',
-            city: parent.location?.city || '',
-            isActive: user?.isActive !== undefined ? user.isActive : true,
-            verification: {
-              isEmailVerified: parent.verification?.isEmailVerified || false,
-              isPhoneVerified: parent.verification?.isPhoneVerified || false,
-              isVerifiedParent: parent.verification?.isVerifiedParent || false,
-            },
+            ...toArea(parent.location),
+            isActive: user?.isActive === true,
+            isProfileHidden: parent.privacySettings?.isProfileHidden === true,
+            isVerifiedParent: parent.verification?.isVerifiedParent || false,
           }
         : null,
     };

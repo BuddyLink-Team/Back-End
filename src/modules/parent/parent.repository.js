@@ -124,6 +124,29 @@ class ParentRepository {
 
     parent.verification = newVerification;
     return parent.save();
+  }
+
+  /**
+   * User IDs of the parents matching a name search and / or a verification state
+   * @param {{ search?: string, isVerifiedParent?: boolean }} criteria
+   * @returns {Promise<Array<ObjectId>>}
+   */
+  async findUserIds({ search, isVerifiedParent } = {}) {
+    const filter = {};
+    if (search) filter.fullName = { $regex: escapeRegExp(search), $options: 'i' };
+    if (typeof isVerifiedParent === 'boolean') filter['verification.isVerifiedParent'] = isVerifiedParent;
+    const parents = await Parent.find(filter).select('userId').lean();
+    return parents.map((p) => p.userId);
+  }
+
+  async findByUserIds(userIds) {
+    if (!userIds.length) return [];
+    return Parent.find({ userId: { $in: userIds } }).lean();
+  }
+
+  async findByIds(ids) {
+    if (!ids.length) return [];
+    return Parent.find({ _id: { $in: ids } }).lean();
   }
 }
 

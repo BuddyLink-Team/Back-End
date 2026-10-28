@@ -24,10 +24,12 @@ export const createToolContext = ({ userId, parent, draft, lastMatchCard = null 
       // Places shown this turn (id -> place), so a later tool can use one by id
       places: new Map(),
     },
-    // Own active children, loaded once per turn
+    // Own active children not locked by the Free plan, loaded once per turn
     getChildren() {
       if (!childrenPromise) {
-        childrenPromise = childService.getMyChildren(userId).then((children) => children.map(toChildItem));
+        childrenPromise = childService
+          .getMyChildren(userId)
+          .then((children) => children.filter((child) => !child.isLocked).map(toChildItem));
       }
       return childrenPromise;
     },

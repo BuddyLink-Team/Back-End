@@ -1,5 +1,6 @@
 import { query, param, body } from 'express-validator';
 import { CHILD_GENDERS } from '../child/child.constants.js';
+import { ADMIN_SEARCH_MAX_LENGTH } from './admin.constants.js';
 
 /**
  * Validation rules for GET /api/v1/admin/users
@@ -8,7 +9,9 @@ export const listUsersValidation = [
   query('search')
     .optional()
     .isString()
-    .trim(),
+    .trim()
+    .isLength({ max: ADMIN_SEARCH_MAX_LENGTH })
+    .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
   query('isActive')
     .optional()
     .isBoolean()
@@ -17,6 +20,10 @@ export const listUsersValidation = [
     .optional()
     .isBoolean()
     .withMessage('isVerified must be a boolean'),
+  query('isPremium')
+    .optional()
+    .isBoolean()
+    .withMessage('isPremium must be a boolean'),
   query('page')
     .optional()
     .isInt({ min: 1 })
@@ -48,12 +55,6 @@ export const updateUserStatusValidation = [
     .withMessage('isActive is required')
     .isBoolean()
     .withMessage('isActive must be a boolean'),
-  body('reason')
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ max: 500 })
-    .withMessage('Reason must be at most 500 characters'),
 ];
 
 /**
@@ -63,7 +64,9 @@ export const listChildrenValidation = [
   query('search')
     .optional()
     .isString()
-    .trim(),
+    .trim()
+    .isLength({ max: ADMIN_SEARCH_MAX_LENGTH })
+    .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
   query('gender')
     .optional()
     .isIn(Object.values(CHILD_GENDERS))
@@ -85,6 +88,10 @@ export const listChildrenValidation = [
     .optional()
     .isBoolean()
     .withMessage('isArchived must be a boolean'),
+  query('isPlanLocked')
+    .optional()
+    .isBoolean()
+    .withMessage('isPlanLocked must be a boolean'),
   query('page')
     .optional()
     .isInt({ min: 1 })

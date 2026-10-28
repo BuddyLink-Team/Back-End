@@ -11,6 +11,15 @@ class AdminController {
     }
   }
 
+  async getUserStats(req, res, next) {
+    try {
+      const data = await adminService.getUserStats();
+      return successResponse(res, data, 'Parent statistics retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async getUserDetail(req, res, next) {
     try {
       const data = await adminService.getUserDetail(req.params.id);
@@ -37,6 +46,15 @@ class AdminController {
     try {
       const data = await adminService.getChildren(req.query);
       return successResponse(res, data, 'Children profiles retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async getChildStats(req, res, next) {
+    try {
+      const data = await adminService.getChildStats();
+      return successResponse(res, data, 'Child profile statistics retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }

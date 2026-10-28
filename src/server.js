@@ -22,8 +22,6 @@ const server = http.createServer(app);
 // Initialize Socket.io
 initSocket(server);
 
-// Start server function
-
 const startServer = async () => {
   try {
     // 1. Connect MongoDB

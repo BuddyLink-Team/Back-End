@@ -34,11 +34,14 @@ router.use('/user', userRoutes);
 
 // Parent accounts management
 router.get('/users', validate(listUsersValidation), adminController.getUsers);
+// Before /users/:id, which would take 'stats' as an ID
+router.get('/users/stats', adminController.getUserStats);
 router.get('/users/:id', validate(userIdParamValidation), adminController.getUserDetail);
 router.patch('/users/:id/status', validate(updateUserStatusValidation), adminController.updateUserStatus);
 
 // Child profiles (read-only)
 router.get('/children', validate(listChildrenValidation), adminController.getChildren);
+router.get('/children/stats', adminController.getChildStats);
 router.get('/children/:id', validate(childIdParamValidation), adminController.getChildDetail);
 
 // Payments history for parent detail drawer

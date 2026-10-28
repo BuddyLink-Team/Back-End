@@ -7,6 +7,7 @@ import Connection from '../../src/modules/connection/connection.model.js';
 import { CONNECTION_STATUS } from '../../src/modules/connection/connection.constants.js';
 import parentService from '../../src/modules/parent/parent.service.js';
 import Message from '../../src/modules/chat/message.model.js';
+import User from '../../src/modules/user/user.model.js';
 import { registerChatSocket } from '../../src/sockets/chat.socket.js';
 import { SOCKET_EVENTS } from '../../src/modules/chat/chat.constants.js';
 
@@ -376,8 +377,13 @@ describe('Chat Module Integration Tests (TASK-BE-10)', () => {
         id: 'test-socket',
         parent,
         parentId: parent?._id.toString(),
+        userId: parent?.userId?.toString(),
         rooms: new Set(),
         handlers,
+        disconnected: false,
+        disconnect() {
+          this.disconnected = true;
+        },
         on: (event, handler) => {
           handlers[event] = handler;
         },
@@ -433,6 +439,30 @@ describe('Chat Module Integration Tests (TASK-BE-10)', () => {
 
       expect(ack.success).toBe(false);
       expect(ack.code).toBe('PARENT_REQUIRED');
+    });
+
+    it('17. should reject and disconnect a socket whose account was locked after the handshake', async () => {
+      const parentA = await parentService.getParentById(parentIdA);
+      const socket = createSocketStub(parentA);
+      registerChatSocket(createIoStub(), socket);
+
+      await User.updateOne({ _id: parentA.userId }, { $set: { isActive: false } });
+      try {
+        let ack;
+        await socket.handlers[SOCKET_EVENTS.SEND_MESSAGE](
+          { conversationId, content: 'Tai khoan da bi khoa' },
+          (response) => {
+            ack = response;
+          },
+        );
+
+        expect(ack.success).toBe(false);
+        expect(ack.code).toBe('ACCOUNT_DISABLED');
+        expect(socket.disconnected).toBe(true);
+        expect(await Message.countDocuments({ content: 'Tai khoan da bi khoa' })).toBe(0);
+      } finally {
+        await User.updateOne({ _id: parentA.userId }, { $set: { isActive: true } });
+      }
     });
   });
 });

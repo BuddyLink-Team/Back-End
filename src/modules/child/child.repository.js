@@ -78,6 +78,19 @@ class ChildRepository {
   }
 
   /**
+   * IDs of the active children of several parents, oldest first (order used by the Free child limit)
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Array<{ _id: ObjectId, parentId: ObjectId }>>}
+   */
+  async findIdsByParentIdsOldestFirst(parentIds) {
+    if (!parentIds.length) return [];
+    return Child.find({ parentId: { $in: parentIds }, isArchived: false })
+      .select('_id parentId')
+      .sort({ createdAt: 1, _id: 1 })
+      .lean();
+  }
+
+  /**
    * Active children by ID, in one query
    * @param {Array<string|ObjectId>} childIds
    * @returns {Promise<Array<Object>>}
@@ -141,6 +154,100 @@ class ChildRepository {
         select: 'userId fullName avatarUrl bio location.area location.city verification preferences privacySettings.isProfileHidden',
       })
       .lean();
+  }
+
+  /**
+   * Page of child profiles for admin lists, newest first
+   * @param {Object} criteria
+   * @param {string} [criteria.search] - Matches the child name
+   * @param {Array<string|ObjectId>} [criteria.searchParentIds] - Parents also matched by the search (parent name)
+   * @param {string} [criteria.gender]
+   * @param {boolean} [criteria.isArchived]
+   * @param {Array<string|ObjectId>|null} [criteria.restrictToIds] - Only these profiles; null = no restriction
+   * @param {Array<string|ObjectId>|null} [criteria.excludeIds] - Never these profiles; null = no exclusion
+   * @param {Date} [criteria.bornAfter] - Exclusive lower bound of the date of birth
+   * @param {Date} [criteria.bornOnOrBefore] - Inclusive upper bound of the date of birth
+   * @param {number} criteria.page
+   * @param {number} criteria.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPage({
+    search,
+    searchParentIds = [],
+    gender,
+    isArchived,
+    bornAfter,
+    bornOnOrBefore,
+    restrictToIds = null,
+    excludeIds = null,
+    page,
+    limit,
+  }) {
+    const filter = {};
+    if (restrictToIds || excludeIds) {
+      filter._id = {
+        ...(restrictToIds ? { $in: restrictToIds } : {}),
+        ...(excludeIds ? { $nin: excludeIds } : {}),
+      };
+    }
+    if (gender) filter.gender = gender;
+    if (typeof isArchived === 'boolean') filter.isArchived = isArchived;
+    if (bornAfter || bornOnOrBefore) {
+      filter.dateOfBirth = {};
+      if (bornAfter) filter.dateOfBirth.$gt = bornAfter;
+      if (bornOnOrBefore) filter.dateOfBirth.$lte = bornOnOrBefore;
+    }
+    if (search) {
+      const regex = new RegExp(escapeRegExp(search), 'i');
+      filter.$or = [{ displayName: regex }, { parentId: { $in: searchParentIds } }];
+    }
+
+    const [items, total] = await Promise.all([
+      Child.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Child.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  /**
+   * Child profiles by archive status, for admin statistics
+   * @returns {Promise<{ total: number, active: number, archived: number }>}
+   */
+  async countByArchiveStatus() {
+    const rows = await Child.aggregate([{ $group: { _id: '$isArchived', count: { $sum: 1 } } }]);
+    const archived = rows.find((row) => row._id === true)?.count || 0;
+    const total = rows.reduce((sum, row) => sum + row.count, 0);
+    return { total, active: total - archived, archived };
+  }
+
+  /**
+   * Parents with more than `minCount` active children, and how many they have
+   * @param {number} minCount
+   * @returns {Promise<Array<{ _id: ObjectId, count: number }>>}
+   */
+  async findParentsWithActiveChildrenAbove(minCount) {
+    return Child.aggregate([
+      { $match: { isArchived: false } },
+      { $group: { _id: '$parentId', count: { $sum: 1 } } },
+      { $match: { count: { $gt: minCount } } },
+    ]);
+  }
+
+  /**
+   * Number of active (non-archived) children per parent
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Array<{ _id: ObjectId, count: number }>>}
+   */
+  async countActiveGroupedByParentIds(parentIds) {
+    if (!parentIds.length) return [];
+    return Child.aggregate([
+      { $match: { parentId: { $in: parentIds.map((id) => new mongoose.Types.ObjectId(id)) }, isArchived: false } },
+      { $group: { _id: '$parentId', count: { $sum: 1 } } },
+    ]);
   }
 }
 

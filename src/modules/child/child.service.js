@@ -79,8 +79,11 @@ class ChildService {
    */
   async getMyChildren(userId) {
     const parentId = await this._getParentId(userId);
-    const children = await childRepository.findByParentId(parentId);
-    return ChildResponseDTO.toResponseList(children);
+    const [children, lockedIds] = await Promise.all([
+      childRepository.findByParentId(parentId),
+      this.getLockedChildIds([parentId]),
+    ]);
+    return ChildResponseDTO.toResponseList(children, lockedIds);
   }
 
   /**
@@ -93,7 +96,7 @@ class ChildService {
     if (!child) {
       throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
     }
-    return ChildResponseDTO.toResponse(child);
+    return ChildResponseDTO.toResponse(child, await this.getLockedChildIds([parentId]));
   }
 
   /**
@@ -107,7 +110,7 @@ class ChildService {
       throw new AppError('Child not found or you are not authorized to update this profile', 404, 'CHILD_NOT_FOUND');
     }
 
-    return ChildResponseDTO.toResponse(updatedChild);
+    return ChildResponseDTO.toResponse(updatedChild, await this.getLockedChildIds([parentId]));
   }
 
   /**
@@ -147,7 +150,104 @@ class ChildService {
    */
   async getDiscoverableChildren(criteria) {
     if (!criteria.parentIds || criteria.parentIds.length === 0) return [];
-    return childRepository.findDiscoverable(criteria);
+    return this._withoutLocked(await childRepository.findDiscoverable(criteria));
+  }
+
+  /**
+   * IDs of the children locked by the Free plan: a parent whose Premium ended keeps the oldest
+   * childProfilesLimit children usable, the newer ones stay visible and editable to the parent
+   * but cannot be used for discovery or playdates (unlocked again on renewal)
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Set<string>>}
+   */
+  async getLockedChildIds(parentIds) {
+    const locked = new Set();
+    const limits = await subscriptionService.getChildProfileLimits(parentIds);
+    const limitedParentIds = [...limits].filter(([, limit]) => limit !== -1).map(([id]) => id);
+    if (!limitedParentIds.length) return locked;
+
+    const children = await childRepository.findIdsByParentIdsOldestFirst(limitedParentIds);
+    const keptByParent = new Map();
+    for (const child of children) {
+      const parentKey = child.parentId.toString();
+      const kept = keptByParent.get(parentKey) || 0;
+      if (kept < limits.get(parentKey)) {
+        keptByParent.set(parentKey, kept + 1);
+      } else {
+        locked.add(child._id.toString());
+      }
+    }
+    return locked;
+  }
+
+  /**
+   * Whether a child is locked by its parent's Free plan
+   * @param {string|ObjectId} childId
+   * @param {string|ObjectId} parentId - The child's parent
+   */
+  async isChildLocked(childId, parentId) {
+    return (await this.getLockedChildIds([parentId])).has(childId.toString());
+  }
+
+  /**
+   * Reject an own child locked by the Free plan (a child of someone else is never reported locked)
+   * @param {string|ObjectId} childId
+   * @param {string|ObjectId} parentId - The caller's parent ID
+   * @param {Set<string>} [lockedIds] - Result of getLockedChildIds already loaded for this parent
+   */
+  async assertChildUsable(childId, parentId, lockedIds = null) {
+    if (!childId) return;
+    const locked = lockedIds || (await this.getLockedChildIds([parentId]));
+    if (locked.has(childId.toString())) {
+      throw new AppError(
+        'This child profile is locked on the Free plan. Upgrade to Premium to use it again.',
+        403,
+        'CHILD_PROFILE_LOCKED'
+      );
+    }
+  }
+
+  /**
+   * Leave out the children locked by the Free plan
+   * @private
+   */
+  async _withoutLocked(children) {
+    if (!children.length) return children;
+    const lockedIds = await this.getLockedChildIds(children.map((c) => c.parentId));
+    return children.filter((c) => !lockedIds.has(c._id.toString()));
+  }
+
+  /**
+   * Active children of a parent that are not locked by the Free plan (discovery, playdates)
+   * @param {string|mongoose.Types.ObjectId} parentId
+   */
+  async getUsableChildrenByParentId(parentId) {
+    return this._withoutLocked(await childRepository.findByParentId(parentId));
+  }
+
+  /**
+   * Usable children grouped by parent, in one query (see getActiveChildrenByParentIds)
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Map<string, Array<Object>>>} parentId -> children (newest first)
+   */
+  async getUsableChildrenByParentIds(parentIds) {
+    const children = await this._withoutLocked(await childRepository.findByParentIds(parentIds));
+    const byParent = new Map();
+    for (const child of children) {
+      const key = child.parentId.toString();
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(child);
+    }
+    return byParent;
+  }
+
+  /**
+   * Usable children by ID (archived and locked ones are left out), in one query
+   * @param {Array<string|ObjectId>} childIds
+   * @returns {Promise<Array<Object>>}
+   */
+  async getUsableChildrenByIds(childIds) {
+    return this._withoutLocked(await this.getActiveChildrenByIds(childIds));
   }
 
   /**
@@ -274,6 +374,69 @@ class ChildService {
    */
   async getChildByIdRaw(childId) {
     return childRepository.findById(childId);
+  }
+
+  /**
+   * Page of child profiles for admin lists. Ages are whole years: a child is `age` years old
+   * from its birthday until the day before the next one.
+   * @param {Object} criteria
+   * @param {string} [criteria.search]
+   * @param {Array<string|ObjectId>} [criteria.searchParentIds] - Parents whose name matches the search
+   * @param {string} [criteria.gender]
+   * @param {boolean} [criteria.isArchived]
+   * @param {number} [criteria.minAge]
+   * @param {number} [criteria.maxAge]
+   * @param {number} criteria.page
+   * @param {number} criteria.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async getChildrenPage({ minAge, maxAge, ...criteria }) {
+    const now = new Date();
+    const yearsAgo = (years) => new Date(now.getFullYear() - years, now.getMonth(), now.getDate());
+
+    return childRepository.findPage({
+      ...criteria,
+      // At most maxAge: born less than (maxAge + 1) years ago
+      bornAfter: Number.isInteger(maxAge) ? yearsAgo(maxAge + 1) : undefined,
+      // At least minAge: born minAge years ago or earlier
+      bornOnOrBefore: Number.isInteger(minAge) ? yearsAgo(minAge) : undefined,
+    });
+  }
+
+  /**
+   * Number of active (non-archived) children per parent
+   * @param {Array<string|ObjectId>} parentIds
+   * @returns {Promise<Map<string, number>>} parentId -> count
+   */
+  async countActiveChildrenByParentIds(parentIds) {
+    const rows = await childRepository.countActiveGroupedByParentIds(parentIds);
+    return new Map(rows.map((row) => [row._id.toString(), row.count]));
+  }
+
+  /**
+   * Child profiles across the platform, for admin statistics
+   * @returns {Promise<{ total: number, active: number, archived: number, planLocked: number }>}
+   */
+  async getChildStats() {
+    const [counts, planLockedIds] = await Promise.all([
+      childRepository.countByArchiveStatus(),
+      this.getAllPlanLockedChildIds(),
+    ]);
+    return { ...counts, planLocked: planLockedIds.size };
+  }
+
+  /**
+   * Every child locked by the Free plan across the platform (see getLockedChildIds): only parents with
+   * more children than the Free limit can have some
+   * @returns {Promise<Set<string>>}
+   */
+  async getAllPlanLockedChildIds() {
+    const freeLimit = await subscriptionService.getFreeChildProfileLimit();
+    if (freeLimit === -1) return new Set();
+
+    const overLimitParents = await childRepository.findParentsWithActiveChildrenAbove(freeLimit);
+    if (!overLimitParents.length) return new Set();
+    return this.getLockedChildIds(overLimitParents.map((row) => row._id));
   }
 }
 

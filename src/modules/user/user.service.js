@@ -172,6 +172,24 @@ class UserService {
     await this.updatePassword(userId, newPasswordHash);
 
     return { success: true };
+  }
+
+  /**
+   * Page of accounts of one role for admin lists (see userRepository.findPageByRole)
+   * @param {Object} options
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async getUsersPageByRole(options) {
+    return userRepository.findPageByRole(options);
+  }
+
+  /**
+   * Accounts of one role by status, for admin statistics
+   * @param {string} role
+   * @returns {Promise<{ total: number, active: number, locked: number }>}
+   */
+  async countUsersByStatus(role) {
+    return userRepository.countByRoleAndStatus(role);
   }
 }
 

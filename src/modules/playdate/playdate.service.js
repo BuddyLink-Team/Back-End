@@ -224,6 +224,9 @@ class PlaydateService {
       if (!isParticipantChildValid) {
         throw new AppError('Invited child does not belong to the selected parent', 400, 'INVALID_PARTICIPANT_CHILD');
       }
+      if (await childService.isChildLocked(toId(p.childId), targetParentId)) {
+        throw new AppError('Invited child profile is not available', 400, 'INVALID_PARTICIPANT_CHILD');
+      }
     }
     return uniqueParticipants;
   }
@@ -511,6 +514,7 @@ class PlaydateService {
 
     let ownChild = null;
     if (childId) {
+      await childService.assertChildUsable(childId, parentId);
       ownChild = (await childService.getActiveChildrenByParentId(parentId)).find((c) => c._id.toString() === childId);
       if (!ownChild) {
         throw new AppError('Child profile not found', 404, 'CHILD_NOT_FOUND');
@@ -533,8 +537,8 @@ class PlaydateService {
       .sort((a, b) => (a.fullName || '').localeCompare(b.fullName || '', 'vi'))
       .slice(0, maxFriends);
 
-    // Children of every friend in one query
-    const childrenByParent = await childService.getActiveChildrenByParentIds(friendParents.map((f) => f._id));
+    // Children of every friend in one query (those locked by their parent's Free plan cannot be invited)
+    const childrenByParent = await childService.getUsableChildrenByParentIds(friendParents.map((f) => f._id));
 
     if (ownChild) {
       return this._getPlaymatesForChild(parent, ownChild, friendParents, childrenByParent, connections);
@@ -616,6 +620,7 @@ class PlaydateService {
     if (!isHostChildValid) {
       throw new AppError('Child does not belong to your profile', 400, 'INVALID_HOST_CHILD');
     }
+    await childService.assertChildUsable(data.hostChildId, hostParentId);
 
     // 2. The playdate must start in the future
     const durationMinutes = data.durationMinutes ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
@@ -824,6 +829,9 @@ class PlaydateService {
     const usesQuota = isAccepting && !participant.quotaConsumedAt;
 
     if (isAccepting) {
+      // A child locked by the Free plan (invited while the parent was Premium) cannot join
+      await childService.assertChildUsable(toId(participant.childId), parentId);
+
       // The invited child cannot join two playdates at once (declining is always allowed)
       const start = getScheduledStart(playdate.scheduledDate, playdate.time);
       await this._assertNoConflict(toId(participant.childId), start, endOf(start, durationOf(playdate)), id);
@@ -1099,6 +1107,16 @@ class PlaydateService {
 
     const rescheduleReq = await rescheduleRepository.findLatestByPlaydateId(id);
     return RescheduleResponseDTO.toResponse(rescheduleReq, parentId);
+  }
+
+  /**
+   * Playdates a parent hosts or is invited to, counted by status
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<{ all: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async getPlaydateCountsForParent(parentId) {
+    const { all, upcoming, completed, cancelled } = await playdateRepository.countByStatusesForParent(parentId);
+    return { all, upcoming, completed, cancelled };
   }
 }
 
