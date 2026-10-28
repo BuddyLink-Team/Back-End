@@ -6,6 +6,7 @@ import Child from '../../src/modules/child/child.model.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import Notification from '../../src/modules/notification/notification.model.js';
 import connectionService from '../../src/modules/connection/connection.service.js';
+import { grantPremium } from '../helpers/subscriptionHelper.js';
 
 const register = async (label) => {
   const res = await request(app).post('/api/v1/auth/register').send({
@@ -231,6 +232,7 @@ describe('Connection child pairs (BUD-48)', () => {
 
   it('creates the pair on a new request and adds pairs to a pending or accepted connection', async () => {
     const [mai, lan] = await Promise.all([register('pair-mai'), register('pair-lan')]);
+    await grantPremium(mai.parentId);
     const [maiKid1, maiKid2, lanKid] = await Promise.all([
       createChild(mai.parentId, 'Bin'),
       createChild(mai.parentId, 'Bông'),

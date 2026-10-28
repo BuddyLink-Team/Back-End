@@ -41,7 +41,11 @@ export class ChildPublicProfileDTO {
 }
 
 export class ChildResponseDTO {
-  static toResponse(child) {
+  /**
+   * @param {Object} child
+   * @param {Set<string>} [lockedIds] - Children locked by the Free plan (see ChildService.getLockedChildIds)
+   */
+  static toResponse(child, lockedIds = null) {
     if (!child) return null;
 
     const age = calculateAgeYears(child.dateOfBirth);
@@ -58,11 +62,13 @@ export class ChildResponseDTO {
       personality: child.personality || [],
       createdAt: child.createdAt,
       updatedAt: child.updatedAt,
+      // Past the Free plan's child limit: visible and editable, but not usable for discovery or playdates
+      isLocked: lockedIds ? lockedIds.has(child._id.toString()) : false,
     };
   }
 
-  static toResponseList(children) {
+  static toResponseList(children, lockedIds = null) {
     if (!Array.isArray(children)) return [];
-    return children.map((c) => ChildResponseDTO.toResponse(c));
+    return children.map((c) => ChildResponseDTO.toResponse(c, lockedIds));
   }
 }

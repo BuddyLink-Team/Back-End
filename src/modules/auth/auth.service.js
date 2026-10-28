@@ -608,6 +608,14 @@ class AuthService {
     const parent = await parentService.getParentByUserId(userId);
     return AuthUserDTO.toResponse({ user, parent });
   }
+
+  /**
+   * Revoke all refresh tokens for a user (used on account lock or security logout)
+   * @param {string|mongoose.Types.ObjectId} userId
+   */
+  async revokeAllUserRefreshTokens(userId) {
+    return authRepository.revokeAllUserRefreshTokens(userId);
+  }
 }
 
 export default new AuthService();

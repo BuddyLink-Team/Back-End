@@ -4,7 +4,13 @@ import AppError from '../../shared/exceptions/AppError.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import SafetyDTO from './safety.dto.js';
 import { emitSafetyEvent, SAFETY_EVENTS } from './safety.events.js';
-import { REPORT_TARGET_TYPES, REPORT_LIMITS, REPORT_CATEGORIES, DEFAULT_BLOCK_REASON } from './safety.constants.js';
+import {
+  REPORT_TARGET_TYPES,
+  REPORT_LIMITS,
+  REPORT_CATEGORIES,
+  REPORT_STATUS,
+  DEFAULT_BLOCK_REASON,
+} from './safety.constants.js';
 
 class SafetyService {
   /**
@@ -271,6 +277,15 @@ class SafetyService {
       mimetype: file.mimetype,
     });
     return { url: result.url, publicId: result.publicId };
+  }
+
+  /**
+   * Reports filed against a parent: total and still open (admin activity summary)
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<{ total: number, open: number }>}
+   */
+  async countReportsAgainstParent(parentId) {
+    return safetyRepository.countReportsAgainst(parentId, [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING]);
   }
 }
 

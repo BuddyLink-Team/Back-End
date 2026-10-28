@@ -1,4 +1,5 @@
 import User from './user.model.js';
+import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 class UserRepository {
   async findById(id) {
@@ -77,6 +78,60 @@ class UserRepository {
       { $set: { passwordHash } },
       { new: true }
     );
+  }
+
+  /**
+   * Page of non-deleted accounts of one role (no password hash), newest first
+   * @param {Object} options
+   * @param {string} options.role
+   * @param {boolean} [options.isActive]
+   * @param {Array<string|ObjectId>|null} [options.restrictToIds] - Only these users; null = no restriction
+   * @param {Array<string|ObjectId>|null} [options.excludeIds] - Never these users; null = no exclusion
+   * @param {string} [options.search] - Matches the email or the phone
+   * @param {Array<string|ObjectId>} [options.searchMatchIds] - Users also matched by the search elsewhere (e.g. parent name)
+   * @param {number} options.page
+   * @param {number} options.limit
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findPageByRole({ role, isActive, restrictToIds = null, excludeIds = null, search, searchMatchIds = [], page, limit }) {
+    const filter = { role, deletedAt: null };
+    if (typeof isActive === 'boolean') filter.isActive = isActive;
+    if (restrictToIds || excludeIds) {
+      filter._id = {
+        ...(restrictToIds ? { $in: restrictToIds } : {}),
+        ...(excludeIds ? { $nin: excludeIds } : {}),
+      };
+    }
+    if (search) {
+      const regex = new RegExp(escapeRegExp(search), 'i');
+      filter.$or = [{ email: regex }, { phone: regex }, { _id: { $in: searchMatchIds } }];
+    }
+
+    const [items, total] = await Promise.all([
+      User.find(filter)
+        .select('-passwordHash')
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  /**
+   * Accounts of one role (deleted ones left out) by status
+   * @param {string} role
+   * @returns {Promise<{ total: number, active: number, locked: number }>}
+   */
+  async countByRoleAndStatus(role) {
+    const rows = await User.aggregate([
+      { $match: { role, deletedAt: null } },
+      { $group: { _id: '$isActive', count: { $sum: 1 } } },
+    ]);
+    const active = rows.find((row) => row._id === true)?.count || 0;
+    const total = rows.reduce((sum, row) => sum + row.count, 0);
+    return { total, active, locked: total - active };
   }
 }
 

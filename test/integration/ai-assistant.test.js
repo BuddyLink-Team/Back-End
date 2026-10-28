@@ -10,6 +10,7 @@ import PlacesCache from '../../src/modules/places/places-cache.model.js';
 import Swipe from '../../src/modules/discovery/discovery.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import Subscription from '../../src/modules/subscription/subscription.model.js';
+import { grantPremium } from '../helpers/subscriptionHelper.js';
 import AIChatSession from '../../src/modules/ai-assistant/ai-assistant.model.js';
 import geminiAdapter from '../../src/integrations/ai/gemini.adapter.js';
 import AppError from '../../src/shared/exceptions/AppError.js';
@@ -635,6 +636,7 @@ describe('AI assistant (/api/v1/ai-assistant)', () => {
 
     it('lists every own child on the child step, with no typed name', async () => {
       const twoKids = await registerParent('twokids');
+      await grantPremium(twoKids.parentId);
       await Child.create({ parentId: twoKids.parentId, displayName: 'Bé Hai', dateOfBirth: new Date('2020-01-01'), gender: 'boy' });
       const sessionId = await newSession(twoKids);
       mockModel(geminiToolCall('proposePlaydate', { startNew: true }), geminiText('Hẹn cho bé nào?'));

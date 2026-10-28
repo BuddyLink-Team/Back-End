@@ -123,6 +123,20 @@ class SafetyRepository {
       Block.countDocuments(query),
     ]);
     return { items, total };
+  }
+
+  /**
+   * Reports filed against a parent, in total and still open (pending / reviewing)
+   * @param {string|ObjectId} reportedUserId - parents._id
+   * @param {string[]} openStatuses
+   * @returns {Promise<{ total: number, open: number }>}
+   */
+  async countReportsAgainst(reportedUserId, openStatuses) {
+    const [total, open] = await Promise.all([
+      Report.countDocuments({ reportedUserId }),
+      Report.countDocuments({ reportedUserId, status: { $in: openStatuses } }),
+    ]);
+    return { total, open };
   }
 }
 
