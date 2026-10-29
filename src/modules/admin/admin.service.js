@@ -915,6 +915,45 @@ class AdminService {
     }
     return result;
   }
+
+  /**
+   * Create and broadcast a test notification via socket
+   * @param {Object} data
+   */
+  async triggerTestNotification({
+    category = 'system',
+    type = 'test_event',
+    severity = 'info',
+    title = 'Thông báo kiểm thử Realtime',
+    message = 'Hệ thống gửi thông báo kiểm thử Socket.io thành công.',
+    entityType = 'System',
+    entityId = null,
+  } = {}) {
+    const created = await adminNotificationRepository.create({
+      category,
+      type,
+      severity,
+      title,
+      message,
+      entityType,
+      entityId,
+    });
+    const notificationObj = created.toObject ? created.toObject() : created;
+    try {
+      const adminIO = getAdminIO();
+      if (adminIO) {
+        adminIO.to('admins').emit('admin:notification:new', {
+          ...notificationObj,
+          isRead: false,
+        });
+        const counts = await adminNotificationRepository.countUnread(null);
+        adminIO.to('admins').emit('admin:notification:unread-count', counts);
+      }
+    } catch {
+      // Non-blocking socket broadcast
+    }
+    return notificationObj;
+  }
 }
 
 export default new AdminService();

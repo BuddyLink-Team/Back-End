@@ -336,6 +336,18 @@ class AdminController {
       return next(error);
     }
   }
+
+  /**
+   * POST /api/v1/admin/notifications/test
+   */
+  async triggerTestNotification(req, res, next) {
+    try {
+      const data = await adminService.triggerTestNotification(req.body);
+      return successResponse(res, data, 'Test notification dispatched successfully', 201);
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
 
 export default new AdminController();
