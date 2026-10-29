@@ -58,6 +58,15 @@ const adminNotificationSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

@@ -23,11 +23,11 @@ class AdminNotificationRepository {
    * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
   async findPage({ category, severity, isRead, adminId, page, limit }) {
-    const filter = {};
+    const filter = { isActive: { $ne: false }, deletedAt: null };
     if (category) filter.category = category;
     if (severity) filter.severity = severity;
 
-    if (typeof isRead === 'boolean') {
+    if (typeof isRead === 'boolean' && adminId) {
       const adminObjId = new mongoose.Types.ObjectId(adminId);
       if (isRead) {
         filter.readBy = adminObjId;
@@ -61,9 +61,11 @@ class AdminNotificationRepository {
    * @returns {Promise<{ total: number, byCategory: Record<string, number> }>}
    */
   async countUnread(adminId) {
-    const adminObjId = new mongoose.Types.ObjectId(adminId);
+    const matchFilter = adminId
+      ? { isActive: { $ne: false }, deletedAt: null, readBy: { $ne: new mongoose.Types.ObjectId(adminId) } }
+      : { isActive: { $ne: false }, deletedAt: null, readBy: { $size: 0 } };
     const rows = await AdminNotification.aggregate([
-      { $match: { readBy: { $ne: adminObjId } } },
+      { $match: matchFilter },
       { $group: { _id: '$category', count: { $sum: 1 } } },
     ]);
 
@@ -103,7 +105,7 @@ class AdminNotificationRepository {
    * @returns {Promise<{ modifiedCount: number }>}
    */
   async markAllAsRead(adminId, category) {
-    const filter = {};
+    const filter = { isActive: { $ne: false }, deletedAt: null };
     if (category) filter.category = category;
     const adminObjId = new mongoose.Types.ObjectId(adminId);
     filter.readBy = { $ne: adminObjId };

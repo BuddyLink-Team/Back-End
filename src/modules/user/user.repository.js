@@ -1,4 +1,5 @@
 import User from './user.model.js';
+import { USER_ROLES } from '../../shared/constants/index.js';
 import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 class UserRepository {
@@ -163,7 +164,7 @@ class UserRepository {
    */
   async countParentsBeforeDate(date) {
     return User.countDocuments({
-      role: 'parent',
+      role: USER_ROLES.PARENT,
       deletedAt: null,
       createdAt: { $lte: date },
     });
@@ -177,7 +178,7 @@ class UserRepository {
    */
   async countNewParentsBetween(fromDate, toDate) {
     return User.countDocuments({
-      role: 'parent',
+      role: USER_ROLES.PARENT,
       deletedAt: null,
       createdAt: { $gte: fromDate, $lte: toDate },
     });
@@ -195,7 +196,7 @@ class UserRepository {
     const rows = await User.aggregate([
       {
         $match: {
-          role: 'parent',
+          role: USER_ROLES.PARENT,
           deletedAt: null,
           createdAt: { $gte: fromDate, $lte: toDate },
         },
@@ -217,7 +218,7 @@ class UserRepository {
    * @returns {Promise<number>}
    */
   async countActiveParents(asOfDate) {
-    const filter = { role: 'parent', isActive: true, deletedAt: null };
+    const filter = { role: USER_ROLES.PARENT, isActive: true, deletedAt: null };
     if (asOfDate) filter.createdAt = { $lte: asOfDate };
     return User.countDocuments(filter);
   }

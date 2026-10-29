@@ -5,6 +5,7 @@ import logger from '../shared/logger/index.js';
 import registerChatSocket from '../sockets/chat.socket.js';
 import parentService from '../modules/parent/parent.service.js';
 import userService from '../modules/user/user.service.js';
+import { USER_ROLES } from '../shared/constants/index.js';
 import { TOKEN_AUDIENCES } from '../modules/auth/auth.constants.js';
 import { getTokenAudience } from '../shared/helpers/token.helper.js';
 
@@ -116,7 +117,7 @@ export const initSocket = (httpServer) => {
         return next(new Error('Authentication error: Account disabled'));
       }
 
-      if (user.role !== 'admin') {
+      if (user.role !== USER_ROLES.ADMIN) {
         return next(new Error('Authentication error: Admin access required'));
       }
 
