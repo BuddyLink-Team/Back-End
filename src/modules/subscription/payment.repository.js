@@ -276,6 +276,44 @@ class PaymentRepository {
     ]);
     return row?.count || 0;
   }
+
+  /**
+   * Successful payments paid in a period, grouped by arbitrary date format and timezone
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @param {string} dateFormat
+   * @param {string} timeZone
+   * @returns {Promise<Array<{ period: string, revenue: number, transactionCount: number }>>}
+   */
+  async sumSuccessfulPaidByPeriod(fromDate, toDate, dateFormat, timeZone) {
+    const rows = await Payment.aggregate([
+      { $match: { status: PAYMENT_STATUS.SUCCESS, paidAt: { $gte: fromDate, $lte: toDate } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: dateFormat, date: '$paidAt', timezone: timeZone } },
+          revenue: { $sum: '$amount' },
+          transactionCount: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map((r) => ({ period: r._id, revenue: r.revenue, transactionCount: r.transactionCount }));
+  }
+
+  /**
+   * Cumulative revenue collected up to a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countRevenueBeforeDate(date) {
+    const match = { status: PAYMENT_STATUS.SUCCESS };
+    if (date) match.paidAt = { $lte: date };
+    const [row] = await Payment.aggregate([
+      { $match: match },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    return row?.total || 0;
+  }
 }
 
 export default new PaymentRepository();

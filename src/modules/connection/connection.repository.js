@@ -247,6 +247,55 @@ class ConnectionRepository {
     ]);
     return { items, total };
   }
+
+  /**
+   * Count accepted connections on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countAcceptedBeforeDate(date) {
+    const filter = { status: CONNECTION_STATUS.ACCEPTED };
+    if (date) filter.connectedAt = { $lte: date };
+    return Connection.countDocuments(filter);
+  }
+
+  /**
+   * Count distinct parents with at least one accepted connection on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithConnectionBeforeDate(date) {
+    const filter = { status: CONNECTION_STATUS.ACCEPTED };
+    if (date) filter.connectedAt = { $lte: date };
+    const parents = await Connection.distinct('parents', filter);
+    return parents.length;
+  }
+
+  /**
+   * Connection metrics in a date range (sent, accepted, declined, pending, removed, acceptance rate)
+   * @param {{ fromDate?: Date, toDate?: Date }} params
+   * @returns {Promise<{ sent: number, accepted: number, declined: number, pending: number, removed: number, acceptanceRate: number }>}
+   */
+  async getConnectionAnalytics({ fromDate, toDate } = {}) {
+    const match = {};
+    if (fromDate || toDate) {
+      match.createdAt = {};
+      if (fromDate) match.createdAt.$gte = fromDate;
+      if (toDate) match.createdAt.$lte = toDate;
+    }
+    const rows = await Connection.aggregate([
+      { $match: match },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+    const countOf = (status) => rows.find((r) => r._id === status)?.count || 0;
+    const sent = rows.reduce((sum, r) => sum + r.count, 0);
+    const accepted = countOf(CONNECTION_STATUS.ACCEPTED);
+    const declined = countOf(CONNECTION_STATUS.DECLINED);
+    const pending = countOf(CONNECTION_STATUS.PENDING);
+    const removed = countOf(CONNECTION_STATUS.REMOVED);
+    const acceptanceRate = sent > 0 ? Number(((accepted / sent) * 100).toFixed(1)) : 0;
+    return { sent, accepted, declined, pending, removed, acceptanceRate };
+  }
 }
 
 export const connectionRepository = new ConnectionRepository();

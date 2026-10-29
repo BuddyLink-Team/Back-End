@@ -230,6 +230,12 @@ class SafetyService {
       evidenceUrls: evidence,
     });
 
+    void emitSafetyEvent(SAFETY_EVENTS.REPORT_CREATED, {
+      reportId: report._id.toString(),
+      reason: report.reason,
+      category: report.category,
+    });
+
     return SafetyDTO.toReportResponse(report);
   }
 

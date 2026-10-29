@@ -1,7 +1,12 @@
-import { GoogleGenAI, FunctionCallingConfigMode, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/app-error.js';
+
+const ThinkingLevel = Object.freeze({
+  LOW: 'LOW',
+  HIGH: 'HIGH',
+});
 
 const RETRYABLE_STATUS = new Set([429, 503]);
 const DEFAULT_COOLDOWN_MS = 60 * 1000;

@@ -439,6 +439,52 @@ class ChildService {
     if (!overLimitParents.length) return new Set();
     return this.getLockedChildIds(overLimitParents.map((row) => row._id));
   }
+
+  /**
+   * Total active children on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countActiveBeforeDate(date) {
+    return childRepository.countActiveBeforeDate(date);
+  }
+
+  /**
+   * Total active children count
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async getTotalChildCount(date) {
+    return childRepository.countActiveBeforeDate(date);
+  }
+
+  /**
+   * Count distinct parents who created at least one active child profile on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithActiveChildrenBeforeDate(date) {
+    return childRepository.countDistinctParentsWithActiveChildrenBeforeDate(date);
+  }
+
+  /**
+   * Distribution of children by standard age groups
+   * @returns {Promise<Array<{ group: string, count: number }>>}
+   */
+  async getChildAgeGroupStats() {
+    const defaultGroups = [
+      { group: '0-2 tuổi', count: 0 },
+      { group: '3-5 tuổi', count: 0 },
+      { group: '6-10 tuổi', count: 0 },
+      { group: '11+ tuổi', count: 0 },
+    ];
+    const stats = await childRepository.countByAgeGroups();
+    const map = new Map(stats.map((s) => [s.group, s.count]));
+    return defaultGroups.map((g) => ({
+      group: g.group,
+      count: map.get(g.group) || 0,
+    }));
+  }
 }
 
 export default new ChildService();

@@ -13,12 +13,12 @@ let io = null;
 export const initSocket = (httpServer) => {
   io = new Server(httpServer, {
     cors: {
-      origin: env.CLIENT_URL,
+      origin: [env.CLIENT_URL, env.ADMIN_CLIENT_URL].filter(Boolean),
       credentials: true,
     },
   });
 
-  // Socket Authentication Middleware
+  // Socket Authentication Middleware for Parent App (default namespace)
   io.use(async (socket, next) => {
     try {
       const rawToken = socket.handshake.auth?.token || socket.handshake.headers?.authorization;
@@ -84,9 +84,69 @@ export const initSocket = (httpServer) => {
     });
   });
 
+  // Dedicated /admin namespace for admin portal
+  const adminNamespace = io.of('/admin');
+
+  adminNamespace.use(async (socket, next) => {
+    try {
+      const rawToken = socket.handshake.auth?.token || socket.handshake.headers?.authorization;
+      if (!rawToken) {
+        return next(new Error('Authentication error: Token required'));
+      }
+
+      const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
+      const secret = env.JWT.SECRET || process.env.JWT_SECRET;
+      if (!secret) {
+        return next(new Error('Authentication error: Server JWT secret misconfigured'));
+      }
+
+      const decoded = jwt.verify(token, secret);
+      // Strictly require ADMIN audience for /admin namespace
+      if (getTokenAudience(decoded) !== TOKEN_AUDIENCES.ADMIN) {
+        return next(new Error('Authentication error: Invalid admin token'));
+      }
+      const userId = decoded.sub || decoded.id;
+
+      const user = await userService.getSessionUser(userId);
+      if (!user) {
+        return next(new Error('Authentication error: User not found or deleted'));
+      }
+
+      if (!user.isActive) {
+        return next(new Error('Authentication error: Account disabled'));
+      }
+
+      if (user.role !== 'admin') {
+        return next(new Error('Authentication error: Admin access required'));
+      }
+
+      socket.userId = user._id.toString();
+      socket.user = user;
+      return next();
+    } catch (err) {
+      logger.warn(`Admin socket auth rejected: ${err.message}`);
+      return next(new Error(`Authentication error: ${err.message}`));
+    }
+  });
+
+  adminNamespace.on('connection', (socket) => {
+    logger.info(`Admin socket connected: ${socket.id} (Admin: ${socket.userId})`);
+
+    // Admins join the dedicated room
+    socket.join('admins');
+
+    socket.on('disconnect', () => {
+      logger.info(`Admin socket disconnected: ${socket.id}`);
+    });
+  });
+
   return io;
 };
 
 export const getIO = () => {
   return io || null;
+};
+
+export const getAdminIO = () => {
+  return io ? io.of('/admin') : null;
 };

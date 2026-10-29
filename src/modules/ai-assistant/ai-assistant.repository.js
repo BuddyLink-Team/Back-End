@@ -102,6 +102,98 @@ class AIAssistantRepository {
       { new: true }
     ).lean();
   }
+
+  /**
+   * Count user messages between dates
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countUserMessagesBetween(fromDate, toDate) {
+    const rows = await AIChatSession.aggregate([
+      { $unwind: '$messages' },
+      {
+        $match: {
+          'messages.role': 'user',
+          'messages.timestamp': { $gte: fromDate, $lte: toDate },
+        },
+      },
+      { $count: 'count' },
+    ]);
+    return rows[0]?.count || 0;
+  }
+
+  /**
+   * Count user messages on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countUserMessagesBeforeDate(date) {
+    const match = { 'messages.role': 'user' };
+    if (date) match['messages.timestamp'] = { $lte: date };
+    const rows = await AIChatSession.aggregate([
+      { $unwind: '$messages' },
+      { $match: match },
+      { $count: 'count' },
+    ]);
+    return rows[0]?.count || 0;
+  }
+
+  /**
+   * Aggregate AI user requests by period
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @param {string} dateFormat
+   * @param {string} timeZone
+   * @returns {Promise<Array<{ period: string, count: number }>>}
+   */
+  async aggregateAiUsageByPeriod(fromDate, toDate, dateFormat, timeZone) {
+    const rows = await AIChatSession.aggregate([
+      { $unwind: '$messages' },
+      {
+        $match: {
+          'messages.role': 'user',
+          'messages.timestamp': { $gte: fromDate, $lte: toDate },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: dateFormat, date: '$messages.timestamp', timezone: timeZone } },
+          requestCount: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map((r) => ({ period: r._id, count: r.requestCount }));
+  }
+
+  /**
+   * Find top parents by AI requests in period
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @param {number} [limit=5]
+   * @returns {Promise<Array<{ parentId: ObjectId, requestCount: number }>>}
+   */
+  async getTopParentsByUsage(fromDate, toDate, limit = 5) {
+    const rows = await AIChatSession.aggregate([
+      { $unwind: '$messages' },
+      {
+        $match: {
+          'messages.role': 'user',
+          'messages.timestamp': { $gte: fromDate, $lte: toDate },
+        },
+      },
+      {
+        $group: {
+          _id: '$parentId',
+          requestCount: { $sum: 1 },
+        },
+      },
+      { $sort: { requestCount: -1 } },
+      { $limit: limit },
+    ]);
+    return rows.map((r) => ({ parentId: r._id, requestCount: r.requestCount }));
+  }
 }
 
 export const aiAssistantRepository = new AIAssistantRepository();

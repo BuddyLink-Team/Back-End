@@ -27,6 +27,7 @@ import { registerGamificationEventListeners } from "./modules/gamification/gamif
 import { registerNotificationEventListeners } from "./modules/notification/notification.events.js";
 import { registerNotificationListeners } from "./modules/notification/notification.listener.js";
 import { registerConnectionListeners } from "./modules/connection/connection.listener.js";
+import { registerAdminNotificationListeners } from "./modules/admin/admin-notification.listener.js";
 
 import gamificationRoutes from './modules/gamification/gamification.route.js';
 import ratingFeedbackRoutes from './modules/rating-feedback/rating-feedback.route.js';
@@ -76,6 +77,7 @@ registerGamificationEventListeners();
 registerNotificationEventListeners();
 registerNotificationListeners();
 registerConnectionListeners();
+registerAdminNotificationListeners();
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/user", userRoutes);

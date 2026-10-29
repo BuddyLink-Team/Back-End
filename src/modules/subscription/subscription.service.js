@@ -19,6 +19,8 @@ import {
   QUOTA_ACTION_ALIASES,
   SUBSCRIPTION_PLAN_DEFAULTS,
 } from './subscription.constants.js';
+import { emitSubscriptionEvent, SUBSCRIPTION_EVENTS } from './subscription.events.js';
+import { emitSystemEvent, SYSTEM_EVENTS } from '../../shared/events/system.events.js';
 
 const UNLIMITED = -1;
 
@@ -331,7 +333,14 @@ class SubscriptionService {
 
     for (const subscription of dueSubscriptions) {
       const downgraded = await subscriptionRepository.downgradeToFree(subscription._id, now);
-      if (downgraded) expiredCount += 1;
+      if (downgraded) {
+        expiredCount += 1;
+        void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_EXPIRED, {
+          subscriptionId: subscription._id.toString(),
+          planCode: subscription.planCode,
+          parentId: subscription.parentId?.toString(),
+        });
+      }
     }
 
     if (expiredCount > 0) {
@@ -784,6 +793,20 @@ class SubscriptionService {
           `Successfully fulfilled payment ${orderCode} for parent ${payment.parentId}. New endDate: ${endDate.toISOString()}`
         );
 
+        void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.PAYMENT_SUCCEEDED, {
+          paymentId: fulfilledPayment._id.toString(),
+          orderCode,
+          amount: fulfilledPayment.amount,
+          parentId: payment.parentId?.toString(),
+        });
+
+        void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_CREATED, {
+          subscriptionId: updatedSub._id.toString(),
+          planCode: updatedSub.planCode,
+          planName: payment.planSnapshot?.name || updatedSub.planCode,
+          parentId: payment.parentId?.toString(),
+        });
+
         return {
           alreadyProcessed: false,
           success: true,
@@ -826,7 +849,16 @@ class SubscriptionService {
     logger.info(`Received PayOS webhook for order ${webhookBody?.data?.orderCode ?? 'unknown'}`);
 
     // Verify webhook signature
-    const verifiedData = payosAdapter.verifyPaymentWebhookData(webhookBody);
+    let verifiedData;
+    try {
+      verifiedData = payosAdapter.verifyPaymentWebhookData(webhookBody);
+    } catch (err) {
+      void emitSystemEvent(SYSTEM_EVENTS.PAYMENT_GATEWAY_ERROR, {
+        orderCode: webhookBody?.data?.orderCode,
+        error: err.message,
+      });
+      throw err;
+    }
     const { orderCode, code, desc } = verifiedData;
 
     // Handle PayOS test webhook validation samples (e.g. orderCode = 123)
@@ -853,6 +885,10 @@ class SubscriptionService {
         status: PAYMENT_STATUS.FAILED,
         failureReason: desc || 'Payment failed or cancelled via PayOS Webhook',
         rawWebhookData: verifiedData,
+      });
+      void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.PAYMENT_FAILED, {
+        orderCode,
+        paymentId: null,
       });
       return { success: false, message: desc || 'Payment failed' };
     }
@@ -1382,6 +1418,42 @@ class SubscriptionService {
       churnedParents,
       activePremium,
     };
+  }
+
+  /**
+   * Count subscriptions active as of date grouped by planCode
+   * @param {Date} [asOfDate]
+   * @returns {Promise<{ free: number, premiumMonthly: number, premiumYearly: number }>}
+   */
+  async countActiveByPlan(asOfDate) {
+    return subscriptionRepository.countActiveByPlan(asOfDate);
+  }
+
+  /**
+   * Count active paid subscriptions as of date
+   * @param {Date} [asOfDate]
+   * @returns {Promise<number>}
+   */
+  async countActivePaid(asOfDate) {
+    return subscriptionRepository.countActivePaid(asOfDate);
+  }
+
+  /**
+   * Successful payments paid in a period, grouped by arbitrary date format and timezone
+   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string }} params
+   * @returns {Promise<Array<{ period: string, revenue: number, transactionCount: number }>>}
+   */
+  async sumSuccessfulPaidByPeriod({ fromDate, toDate, dateFormat, timeZone }) {
+    return paymentRepository.sumSuccessfulPaidByPeriod(fromDate, toDate, dateFormat, timeZone);
+  }
+
+  /**
+   * Cumulative revenue collected up to a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countRevenueBeforeDate(date) {
+    return paymentRepository.countRevenueBeforeDate(date);
   }
 }
 

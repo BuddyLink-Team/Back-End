@@ -327,3 +327,74 @@ export const listTransactionsValidation = [
  * Validation rules for GET /api/v1/admin/revenue/summary
  */
 export const revenueSummaryValidation = [...dateRangeValidation];
+
+/**
+ * Validation rules for GET /api/v1/admin/analytics
+ */
+export const adminAnalyticsValidation = [
+  query('fromDate')
+    .optional()
+    .isISO8601()
+    .withMessage('fromDate must be a valid ISO8601 date'),
+  query('toDate')
+    .optional()
+    .isISO8601()
+    .withMessage('toDate must be a valid ISO8601 date')
+    .bail()
+    .custom((value, { req }) => {
+      if (req.query.fromDate) {
+        const start = new Date(req.query.fromDate);
+        const end = new Date(value);
+        if (start > end) {
+          throw new Error('toDate must be on or after fromDate');
+        }
+        // Max 12 months (366 days)
+        const diffMs = end.getTime() - start.getTime();
+        const maxMs = 366 * 24 * 60 * 60 * 1000;
+        if (diffMs > maxMs) {
+          throw new Error('Date range cannot exceed 12 months');
+        }
+      }
+      return true;
+    }),
+  query('groupBy')
+    .optional()
+    .isIn(['day', 'week', 'month'])
+    .withMessage('groupBy must be one of: day, week, month'),
+];
+
+/**
+ * Validation rules for GET /api/v1/admin/notifications
+ */
+export const listAdminNotificationsValidation = [
+  query('category')
+    .optional()
+    .isIn(['users', 'payments', 'playdates', 'connections', 'safety', 'system', 'all'])
+    .withMessage('Invalid notification category'),
+  query('severity')
+    .optional()
+    .isIn(['info', 'warning', 'critical', 'all'])
+    .withMessage('Invalid notification severity'),
+  query('isRead')
+    .optional()
+    .isBoolean()
+    .withMessage('isRead must be a boolean'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/notifications/read-all
+ */
+export const readAllAdminNotificationsValidation = [
+  query('category')
+    .optional()
+    .isIn(['users', 'payments', 'playdates', 'connections', 'safety', 'system', 'all'])
+    .withMessage('Invalid notification category'),
+];

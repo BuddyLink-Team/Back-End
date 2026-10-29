@@ -269,6 +269,73 @@ class AdminController {
       return next(error);
     }
   }
+
+  /**
+   * GET /api/v1/admin/analytics
+   */
+  async getAnalytics(req, res, next) {
+    try {
+      const data = await adminService.getAnalytics(req.query);
+      return successResponse(res, data, 'System analytics retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/admin/notifications
+   */
+  async getNotifications(req, res, next) {
+    try {
+      const adminId = req.user?._id || req.userId;
+      const data = await adminService.getNotifications({
+        ...req.query,
+        adminId,
+      });
+      return successResponse(res, data, 'Admin notifications retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/admin/notifications/unread-count
+   */
+  async getUnreadNotificationCount(req, res, next) {
+    try {
+      const adminId = req.user?._id || req.userId;
+      const data = await adminService.getUnreadNotificationCount(adminId);
+      return successResponse(res, data, 'Unread notification count retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/admin/notifications/:id/read
+   */
+  async markNotificationAsRead(req, res, next) {
+    try {
+      const adminId = req.user?._id || req.userId;
+      const data = await adminService.markNotificationAsRead(req.params.id, adminId);
+      return successResponse(res, data, 'Notification marked as read successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/admin/notifications/read-all
+   */
+  async markAllNotificationsAsRead(req, res, next) {
+    try {
+      const adminId = req.user?._id || req.userId;
+      const data = await adminService.markAllNotificationsAsRead(adminId, req.query?.category);
+      return successResponse(res, data, 'All notifications marked as read successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
 
 export default new AdminController();

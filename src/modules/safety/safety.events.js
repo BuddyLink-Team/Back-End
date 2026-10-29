@@ -8,6 +8,8 @@ import logger from '../../shared/logger/index.js';
 export const SAFETY_EVENTS = Object.freeze({
   // A parent blocked another parent
   USER_BLOCKED: 'safety.user_blocked',
+  // A new violation report was filed
+  REPORT_CREATED: 'safety.report_created',
 });
 
 const emitter = new EventEmitter();

@@ -249,6 +249,69 @@ class ChildRepository {
       { $group: { _id: '$parentId', count: { $sum: 1 } } },
     ]);
   }
+
+  /**
+   * Count active children created on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countActiveBeforeDate(date) {
+    const filter = { isArchived: false };
+    if (date) filter.createdAt = { $lte: date };
+    return Child.countDocuments(filter);
+  }
+
+  /**
+   * Count distinct parents who created at least one active child profile on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithActiveChildrenBeforeDate(date) {
+    const filter = { isArchived: false };
+    if (date) filter.createdAt = { $lte: date };
+    const distinctParents = await Child.distinct('parentId', filter);
+    return distinctParents.length;
+  }
+
+  /**
+   * Count active children by age groups (0-2, 3-5, 6-10, 11+)
+   * @returns {Promise<Array<{ group: string, count: number }>>}
+   */
+  async countByAgeGroups() {
+    const now = new Date();
+    const d3YearsAgo = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
+    const d6YearsAgo = new Date(now.getFullYear() - 6, now.getMonth(), now.getDate());
+    const d11YearsAgo = new Date(now.getFullYear() - 11, now.getMonth(), now.getDate());
+
+    const rows = await Child.aggregate([
+      { $match: { isArchived: false, dateOfBirth: { $ne: null } } },
+      {
+        $project: {
+          ageGroup: {
+            $cond: [
+              { $gt: ['$dateOfBirth', d3YearsAgo] },
+              '0-2 tuổi',
+              {
+                $cond: [
+                  { $gt: ['$dateOfBirth', d6YearsAgo] },
+                  '3-5 tuổi',
+                  {
+                    $cond: [
+                      { $gt: ['$dateOfBirth', d11YearsAgo] },
+                      '6-10 tuổi',
+                      '11+ tuổi',
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      { $group: { _id: '$ageGroup', count: { $sum: 1 } } },
+    ]);
+    return rows.map((r) => ({ group: r._id, count: r.count }));
+  }
 }
 
 export default new ChildRepository();
