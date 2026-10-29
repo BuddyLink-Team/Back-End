@@ -18,6 +18,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch --verbose",
     "test:gamification": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/gamification",
+    "notify:test": "node scripts/trigger-test-notification.js",
     "lint": "eslint src test --ext .js --max-warnings 0",
     "lint:fix": "eslint src test --ext .js --fix"
   },
