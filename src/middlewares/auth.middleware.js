@@ -49,6 +49,14 @@ export const authenticate = async (req, _res, next) => {
 
     if (!user.isActive) {
       throw new AppError("User account is disabled", 403, "ACCOUNT_DISABLED");
+      // Auto-reactivate if temporary suspension has expired
+      if (user.suspensionUntil && new Date() >= new Date(user.suspensionUntil)) {
+        await userService.updateById(user._id, { isActive: true, suspensionUntil: null });
+        user.isActive = true;
+        user.suspensionUntil = null;
+      } else {
+        throw new AppError("User account is disabled", 403, "ACCOUNT_DISABLED");
+      }
     }
 
     req.user = user;

@@ -327,3 +327,181 @@ export const listTransactionsValidation = [
  * Validation rules for GET /api/v1/admin/revenue/summary
  */
 export const revenueSummaryValidation = [...dateRangeValidation];
+
+
+import {
+  REPORT_STATUS,
+  REPORT_SEVERITY,
+  REPORT_CATEGORIES,
+  REPORT_TARGET_TYPES,
+  REPORT_ACTION_TYPES,
+  REPORT_RESOLUTION_TYPES,
+} from '../safety/safety.constants.js';
+
+/**
+ * Validation rules for GET /api/v1/admin/reports
+ */
+export const listReportsValidation = [
+  ...pagingValidation,
+  ...dateRangeValidation,
+  query('status')
+    .optional()
+    .isIn(Object.values(REPORT_STATUS))
+    .withMessage(`Status must be one of: ${Object.values(REPORT_STATUS).join(', ')}`),
+  query('severity')
+    .optional()
+    .isIn(Object.values(REPORT_SEVERITY))
+    .withMessage(`Severity must be one of: ${Object.values(REPORT_SEVERITY).join(', ')}`),
+  query('category')
+    .optional()
+    .isIn(Object.values(REPORT_CATEGORIES))
+    .withMessage(`Category must be one of: ${Object.values(REPORT_CATEGORIES).join(', ')}`),
+  query('targetType')
+    .optional()
+    .isIn(Object.values(REPORT_TARGET_TYPES))
+    .withMessage(`Target type must be one of: ${Object.values(REPORT_TARGET_TYPES).join(', ')}`),
+  query('assignedTo')
+    .optional()
+    .isString()
+    .trim(),
+  query('isOverdue')
+    .optional()
+    .isBoolean()
+    .withMessage('isOverdue must be a boolean'),
+  query('search')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: ADMIN_SEARCH_MAX_LENGTH })
+    .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
+  query('sort')
+    .optional()
+    .isString()
+    .trim(),
+];
+
+/**
+ * Validation rules for :id param on report endpoints
+ */
+export const reportIdParamValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid report ID'),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/reports/:id/review
+ */
+export const reviewReportValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid report ID'),
+  body('action')
+    .notEmpty()
+    .withMessage('Action is required')
+    .isIn(['claim', 'takeover'])
+    .withMessage("Action must be either 'claim' or 'takeover'"),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/reports/:id/severity
+ */
+export const updateReportSeverityValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid report ID'),
+  body('severity')
+    .notEmpty()
+    .withMessage('Severity is required')
+    .isIn(Object.values(REPORT_SEVERITY))
+    .withMessage(`Severity must be one of: ${Object.values(REPORT_SEVERITY).join(', ')}`),
+  body('note')
+    .optional()
+    .isString()
+    .trim(),
+];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/:id/action
+ */
+export const applyReportActionValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid report ID'),
+  body('type')
+    .notEmpty()
+    .withMessage('Action type is required')
+    .isIn(Object.values(REPORT_ACTION_TYPES))
+    .withMessage(`Action type must be one of: ${Object.values(REPORT_ACTION_TYPES).join(', ')}`),
+  body('durationDays')
+    .optional({ nullable: true })
+    .isInt({ min: 1, max: 365 })
+    .withMessage('Duration days must be an integer between 1 and 365')
+    .bail()
+    .custom((val, { req }) => {
+      if (req.body.type === 'suspend' && !val) {
+        throw new Error('durationDays is required when action type is suspend');
+      }
+      return true;
+    }),
+  body('note')
+    .optional()
+    .isString()
+    .trim(),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/reports/:id/resolve
+ */
+export const resolveReportValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid report ID'),
+  body('status')
+    .notEmpty()
+    .withMessage('Status is required')
+    .isIn([REPORT_STATUS.RESOLVED, REPORT_STATUS.DISMISSED])
+    .withMessage(`Status must be either '${REPORT_STATUS.RESOLVED}' or '${REPORT_STATUS.DISMISSED}'`),
+  body('resolution')
+    .notEmpty()
+    .withMessage('Resolution is required')
+    .isIn(Object.values(REPORT_RESOLUTION_TYPES))
+    .withMessage(`Resolution must be one of: ${Object.values(REPORT_RESOLUTION_TYPES).join(', ')}`),
+  body('adminNotes')
+    .notEmpty()
+    .withMessage('Admin notes are required')
+    .isString()
+    .custom((val) => {
+      if (typeof val !== 'string' || val.trim().length < 10) {
+        throw new Error('adminNotes must be at least 10 characters after trim');
+      }
+      return true;
+    }),
+  body('applyToRelatedReportIds')
+    .optional()
+    .isArray()
+    .withMessage('applyToRelatedReportIds must be an array of IDs'),
+  body('applyToRelatedReportIds.*')
+    .optional()
+    .isMongoId()
+    .withMessage('Each related report ID must be a valid Mongo ID'),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/reports/:id/reopen
+ */
+export const reopenReportValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid report ID'),
+  body('note')
+    .notEmpty()
+    .withMessage('Note is required')
+    .isString()
+    .custom((val) => {
+      if (typeof val !== 'string' || val.trim().length < 10) {
+        throw new Error('note must be at least 10 characters after trim');
+      }
+      return true;
+    }),
+];

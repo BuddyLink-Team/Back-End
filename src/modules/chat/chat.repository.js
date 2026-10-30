@@ -62,7 +62,7 @@ class ChatRepository {
    * @returns {Promise<Object|null>}
    */
   async findConversationById(conversationId, { withPlaydateDetails = false } = {}) {
-    return Conversation.findOne({ _id: conversationId, isActive: true })
+    return Conversation.findById(conversationId)
       .populate(CONVERSATION_BASE_POPULATE)
       .populate(withPlaydateDetails ? PLAYDATE_DETAIL_POPULATE : PLAYDATE_SUMMARY_POPULATE)
       .lean();
@@ -92,37 +92,59 @@ class ChatRepository {
   }
 
   /**
-   * Find raw conversation document by ID (for updates)
+   * Find raw conversation document (for mutations)
    * @param {string|ObjectId} conversationId
-   * @returns {Promise<Document|null>}
+   * @returns {Promise<Object|null>}
    */
   async findConversationDocById(conversationId) {
-    return Conversation.findOne({ _id: conversationId, isActive: true });
+    return Conversation.findById(conversationId);
   }
 
   /**
-   * Find an existing direct conversation between two parents
-   * @param {string|ObjectId} parentIdA
-   * @param {string|ObjectId} parentIdB
+   * Find existing direct conversation between two parents
+   * @param {string|ObjectId} parentAId
+   * @param {string|ObjectId} parentBId
    * @returns {Promise<Object|null>}
    */
-  async findDirectConversation(parentIdA, parentIdB) {
-    const pairKey = [parentIdA.toString(), parentIdB.toString()].sort().join('_');
+  async findDirectConversation(parentAId, parentBId) {
+    const pairKey = [parentAId.toString(), parentBId.toString()].sort().join('_');
     return Conversation.findOne({
-      $or: [
-        { pairKey, isActive: true },
-        {
-          type: CONVERSATION_TYPES.DIRECT,
-          participants: { $all: [parentIdA, parentIdB], $size: 2 },
-          isActive: true,
-        },
-      ],
+      type: CONVERSATION_TYPES.DIRECT,
+      pairKey,
+      isActive: true,
     })
       .populate(CONVERSATION_BASE_POPULATE)
       .populate(PLAYDATE_SUMMARY_POPULATE)
       .lean();
   }
 
+  /**
+   * Find playdate conversation by playdate ID
+   * @param {string|ObjectId} playdateId
+   * @param {Object} [options]
+   * @returns {Promise<Object|null>}
+   */
+  async findPlaydateConversation(playdateId, options = {}) {
+    return this.findConversationById(
+      await Conversation.findOne({ playdateId }).select('_id'),
+      options
+    );
+  }
+
+  /**
+   * Find raw playdate conversation document (for mutations like participant joins)
+   * @param {string|ObjectId} playdateId
+   * @returns {Promise<Object|null>}
+   */
+  async findPlaydateConversationDoc(playdateId) {
+    return Conversation.findOne({
+      playdateId,
+      type: CONVERSATION_TYPES.PLAYDATE,
+    })
+      .populate(CONVERSATION_BASE_POPULATE)
+      .populate(PLAYDATE_SUMMARY_POPULATE)
+      .lean();
+  }
 
   /**
    * Create a new conversation document
@@ -185,10 +207,11 @@ class ChatRepository {
   }
 
   /**
-   * Update conversation's lastMessage and unread counts for recipients
+   * Update conversation's lastMessage and increment unread counts
    * @param {string|ObjectId} conversationId
    * @param {Object} messageDoc
    * @param {Array<string|ObjectId>} recipientIds
+   * @returns {Promise<Object>}
    */
   async updateLastMessage(conversationId, messageDoc, recipientIds = []) {
     const updateOps = {
@@ -215,7 +238,7 @@ class ChatRepository {
   }
 
   /**
-   * Mark messages in a conversation as read by a parent
+   * Mark messages as read by a parent in a conversation
    * @param {string|ObjectId} conversationId
    * @param {string|ObjectId} parentId
    */
@@ -252,6 +275,35 @@ class ChatRepository {
       },
       { new: true }
     );
+  }
+
+  /**
+   * Find surrounding messages around a target message timestamp within the same conversation
+   * @param {string|ObjectId} conversationId
+   * @param {Date} targetMessageCreatedAt
+   * @param {number} [radius=5]
+   */
+  async findSurroundingMessages(conversationId, targetMessageCreatedAt, radius = 5) {
+    const [before, after] = await Promise.all([
+      Message.find({
+        conversationId,
+        createdAt: { $lt: targetMessageCreatedAt },
+      })
+        .sort({ createdAt: -1 })
+        .limit(radius)
+        .populate('senderId', 'fullName avatarUrl')
+        .lean(),
+      Message.find({
+        conversationId,
+        createdAt: { $gt: targetMessageCreatedAt },
+      })
+        .sort({ createdAt: 1 })
+        .limit(radius)
+        .populate('senderId', 'fullName avatarUrl')
+        .lean(),
+    ]);
+
+    return [...before.reverse(), ...after];
   }
 }
 

@@ -1,4 +1,5 @@
 import chatRepository from './chat.repository.js';
+import Message from './message.model.js';
 import parentService from '../parent/parent.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
@@ -403,6 +404,79 @@ class ChatService {
     return {
       mediaUrl: result.url,
       publicId: result.publicId,
+    };
+  }
+
+  /**
+   * Admin soft-deletes a message and broadcasts a socket update to the conversation room
+   * @param {string|ObjectId} messageId
+   */
+  async adminDeleteMessage(messageId) {
+    const message = await Message.findById(messageId);
+    if (!message) {
+      throw new AppError('Message not found', 404, 'MESSAGE_NOT_FOUND');
+    }
+
+    if (message.isDeleted) {
+      return { message, alreadyDeleted: true };
+    }
+
+    message.isDeleted = true;
+    await message.save();
+
+    // Broadcast to conversation socket room so UI renders placeholder in realtime
+    try {
+      const { getIO } = await import('../../config/socket.js');
+      const io = getIO();
+      if (io) {
+        io.to(`conversation:${message.conversationId.toString()}`).emit('message:deleted', {
+          messageId: message._id.toString(),
+          conversationId: message.conversationId.toString(),
+          placeholder: 'Tin nhắn này đã bị xóa bởi Quản trị viên do vi phạm quy tắc.',
+        });
+      }
+    } catch (_err) {
+      // Non-fatal if socket server is unavailable
+    }
+
+    return { message, alreadyDeleted: false };
+  }
+
+  /**
+   * Get message investigation context: target message + up to radius surrounding messages
+   * @param {string|ObjectId} messageId
+   * @param {number} [radius=5]
+   */
+  async getMessageContext(messageId, radius = 5) {
+    const target = await Message.findById(messageId).populate('senderId', 'fullName avatarUrl').lean();
+    if (!target) return null;
+
+    const surrounding = await chatRepository.findSurroundingMessages(
+      target.conversationId,
+      target.createdAt,
+      radius
+    );
+
+    return {
+      type: 'message',
+      reportedMessage: {
+        id: target._id.toString(),
+        content: target.content,
+        mediaUrl: target.mediaUrl,
+        isDeleted: target.isDeleted,
+        createdAt: target.createdAt,
+        senderId: (target.senderId?._id || target.senderId)?.toString(),
+        senderName: target.senderId?.fullName || '',
+      },
+      surroundingMessages: surrounding.map((msg) => ({
+        id: msg._id.toString(),
+        content: msg.isDeleted ? '[Tin nhắn đã bị xóa]' : msg.content,
+        mediaUrl: msg.mediaUrl,
+        isDeleted: msg.isDeleted,
+        createdAt: msg.createdAt,
+        senderId: (msg.senderId?._id || msg.senderId)?.toString(),
+        senderName: msg.senderId?.fullName || '',
+      })),
     };
   }
 }

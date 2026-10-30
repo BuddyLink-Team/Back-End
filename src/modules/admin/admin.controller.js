@@ -269,6 +269,126 @@ class AdminController {
       return next(error);
     }
   }
+
+  // ---------------------------------------------------------
+  // SAFETY & REPORTS MODERATION
+  // ---------------------------------------------------------
+
+  /**
+   * GET /api/v1/admin/reports
+   */
+  async getReports(req, res, next) {
+    try {
+      const data = await adminService.getReports(req.query, req.user?._id || req.userId);
+      return successResponse(res, data, 'Reports retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/admin/reports/stats
+   */
+  async getReportStats(req, res, next) {
+    try {
+      const data = await adminService.getReportStats(req.query);
+      return successResponse(res, data, 'Report statistics retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/admin/reports/:id
+   */
+  async getReportDetail(req, res, next) {
+    try {
+      const data = await adminService.getReportDetail(req.params.id);
+      return successResponse(res, data, 'Report detail retrieved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/admin/reports/:id/review
+   */
+  async reviewReport(req, res, next) {
+    try {
+      const data = await adminService.reviewReport(
+        req.user?._id || req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, data, 'Report review state updated successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/admin/reports/:id/severity
+   */
+  async updateReportSeverity(req, res, next) {
+    try {
+      const data = await adminService.updateReportSeverity(
+        req.user?._id || req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, data, 'Report severity updated successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/admin/reports/:id/action
+   */
+  async applyReportAction(req, res, next) {
+    try {
+      const data = await adminService.applyReportAction(
+        req.user?._id || req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, data, 'Report action applied successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/admin/reports/:id/resolve
+   */
+  async resolveReport(req, res, next) {
+    try {
+      const data = await adminService.resolveReport(
+        req.user?._id || req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, data, 'Report resolved successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/admin/reports/:id/reopen
+   */
+  async reopenReport(req, res, next) {
+    try {
+      const data = await adminService.reopenReport(
+        req.user?._id || req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, data, 'Report reopened successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
 
 export default new AdminController();
