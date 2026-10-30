@@ -670,6 +670,89 @@ class PlaydateRepository {
     ]);
     return { items, total };
   }
+
+  /**
+   * Playdates created between two instants
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countCreatedBetween(fromDate, toDate) {
+    return Playdate.countDocuments({ createdAt: { $gte: fromDate, $lte: toDate } });
+  }
+
+  /**
+   * Count distinct parents who hosted a playdate or accepted an invitation, on or before a date.
+   * Cancelled playdates and invitations left unanswered or declined do not count.
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithPlaydateBeforeDate(date) {
+    const filter = { status: { $ne: PLAYDATE_STATUS.CANCELLED } };
+    if (date) filter.createdAt = { $lte: date };
+    const [hosts, participants] = await Promise.all([
+      Playdate.distinct('hostParentId', filter),
+      Playdate.aggregate([
+        { $match: { ...filter, 'participants.status': PARTICIPANT_STATUS.ACCEPTED } },
+        { $unwind: '$participants' },
+        { $match: { 'participants.status': PARTICIPANT_STATUS.ACCEPTED } },
+        { $group: { _id: '$participants.parentId' } },
+      ]),
+    ]);
+    return new Set([...hosts.map(String), ...participants.map((row) => String(row._id))]).size;
+  }
+
+  /**
+   * Aggregate playdates created grouped by period
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @param {string} dateFormat
+   * @param {string} timeZone
+   * @returns {Promise<Array<{ period: string, count: number }>>}
+   */
+  async aggregatePlaydatesByPeriod(fromDate, toDate, dateFormat, timeZone) {
+    const rows = await Playdate.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: fromDate, $lte: toDate },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: dateFormat, date: '$createdAt', timezone: timeZone } },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map((r) => ({ period: r._id, count: r.count }));
+  }
+
+  /**
+   * Count playdates by status within a timeframe
+   * @param {Date} [fromDate]
+   * @param {Date} [toDate]
+   * @returns {Promise<{ total: number, upcoming: number, completed: number, cancelled: number }>}
+   */
+  async countByStatusInPeriod(fromDate, toDate) {
+    const match = {};
+    if (fromDate || toDate) {
+      match.createdAt = {};
+      if (fromDate) match.createdAt.$gte = fromDate;
+      if (toDate) match.createdAt.$lte = toDate;
+    }
+    const rows = await Playdate.aggregate([
+      { $match: match },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+    const countOf = (status) => rows.find((row) => row._id === status)?.count || 0;
+    return {
+      total: rows.reduce((sum, row) => sum + row.count, 0),
+      upcoming: countOf(PLAYDATE_STATUS.UPCOMING),
+      completed: countOf(PLAYDATE_STATUS.COMPLETED),
+      cancelled: countOf(PLAYDATE_STATUS.CANCELLED),
+    };
+  }
 }
 
 export const playdateRepository = new PlaydateRepository();

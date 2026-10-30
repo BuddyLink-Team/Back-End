@@ -6,6 +6,10 @@ import logger from '../../shared/logger/index.js';
  * playdate service (keeps the dependency one-way, e.g. chat -> playdate).
  */
 export const PLAYDATE_EVENTS = Object.freeze({
+  // Playdate was created
+  CREATED: 'playdate.created',
+  // Playdate was cancelled (by host or admin)
+  CANCELLED: 'playdate.cancelled',
   // Host or accepted participants changed (created, RSVP accepted/declined)
   MEMBERS_CHANGED: 'playdate.membersChanged',
   // Playdate became completed (by the host or the daily auto-close job)

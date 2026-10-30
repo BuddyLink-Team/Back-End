@@ -1,4 +1,5 @@
 import User from './user.model.js';
+import { USER_ROLES } from '../../shared/constants/index.js';
 import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
 
 class UserRepository {
@@ -154,6 +155,61 @@ class UserRepository {
     const active = rows.find((row) => row._id === true)?.count || 0;
     const total = rows.reduce((sum, row) => sum + row.count, 0);
     return { total, active, locked: total - active };
+  }
+
+  /**
+   * Total parents registered on or before a date
+   * @param {Date} date
+   * @returns {Promise<number>}
+   */
+  async countParentsBeforeDate(date) {
+    return User.countDocuments({
+      role: USER_ROLES.PARENT,
+      deletedAt: null,
+      createdAt: { $lte: date },
+    });
+  }
+
+  /**
+   * New parents registered in a date range
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countNewParentsBetween(fromDate, toDate) {
+    return User.countDocuments({
+      role: USER_ROLES.PARENT,
+      deletedAt: null,
+      createdAt: { $gte: fromDate, $lte: toDate },
+    });
+  }
+
+  /**
+   * Group new parents by date string format in timezone
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @param {string} dateFormat - e.g. '%Y-%m-%d', '%Y-%m'
+   * @param {string} timeZone
+   * @returns {Promise<Array<{ period: string, count: number }>>}
+   */
+  async aggregateNewParentsByPeriod(fromDate, toDate, dateFormat, timeZone) {
+    const rows = await User.aggregate([
+      {
+        $match: {
+          role: USER_ROLES.PARENT,
+          deletedAt: null,
+          createdAt: { $gte: fromDate, $lte: toDate },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: dateFormat, date: '$createdAt', timezone: timeZone } },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map((r) => ({ period: r._id, count: r.count }));
   }
 }
 

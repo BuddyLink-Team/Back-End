@@ -3,6 +3,14 @@ export const CHILD_GENDERS = Object.freeze({
   GIRL: 'girl',
 });
 
+// Age groups of the admin dashboard, youngest first; bornAfterYears = upper age limit (none for the last one)
+export const CHILD_AGE_GROUPS = Object.freeze([
+  { label: '0-2 tuổi', bornAfterYears: 3 },
+  { label: '3-5 tuổi', bornAfterYears: 6 },
+  { label: '6-10 tuổi', bornAfterYears: 11 },
+  { label: '11+ tuổi', bornAfterYears: null },
+]);
+
 // Fields a parent may set on a child profile (parentId, isArchived... are server-controlled)
 export const CHILD_EDITABLE_FIELDS = Object.freeze([
   'displayName',

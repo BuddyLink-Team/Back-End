@@ -3,6 +3,7 @@ import env from '../config/env.js';
 import logger from '../shared/logger/index.js';
 import playdateService from '../modules/playdate/playdate.service.js';
 import { PLAYDATE_REMINDER } from '../modules/playdate/playdate.constants.js';
+import { emitSystemEvent, SYSTEM_EVENTS } from '../shared/events/system.events.js';
 
 // Every 15 minutes (business timezone)
 const SCHEDULE = `*/${PLAYDATE_REMINDER.JOB_INTERVAL_MINUTES} * * * *`;
@@ -25,6 +26,7 @@ export const runPlaydateReminders = async () => {
     }
   } catch (error) {
     logger.error(`[PlaydateReminderJob] Failed: ${error.message}`);
+    void emitSystemEvent(SYSTEM_EVENTS.CRON_JOB_FAILED, { jobName: 'PlaydateReminderJob', error: error.message });
   } finally {
     isRunning = false;
   }

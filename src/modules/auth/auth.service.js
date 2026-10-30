@@ -24,6 +24,7 @@ import {
   hashToken,
 } from '../../shared/helpers/token.helper.js';
 import { normalizePhone } from '../../shared/helpers/phone.helper.js';
+import { emitUserEvent, USER_EVENTS } from '../user/user.events.js';
 import {
   AuthResponseDTO,
   AuthUserDTO,
@@ -139,6 +140,12 @@ class AuthService {
       });
 
       await subscriptionService.createFreeSubscription(parent._id);
+
+      void emitUserEvent(USER_EVENTS.USER_SIGNED_UP, {
+        userId: user._id,
+        email: user.email,
+        fullName: parent.fullName,
+      });
 
       return { user, parent };
     } catch (error) {

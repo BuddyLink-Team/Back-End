@@ -210,6 +210,34 @@ class UserService {
   async getEmailsByIds(ids) {
     return userRepository.findEmailsByIds(ids);
   }
+
+  /**
+   * Total parents registered on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countParentsBeforeDate(date) {
+    return userRepository.countParentsBeforeDate(date);
+  }
+
+  /**
+   * Parents newly registered between two dates
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countNewParentsBetween(fromDate, toDate) {
+    return userRepository.countNewParentsBetween(fromDate, toDate);
+  }
+
+  /**
+   * Aggregate new parent signups grouped by period
+   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string }} params
+   * @returns {Promise<Array<{ period: string, count: number }>>}
+   */
+  async getNewParentsTimeline({ fromDate, toDate, dateFormat, timeZone }) {
+    return userRepository.aggregateNewParentsByPeriod(fromDate, toDate, dateFormat, timeZone);
+  }
 }
 
 export default new UserService();

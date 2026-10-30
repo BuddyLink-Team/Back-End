@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import env from '../config/env.js';
 import logger from '../shared/logger/index.js';
 import subscriptionService from '../modules/subscription/subscription.service.js';
+import { emitSystemEvent, SYSTEM_EVENTS } from '../shared/events/system.events.js';
 
 // Every hour at minute 5 (business timezone)
 const SCHEDULE = '5 * * * *';
@@ -23,6 +24,10 @@ export const startSubscriptionExpiryJob = () =>
         await subscriptionService.reconcileStalePayments();
       } catch (error) {
         logger.error(`[SubscriptionExpiryJob] Failed: ${error.message}`);
+        void emitSystemEvent(SYSTEM_EVENTS.CRON_JOB_FAILED, {
+          jobName: 'SubscriptionExpiryJob',
+          error: error.message,
+        });
       }
     },
     { timezone: env.APP_TIMEZONE },

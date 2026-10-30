@@ -680,6 +680,14 @@ class PlaydateService {
       });
     }
 
+    const hostProfile = await parentService.getParentById(hostParentId);
+    void emitPlaydateEvent(PLAYDATE_EVENTS.CREATED, {
+      playdateId: playdate._id.toString(),
+      activity: playdate.activity,
+      hostParentId: hostParentId.toString(),
+      hostName: hostProfile?.fullName || 'Một phụ huynh',
+    });
+
     const populated = await playdateRepository.findById(playdate._id);
     return { ...PlaydateResponseDTO.toResponse(populated, hostParentId), warnings };
   }
@@ -775,6 +783,13 @@ class PlaydateService {
 
     await rescheduleRepository.cancelPendingByPlaydateId(id);
     await this._refundJoinedParticipants(before);
+
+    void emitPlaydateEvent(PLAYDATE_EVENTS.CANCELLED, {
+      playdateId: id.toString(),
+      activity: before.activity,
+      cancelledByAdmin: false,
+      reason,
+    });
 
     const updated = await playdateRepository.findById(id);
     return PlaydateResponseDTO.toResponse(updated, parentId);
@@ -1185,7 +1200,46 @@ class PlaydateService {
     // Same as a host cancellation: families still in get their participation back
     await this._refundJoinedParticipants(before);
 
+    void emitPlaydateEvent(PLAYDATE_EVENTS.CANCELLED, {
+      playdateId: id.toString(),
+      activity: before.activity,
+      cancelledByAdmin: true,
+      reason,
+    });
+
     return playdateRepository.findById(id);
+  }
+
+  /**
+   * Playdates created between two instants
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countCreatedBetween(fromDate, toDate) {
+    return playdateRepository.countCreatedBetween(fromDate, toDate);
+  }
+
+  /**
+   * Count distinct parents who hosted a playdate or accepted an invitation, on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithPlaydateBeforeDate(date) {
+    return playdateRepository.countDistinctParentsWithPlaydateBeforeDate(date);
+  }
+
+  /**
+   * Get playdate analytics including status breakdown and timeline
+   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string }} params
+   * @returns {Promise<{ byStatus: Object, timeline: Array<{ period: string, count: number }> }>}
+   */
+  async getPlaydateAnalytics({ fromDate, toDate, dateFormat, timeZone }) {
+    const [byStatus, timeline] = await Promise.all([
+      playdateRepository.countByStatusInPeriod(fromDate, toDate),
+      playdateRepository.aggregatePlaydatesByPeriod(fromDate, toDate, dateFormat, timeZone),
+    ]);
+    return { byStatus, timeline };
   }
 }
 

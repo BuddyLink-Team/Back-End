@@ -23,6 +23,9 @@ import {
   listSubscriptionsValidation,
   listTransactionsValidation,
   revenueSummaryValidation,
+  adminAnalyticsValidation,
+  listAdminNotificationsValidation,
+  readAllAdminNotificationsValidation,
 } from './admin.validation.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 
@@ -77,6 +80,15 @@ router.get('/subscriptions/:id', validate(mongoIdParamValidation), adminControll
 router.get('/transactions', validate(listTransactionsValidation), adminController.getTransactions);
 router.get('/transactions/:id', validate(mongoIdParamValidation), adminController.getTransactionDetail);
 router.get('/revenue/summary', validate(revenueSummaryValidation), adminController.getRevenueSummary);
+
+// System Analytics & Dashboard
+router.get('/analytics', validate(adminAnalyticsValidation), adminController.getAnalytics);
+
+// Admin Notifications
+router.get('/notifications', validate(listAdminNotificationsValidation), adminController.getNotifications);
+router.get('/notifications/unread-count', adminController.getUnreadNotificationCount);
+router.patch('/notifications/read-all', validate(readAllAdminNotificationsValidation), adminController.markAllNotificationsAsRead);
+router.patch('/notifications/:id/read', validate(mongoIdParamValidation), adminController.markNotificationAsRead);
 
 export default router;
 

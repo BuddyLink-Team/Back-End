@@ -12,6 +12,10 @@ import { apiLimiter } from "./middlewares/rate-limit.middleware.js";
 import { TOKEN_AUDIENCES } from "./modules/auth/auth.constants.js";
 
 import adminRoutes from "./modules/admin/admin.route.js";
+import { registerAdminNotificationListeners } from "./modules/admin/admin-notification.listener.js";
+
+// Register domain listeners for notifications
+registerAdminNotificationListeners();
 
 /**
  * Admin portal API: served on its own port (ADMIN_PORT) locally and as its own service in production.

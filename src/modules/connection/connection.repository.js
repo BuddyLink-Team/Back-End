@@ -247,6 +247,57 @@ class ConnectionRepository {
     ]);
     return { items, total };
   }
+
+  /**
+   * Connections accepted between two instants (and still accepted)
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countAcceptedBetween(fromDate, toDate) {
+    return Connection.countDocuments({
+      status: CONNECTION_STATUS.ACCEPTED,
+      connectedAt: { $gte: fromDate, $lte: toDate },
+    });
+  }
+
+  /**
+   * Count distinct parents with at least one accepted connection on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithConnectionBeforeDate(date) {
+    const filter = { status: CONNECTION_STATUS.ACCEPTED };
+    if (date) filter.connectedAt = { $lte: date };
+    const parents = await Connection.distinct('parents', filter);
+    return parents.length;
+  }
+
+  /**
+   * Connection requests of a date range, by status
+   * @param {{ fromDate?: Date, toDate?: Date }} params
+   * @returns {Promise<{ sent: number, accepted: number, declined: number, pending: number, removed: number }>}
+   */
+  async countRequestsByStatus({ fromDate, toDate } = {}) {
+    const match = {};
+    if (fromDate || toDate) {
+      match.createdAt = {};
+      if (fromDate) match.createdAt.$gte = fromDate;
+      if (toDate) match.createdAt.$lte = toDate;
+    }
+    const rows = await Connection.aggregate([
+      { $match: match },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+    const countOf = (status) => rows.find((r) => r._id === status)?.count || 0;
+    return {
+      sent: rows.reduce((sum, r) => sum + r.count, 0),
+      accepted: countOf(CONNECTION_STATUS.ACCEPTED),
+      declined: countOf(CONNECTION_STATUS.DECLINED),
+      pending: countOf(CONNECTION_STATUS.PENDING),
+      removed: countOf(CONNECTION_STATUS.REMOVED),
+    };
+  }
 }
 
 export const connectionRepository = new ConnectionRepository();

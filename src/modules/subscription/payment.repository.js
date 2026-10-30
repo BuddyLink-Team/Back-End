@@ -226,22 +226,35 @@ class PaymentRepository {
   }
 
   /**
-   * Successful payments paid in a period, grouped by calendar month in a time zone
-   * @returns {Promise<Array<{ month: string, revenue: number, transactionCount: number }>>} month = 'YYYY-MM', sorted
+   * Successful payments paid in a period, grouped by a date format in a time zone
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @param {string} dateFormat - e.g. '%Y-%m-%d', '%G-W%V', '%Y-%m'
+   * @param {string} timeZone
+   * @returns {Promise<Array<{ period: string, revenue: number, transactionCount: number }>>} sorted by period
    */
-  async sumSuccessfulPaidByMonth(fromDate, toDate, timeZone) {
+  async sumSuccessfulPaidByPeriod(fromDate, toDate, dateFormat, timeZone) {
     const rows = await Payment.aggregate([
       { $match: { status: PAYMENT_STATUS.SUCCESS, paidAt: { $gte: fromDate, $lte: toDate } } },
       {
         $group: {
-          _id: { $dateToString: { format: '%Y-%m', date: '$paidAt', timezone: timeZone } },
+          _id: { $dateToString: { format: dateFormat, date: '$paidAt', timezone: timeZone } },
           revenue: { $sum: '$amount' },
           transactionCount: { $sum: 1 },
         },
       },
       { $sort: { _id: 1 } },
     ]);
-    return rows.map((row) => ({ month: row._id, revenue: row.revenue, transactionCount: row.transactionCount }));
+    return rows.map((row) => ({ period: row._id, revenue: row.revenue, transactionCount: row.transactionCount }));
+  }
+
+  /**
+   * Successful payments paid in a period, grouped by calendar month in a time zone
+   * @returns {Promise<Array<{ month: string, revenue: number, transactionCount: number }>>} month = 'YYYY-MM', sorted
+   */
+  async sumSuccessfulPaidByMonth(fromDate, toDate, timeZone) {
+    const rows = await this.sumSuccessfulPaidByPeriod(fromDate, toDate, '%Y-%m', timeZone);
+    return rows.map(({ period, revenue, transactionCount }) => ({ month: period, revenue, transactionCount }));
   }
 
   /**
@@ -275,6 +288,16 @@ class PaymentRepository {
       { $count: 'count' },
     ]);
     return row?.count || 0;
+  }
+
+  /**
+   * Parents with a successful payment on or before a date
+   * @param {Date} date
+   * @returns {Promise<number>}
+   */
+  async countDistinctSuccessfulParentsUntil(date) {
+    const parentIds = await Payment.distinct('parentId', { status: PAYMENT_STATUS.SUCCESS, paidAt: { $lte: date } });
+    return parentIds.length;
   }
 }
 

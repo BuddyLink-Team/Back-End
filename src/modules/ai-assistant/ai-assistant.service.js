@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import aiAssistantRepository from './ai-assistant.repository.js';
 import parentService from '../parent/parent.service.js';
+import userService from '../user/user.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import geminiAdapter from '../../integrations/ai/gemini.adapter.js';
 import AppError from '../../shared/exceptions/app-error.js';
@@ -317,6 +318,50 @@ class AIAssistantService {
     }
 
     return { text: cleanReply(text) || AI_FALLBACK_REPLY, toolMessages, tokenDelta, rounds, model };
+  }
+
+  /**
+   * Count user messages between dates
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countAiMessagesBetween(fromDate, toDate) {
+    return aiAssistantRepository.countUserMessagesBetween(fromDate, toDate);
+  }
+
+  /**
+   * Get AI analytics with period breakdown and top parents
+   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string, topLimit: number }} params
+   * @returns {Promise<{ timeline: Array<{ period: string, count: number }>, topParents: Array<Object> }>}
+   */
+  async getAiAnalytics({ fromDate, toDate, dateFormat, timeZone, topLimit }) {
+    const [timeline, topParentRows] = await Promise.all([
+      aiAssistantRepository.aggregateAiUsageByPeriod(fromDate, toDate, dateFormat, timeZone),
+      aiAssistantRepository.getTopParentsByUsage(fromDate, toDate, topLimit),
+    ]);
+
+    const parentIds = topParentRows.map((r) => r.parentId);
+    const parents = await parentService.getParentsByIds(parentIds);
+    const parentMap = new Map(parents.map((p) => [p._id.toString(), p]));
+
+    const userIds = parents.map((p) => p.userId).filter(Boolean);
+    const emails = await userService.getEmailsByIds(userIds);
+    const emailMap = new Map(emails.map((e) => [e._id.toString(), e.email]));
+
+    const topParents = topParentRows.map((row) => {
+      const p = parentMap.get(row.parentId.toString());
+      const email = p?.userId ? emailMap.get(p.userId.toString()) || null : null;
+      return {
+        parentId: row.parentId,
+        fullName: p?.fullName || 'N/A',
+        avatarUrl: p?.avatarUrl || null,
+        email,
+        requestCount: row.requestCount,
+      };
+    });
+
+    return { timeline, topParents };
   }
 }
 

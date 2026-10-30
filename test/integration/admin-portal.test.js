@@ -14,6 +14,8 @@ import subscriptionService from '../../src/modules/subscription/subscription.ser
 import { grantPremium } from '../helpers/subscriptionHelper.js';
 import SubscriptionPlan from '../../src/modules/subscription/subscription-plan.model.js';
 import { SUBSCRIPTION_PLAN_DEFAULTS } from '../../src/modules/subscription/subscription.constants.js';
+import AdminNotification from '../../src/modules/admin/admin-notification.model.js';
+import { ADMIN_NOTIFICATION_CATEGORIES, ADMIN_NOTIFICATION_SEVERITY } from '../../src/modules/admin/admin.constants.js';
 
 // Plans are shared by every suite (same test DB, suites run in parallel): undo each change right away
 const restoreDefaultPlans = () =>
@@ -1254,6 +1256,165 @@ describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => 
     const { monthlyRevenue } = res.body.data;
     expect(monthlyRevenue).toHaveLength(6);
     monthlyRevenue.forEach((row) => expect(typeof row.revenue).toBe('number'));
+  });
+
+  describe('TASK-BE-1: GET /api/v1/admin/analytics', () => {
+    it('returns all 9 KPIs, detailed stats, and conversion funnel', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/analytics?groupBy=day')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      const data = res.body.data;
+
+      // 9 KPIs in overview
+      expect(data.overview).toBeDefined();
+      const expectedKpis = [
+        'totalParents',
+        'newParents',
+        'totalChildProfiles',
+        'totalPlaydates',
+        'acceptedConnections',
+        'activePremiumSubscriptions',
+        'totalRevenue',
+        'successfulTransactions',
+        'aiUsage',
+      ];
+      expectedKpis.forEach((key) => {
+        expect(data.overview[key]).toBeDefined();
+        expect(typeof data.overview[key].value).toBe('number');
+        expect(typeof data.overview[key].previousValue).toBe('number');
+        // changePercent is either a number or null (when previousValue === 0)
+        if (data.overview[key].previousValue === 0) {
+          expect(data.overview[key].changePercent).toBeNull();
+        } else {
+          expect(typeof data.overview[key].changePercent).toBe('number');
+        }
+      });
+
+      // Detailed sections
+      expect(data.userGrowth).toBeDefined();
+      expect(Array.isArray(data.userGrowth.timeline)).toBe(true);
+
+      expect(data.revenue).toBeDefined();
+      expect(Array.isArray(data.revenue.timeline)).toBe(true);
+
+      expect(data.conversion).toBeDefined();
+      expect(data.conversion.funnel).toHaveLength(5);
+      expect(typeof data.conversion.conversionRate).toBe('number');
+      expect(typeof data.conversion.churnRate).toBe('number');
+
+      expect(data.playdates).toBeDefined();
+      expect(data.playdates.byStatus).toBeDefined();
+
+      expect(data.connections).toBeDefined();
+      expect(typeof data.connections.acceptanceRate).toBe('number');
+
+      expect(data.subscriptions).toBeDefined();
+      expect(data.subscriptions.byPlan).toBeDefined();
+
+      expect(data.aiUsage).toBeDefined();
+      expect(Array.isArray(data.aiUsage.topParents)).toBe(true);
+
+      expect(data.children).toBeDefined();
+      expect(Array.isArray(data.children.byAgeGroup)).toBe(true);
+      expect(data.children.byAgeGroup).toHaveLength(4);
+    });
+
+    it('rejects invalid date bounds (fromDate > toDate)', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/analytics?fromDate=2026-11-01&toDate=2026-10-01')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('TASK-BE-2: Admin Notifications', () => {
+    let testNotification;
+
+    beforeAll(async () => {
+      testNotification = await AdminNotification.create({
+        category: ADMIN_NOTIFICATION_CATEGORIES.SAFETY,
+        type: 'safety.report.created',
+        severity: ADMIN_NOTIFICATION_SEVERITY.CRITICAL,
+        title: 'Báo cáo vi phạm mới',
+        message: 'Có báo cáo vi phạm cần xử lý',
+      });
+    });
+
+    it('GET /api/v1/admin/notifications returns notifications with pagination and unread status', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/notifications')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data.items)).toBe(true);
+      expect(res.body.data.pagination).toBeDefined();
+
+      const item = res.body.data.items.find((n) => n.id === testNotification._id.toString());
+      expect(item).toBeDefined();
+      expect(item.isRead).toBe(false);
+      expect(item.readBy).toBeUndefined();
+    });
+
+    it('GET /api/v1/admin/notifications/unread-count returns total and category counts', async () => {
+      const res = await request(adminApp)
+        .get('/api/v1/admin/notifications/unread-count')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(typeof res.body.data.total).toBe('number');
+      expect(res.body.data.total).toBeGreaterThanOrEqual(1);
+      expect(res.body.data.byCategory.safety).toBeGreaterThanOrEqual(1);
+    });
+
+    it('PATCH /api/v1/admin/notifications/:id/read marks notification as read for current admin', async () => {
+      const res = await request(adminApp)
+        .patch(`/api/v1/admin/notifications/${testNotification._id}/read`)
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify unread count decreases or item shows read
+      const listRes = await request(adminApp)
+        .get('/api/v1/admin/notifications?isRead=true')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(listRes.status).toBe(200);
+      const readItem = listRes.body.data.items.find((n) => n.id === testNotification._id.toString());
+      expect(readItem).toBeDefined();
+      expect(readItem.isRead).toBe(true);
+    });
+
+    it('PATCH /api/v1/admin/notifications/read-all marks all notifications as read', async () => {
+      const res = await request(adminApp)
+        .patch('/api/v1/admin/notifications/read-all')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Other suites create notifications at the same time: only what existed before is checked
+      const created = await AdminNotification.create({
+        category: ADMIN_NOTIFICATION_CATEGORIES.SYSTEM,
+        type: 'cron_job_failed',
+        severity: ADMIN_NOTIFICATION_SEVERITY.CRITICAL,
+        title: 'Sau khi đã đọc tất cả',
+        message: 'Thông báo tạo sau khi đã đọc tất cả vẫn là chưa đọc',
+      });
+      const listRes = await request(adminApp)
+        .get('/api/v1/admin/notifications?isRead=false&limit=100')
+        .set('Authorization', `Bearer ${adminTokens.accessToken}`);
+
+      const unreadIds = listRes.body.data.items.map((n) => n.id);
+      expect(unreadIds).toContain(created._id.toString());
+      expect(unreadIds).not.toContain(testNotification._id.toString());
+    });
   });
 });
 
