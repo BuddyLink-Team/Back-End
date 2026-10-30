@@ -1,6 +1,14 @@
 import { query, param, body } from 'express-validator';
 import { CHILD_GENDERS } from '../child/child.constants.js';
-import { ADMIN_SEARCH_MAX_LENGTH, ADMIN_REASON_MAX_LENGTH } from './admin.constants.js';
+import {
+  ADMIN_NOTIFICATION_CATEGORIES,
+  ADMIN_NOTIFICATION_FILTER_ALL,
+  ADMIN_NOTIFICATION_SEVERITY,
+  ADMIN_REASON_MAX_LENGTH,
+  ADMIN_SEARCH_MAX_LENGTH,
+  ANALYTICS_GROUP_BY,
+  ANALYTICS_MAX_RANGE_DAYS,
+} from './admin.constants.js';
 import { PLAYDATE_STATUS } from '../playdate/playdate.constants.js';
 import { CONNECTION_STATUS } from '../connection/connection.constants.js';
 import {
@@ -335,45 +343,43 @@ export const adminAnalyticsValidation = [
   query('fromDate')
     .optional()
     .isISO8601()
-    .withMessage('fromDate must be a valid ISO8601 date'),
-  query('toDate')
-    .optional()
-    .isISO8601()
-    .withMessage('toDate must be a valid ISO8601 date')
+    .withMessage('fromDate must be a valid ISO8601 date')
     .bail()
     .custom((value, { req }) => {
-      if (req.query.fromDate) {
-        const start = new Date(req.query.fromDate);
-        const end = new Date(value);
-        if (start > end) {
-          throw new Error('toDate must be on or after fromDate');
-        }
-        // Max 12 months (366 days)
-        const diffMs = end.getTime() - start.getTime();
-        const maxMs = 366 * 24 * 60 * 60 * 1000;
-        if (diffMs > maxMs) {
-          throw new Error('Date range cannot exceed 12 months');
-        }
+      // Without toDate the range ends today, so a lone fromDate is checked too
+      const start = new Date(value);
+      const end = req.query.toDate ? new Date(req.query.toDate) : new Date();
+      if (start > end) {
+        throw new Error('fromDate must be on or before toDate');
+      }
+      if (end.getTime() - start.getTime() > ANALYTICS_MAX_RANGE_DAYS * 24 * 60 * 60 * 1000) {
+        throw new Error('Date range cannot exceed 12 months');
       }
       return true;
     }),
+  query('toDate')
+    .optional()
+    .isISO8601()
+    .withMessage('toDate must be a valid ISO8601 date'),
   query('groupBy')
     .optional()
-    .isIn(['day', 'week', 'month'])
+    .isIn(Object.values(ANALYTICS_GROUP_BY))
     .withMessage('groupBy must be one of: day, week, month'),
 ];
+
+const notificationCategoryValidation = query('category')
+  .optional()
+  .isIn([...Object.values(ADMIN_NOTIFICATION_CATEGORIES), ADMIN_NOTIFICATION_FILTER_ALL])
+  .withMessage('Invalid notification category');
 
 /**
  * Validation rules for GET /api/v1/admin/notifications
  */
 export const listAdminNotificationsValidation = [
-  query('category')
-    .optional()
-    .isIn(['users', 'payments', 'playdates', 'connections', 'safety', 'system', 'all'])
-    .withMessage('Invalid notification category'),
+  notificationCategoryValidation,
   query('severity')
     .optional()
-    .isIn(['info', 'warning', 'critical', 'all'])
+    .isIn([...Object.values(ADMIN_NOTIFICATION_SEVERITY), ADMIN_NOTIFICATION_FILTER_ALL])
     .withMessage('Invalid notification severity'),
   query('isRead')
     .optional()
@@ -392,9 +398,4 @@ export const listAdminNotificationsValidation = [
 /**
  * Validation rules for PATCH /api/v1/admin/notifications/read-all
  */
-export const readAllAdminNotificationsValidation = [
-  query('category')
-    .optional()
-    .isIn(['users', 'payments', 'playdates', 'connections', 'safety', 'system', 'all'])
-    .withMessage('Invalid notification category'),
-];
+export const readAllAdminNotificationsValidation = [notificationCategoryValidation];

@@ -189,7 +189,9 @@ class SubscriptionService {
 
     // A paid plan past its end date falls back to Free even if the expiry job has not run yet
     if (sub && sub.planCode !== SUBSCRIPTION_PLAN_CODES.FREE && sub.endDate && sub.endDate <= new Date()) {
+      const expired = sub;
       const downgraded = await subscriptionRepository.downgradeToFree(sub._id);
+      if (downgraded) this._emitSubscriptionExpired(expired);
       // null: renewed or downgraded concurrently, read the current state
       sub = downgraded || (await subscriptionRepository.findByParentId(parentId, session));
     }
@@ -198,6 +200,14 @@ class SubscriptionService {
       sub = await subscriptionRepository.upsertFreeSubscription(parentId, session);
     }
     return sub;
+  }
+
+  _emitSubscriptionExpired(subscription) {
+    void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_EXPIRED, {
+      subscriptionId: subscription._id.toString(),
+      planCode: subscription.planCode,
+      parentId: subscription.parentId?.toString(),
+    });
   }
 
   /**
@@ -335,11 +345,7 @@ class SubscriptionService {
       const downgraded = await subscriptionRepository.downgradeToFree(subscription._id, now);
       if (downgraded) {
         expiredCount += 1;
-        void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_EXPIRED, {
-          subscriptionId: subscription._id.toString(),
-          planCode: subscription.planCode,
-          parentId: subscription.parentId?.toString(),
-        });
+        this._emitSubscriptionExpired(subscription);
       }
     }
 
@@ -716,8 +722,9 @@ class SubscriptionService {
         let startDate = now;
         let calendarAnchorAt = now;
         let purchasedMonths = durationMonths;
+        const isRenewal = Boolean(isCurrentlyActive && subscription?.calendarAnchorAt);
 
-        if (isCurrentlyActive && subscription?.calendarAnchorAt) {
+        if (isRenewal) {
           // Continuous cycle: retain anchor date and add months
           startDate = subscription.startDate;
           calendarAnchorAt = subscription.calendarAnchorAt;
@@ -800,12 +807,14 @@ class SubscriptionService {
           parentId: payment.parentId?.toString(),
         });
 
-        void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_CREATED, {
-          subscriptionId: updatedSub._id.toString(),
-          planCode: updatedSub.planCode,
-          planName: payment.planSnapshot?.name || updatedSub.planCode,
-          parentId: payment.parentId?.toString(),
-        });
+        if (!isRenewal) {
+          void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_CREATED, {
+            subscriptionId: updatedSub._id.toString(),
+            planCode: updatedSub.planCode,
+            planName: payment.planSnapshot?.name || updatedSub.planCode,
+            parentId: payment.parentId?.toString(),
+          });
+        }
 
         return {
           alreadyProcessed: false,
@@ -881,15 +890,17 @@ class SubscriptionService {
       return this.fulfillPaymentSession(orderCode, verifiedData);
     } else {
       // FR-03: Never downgrade an already success payment
-      await paymentRepository.updateNonSuccessStatus(orderCode, {
+      const failedPayment = await paymentRepository.updateNonSuccessStatus(orderCode, {
         status: PAYMENT_STATUS.FAILED,
         failureReason: desc || 'Payment failed or cancelled via PayOS Webhook',
         rawWebhookData: verifiedData,
       });
-      void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.PAYMENT_FAILED, {
-        orderCode,
-        paymentId: null,
-      });
+      if (failedPayment) {
+        void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.PAYMENT_FAILED, {
+          orderCode,
+          paymentId: failedPayment._id.toString(),
+        });
+      }
       return { success: false, message: desc || 'Payment failed' };
     }
   }
@@ -1397,10 +1408,10 @@ class SubscriptionService {
   /**
    * Revenue figures of a period, months grouped in APP_TIMEZONE.
    * Churned = parents whose latest paid period ended in the period and who did not buy again.
-   * @param {{ fromDate: Date, toDate: Date }} period
+   * @param {{ fromDate: Date, toDate: Date, dateFormat?: string }} period - dateFormat also returns revenueByPeriod
    */
-  async getRevenueMetrics({ fromDate, toDate }) {
-    const [overview, monthlyRevenue, allTimePayingParents, premiumAtStart, churnedParents, activePremium] =
+  async getRevenueMetrics({ fromDate, toDate, dateFormat }) {
+    const [overview, monthlyRevenue, allTimePayingParents, premiumAtStart, churnedParents, activePremium, revenueByPeriod] =
       await Promise.all([
         paymentRepository.sumSuccessfulPaidBetween(fromDate, toDate),
         paymentRepository.sumSuccessfulPaidByMonth(fromDate, toDate, env.APP_TIMEZONE),
@@ -1408,6 +1419,7 @@ class SubscriptionService {
         paymentRepository.countParentsWithGrantCovering(fromDate),
         paymentRepository.countParentsWithLastGrantEndBetween(fromDate, toDate),
         subscriptionRepository.countActivePaid(toDate),
+        dateFormat ? paymentRepository.sumSuccessfulPaidByPeriod(fromDate, toDate, dateFormat, env.APP_TIMEZONE) : [],
       ]);
 
     return {
@@ -1417,6 +1429,7 @@ class SubscriptionService {
       premiumAtStart,
       churnedParents,
       activePremium,
+      revenueByPeriod,
     };
   }
 
@@ -1430,30 +1443,21 @@ class SubscriptionService {
   }
 
   /**
-   * Count active paid subscriptions as of date
-   * @param {Date} [asOfDate]
+   * Parents with a paid Premium period covering an instant, in the past too
+   * @param {Date} date
    * @returns {Promise<number>}
    */
-  async countActivePaid(asOfDate) {
-    return subscriptionRepository.countActivePaid(asOfDate);
+  async countParentsWithPremiumAt(date) {
+    return paymentRepository.countParentsWithGrantCovering(date);
   }
 
   /**
-   * Successful payments paid in a period, grouped by arbitrary date format and timezone
-   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string }} params
-   * @returns {Promise<Array<{ period: string, revenue: number, transactionCount: number }>>}
-   */
-  async sumSuccessfulPaidByPeriod({ fromDate, toDate, dateFormat, timeZone }) {
-    return paymentRepository.sumSuccessfulPaidByPeriod(fromDate, toDate, dateFormat, timeZone);
-  }
-
-  /**
-   * Cumulative revenue collected up to a date
-   * @param {Date} [date]
+   * Parents who paid at least once on or before a date
+   * @param {Date} date
    * @returns {Promise<number>}
    */
-  async countRevenueBeforeDate(date) {
-    return paymentRepository.countRevenueBeforeDate(date);
+  async countPayingParentsUntil(date) {
+    return paymentRepository.countDistinctSuccessfulParentsUntil(date);
   }
 }
 

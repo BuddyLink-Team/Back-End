@@ -14,7 +14,8 @@ import subscriptionService from '../../src/modules/subscription/subscription.ser
 import { grantPremium } from '../helpers/subscriptionHelper.js';
 import SubscriptionPlan from '../../src/modules/subscription/subscription-plan.model.js';
 import { SUBSCRIPTION_PLAN_DEFAULTS } from '../../src/modules/subscription/subscription.constants.js';
-import AdminNotification, { ADMIN_NOTIFICATION_CATEGORIES, ADMIN_NOTIFICATION_SEVERITY } from '../../src/modules/admin/admin-notification.model.js';
+import AdminNotification from '../../src/modules/admin/admin-notification.model.js';
+import { ADMIN_NOTIFICATION_CATEGORIES, ADMIN_NOTIFICATION_SEVERITY } from '../../src/modules/admin/admin.constants.js';
 
 // Plans are shared by every suite (same test DB, suites run in parallel): undo each change right away
 const restoreDefaultPlans = () =>
@@ -1272,12 +1273,12 @@ describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => 
       const expectedKpis = [
         'totalParents',
         'newParents',
-        'activeUsers',
         'totalChildProfiles',
         'totalPlaydates',
         'acceptedConnections',
         'activePremiumSubscriptions',
         'totalRevenue',
+        'successfulTransactions',
         'aiUsage',
       ];
       expectedKpis.forEach((key) => {
@@ -1353,9 +1354,10 @@ describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => 
       expect(Array.isArray(res.body.data.items)).toBe(true);
       expect(res.body.data.pagination).toBeDefined();
 
-      const item = res.body.data.items.find((n) => n._id.toString() === testNotification._id.toString());
+      const item = res.body.data.items.find((n) => n.id === testNotification._id.toString());
       expect(item).toBeDefined();
       expect(item.isRead).toBe(false);
+      expect(item.readBy).toBeUndefined();
     });
 
     it('GET /api/v1/admin/notifications/unread-count returns total and category counts', async () => {
@@ -1384,7 +1386,7 @@ describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => 
         .set('Authorization', `Bearer ${adminTokens.accessToken}`);
 
       expect(listRes.status).toBe(200);
-      const readItem = listRes.body.data.items.find((n) => n._id.toString() === testNotification._id.toString());
+      const readItem = listRes.body.data.items.find((n) => n.id === testNotification._id.toString());
       expect(readItem).toBeDefined();
       expect(readItem.isRead).toBe(true);
     });
@@ -1397,12 +1399,21 @@ describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
 
-      const countRes = await request(adminApp)
-        .get('/api/v1/admin/notifications/unread-count')
+      // Other suites create notifications at the same time: only what existed before is checked
+      const created = await AdminNotification.create({
+        category: ADMIN_NOTIFICATION_CATEGORIES.SYSTEM,
+        type: 'cron_job_failed',
+        severity: ADMIN_NOTIFICATION_SEVERITY.CRITICAL,
+        title: 'Sau khi đã đọc tất cả',
+        message: 'Thông báo tạo sau khi đã đọc tất cả vẫn là chưa đọc',
+      });
+      const listRes = await request(adminApp)
+        .get('/api/v1/admin/notifications?isRead=false&limit=100')
         .set('Authorization', `Bearer ${adminTokens.accessToken}`);
 
-      expect(countRes.status).toBe(200);
-      expect(countRes.body.data.total).toBe(0);
+      const unreadIds = listRes.body.data.items.map((n) => n.id);
+      expect(unreadIds).toContain(created._id.toString());
+      expect(unreadIds).not.toContain(testNotification._id.toString());
     });
   });
 });

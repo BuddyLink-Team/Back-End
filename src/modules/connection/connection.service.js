@@ -464,12 +464,13 @@ class ConnectionService {
   }
 
   /**
-   * Count accepted connections on or before a date
-   * @param {Date} [date]
+   * Connections accepted between two instants
+   * @param {Date} fromDate
+   * @param {Date} toDate
    * @returns {Promise<number>}
    */
-  async countAcceptedBeforeDate(date) {
-    return connectionRepository.countAcceptedBeforeDate(date);
+  async countAcceptedBetween(fromDate, toDate) {
+    return connectionRepository.countAcceptedBetween(fromDate, toDate);
   }
 
   /**
@@ -487,7 +488,9 @@ class ConnectionService {
    * @returns {Promise<{ sent: number, accepted: number, declined: number, pending: number, removed: number, acceptanceRate: number }>}
    */
   async getConnectionAnalytics(params) {
-    return connectionRepository.getConnectionAnalytics(params);
+    const counts = await connectionRepository.countRequestsByStatus(params);
+    const acceptanceRate = counts.sent > 0 ? Number(((counts.accepted / counts.sent) * 100).toFixed(1)) : 0;
+    return { ...counts, acceptanceRate };
   }
 }
 

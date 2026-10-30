@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
-import AdminNotification, { ADMIN_NOTIFICATION_CATEGORIES } from './admin-notification.model.js';
+import AdminNotification from './admin-notification.model.js';
+import { ADMIN_NOTIFICATION_CATEGORIES } from './admin.constants.js';
 
 class AdminNotificationRepository {
   /**
@@ -45,19 +46,30 @@ class AdminNotificationRepository {
       AdminNotification.countDocuments(filter),
     ]);
 
-    // Format isRead flag for the current admin
-    const adminIdStr = adminId ? adminId.toString() : '';
-    const formattedItems = items.map((item) => ({
-      ...item,
-      isRead: Array.isArray(item.readBy) && item.readBy.some((id) => id.toString() === adminIdStr),
-    }));
+    return { items, total };
+  }
 
-    return { items: formattedItems, total };
+  /**
+   * Whether a notification of a type was created since an instant
+   * @param {string} type
+   * @param {Date} since
+   * @returns {Promise<boolean>}
+   */
+  async existsOfTypeSince(type, since) {
+    return Boolean(await AdminNotification.exists({ type, createdAt: { $gte: since } }));
+  }
+
+  /**
+   * Change stream of the notifications being created, by any process
+   * @returns {import('mongoose').mongo.ChangeStream}
+   */
+  watchInserts() {
+    return AdminNotification.watch([{ $match: { operationType: 'insert' } }]);
   }
 
   /**
    * Count unread notifications for an admin, overall and by category
-   * @param {string|ObjectId} adminId
+   * @param {string|ObjectId} [adminId] - Without it: notifications no admin has read
    * @returns {Promise<{ total: number, byCategory: Record<string, number> }>}
    */
   async countUnread(adminId) {

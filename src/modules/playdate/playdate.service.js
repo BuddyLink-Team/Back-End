@@ -1211,16 +1211,17 @@ class PlaydateService {
   }
 
   /**
-   * Count playdates created on or before a date
-   * @param {Date} [date]
+   * Playdates created between two instants
+   * @param {Date} fromDate
+   * @param {Date} toDate
    * @returns {Promise<number>}
    */
-  async countBeforeDate(date) {
-    return playdateRepository.countBeforeDate(date);
+  async countCreatedBetween(fromDate, toDate) {
+    return playdateRepository.countCreatedBetween(fromDate, toDate);
   }
 
   /**
-   * Count distinct parents who hosted or participated in a playdate on or before a date
+   * Count distinct parents who hosted a playdate or accepted an invitation, on or before a date
    * @param {Date} [date]
    * @returns {Promise<number>}
    */

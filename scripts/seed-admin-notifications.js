@@ -1,9 +1,7 @@
 import mongoose from 'mongoose';
 import connectDatabase from '../src/config/database.js';
-import AdminNotification, {
-  ADMIN_NOTIFICATION_CATEGORIES,
-  ADMIN_NOTIFICATION_SEVERITY,
-} from '../src/modules/admin/admin-notification.model.js';
+import AdminNotification from '../src/modules/admin/admin-notification.model.js';
+import { ADMIN_NOTIFICATION_CATEGORIES, ADMIN_NOTIFICATION_SEVERITY } from '../src/modules/admin/admin.constants.js';
 
 const SAMPLE_NOTIFICATIONS = [
   {
@@ -12,7 +10,7 @@ const SAMPLE_NOTIFICATIONS = [
     severity: ADMIN_NOTIFICATION_SEVERITY.CRITICAL,
     title: 'Báo cáo vi phạm mới cần xử lý',
     message: 'Phụ huynh báo cáo phát hiện ngôn từ không phù hợp trong phòng trò chuyện nhóm.',
-    entityType: 'report',
+    entityType: 'Report',
     entityId: new mongoose.Types.ObjectId(),
     readBy: [],
     createdAt: new Date(Date.now() - 5 * 60 * 1000), // 5 mins ago
@@ -23,7 +21,7 @@ const SAMPLE_NOTIFICATIONS = [
     severity: ADMIN_NOTIFICATION_SEVERITY.INFO,
     title: 'Thanh toán gói Premium thành công',
     message: 'Đơn hàng #SUB-8921 (199.000 ₫) gói Premium Tháng đã thanh toán thành công qua PayOS.',
-    entityType: 'payment',
+    entityType: 'Payment',
     entityId: new mongoose.Types.ObjectId(),
     readBy: [],
     createdAt: new Date(Date.now() - 25 * 60 * 1000), // 25 mins ago
@@ -34,7 +32,7 @@ const SAMPLE_NOTIFICATIONS = [
     severity: ADMIN_NOTIFICATION_SEVERITY.INFO,
     title: 'Đăng ký tài khoản phụ huynh mới',
     message: 'Phụ huynh Trần Thuỳ Trang (trang.tran@gmail.com) vừa đăng ký tài khoản thành công.',
-    entityType: 'user',
+    entityType: 'User',
     entityId: new mongoose.Types.ObjectId(),
     readBy: [],
     createdAt: new Date(Date.now() - 1 * 3600 * 1000), // 1 hour ago
@@ -45,7 +43,7 @@ const SAMPLE_NOTIFICATIONS = [
     severity: ADMIN_NOTIFICATION_SEVERITY.INFO,
     title: 'Buổi hẹn chơi mới được tạo',
     message: 'Buổi hẹn "Giao lưu tiếng Anh cuối tuần" tại Công viên Cầu Giấy vừa được tạo bởi phụ huynh Minh Tuấn.',
-    entityType: 'playdate',
+    entityType: 'Playdate',
     entityId: new mongoose.Types.ObjectId(),
     readBy: [],
     createdAt: new Date(Date.now() - 2 * 3600 * 1000), // 2 hours ago
@@ -56,7 +54,7 @@ const SAMPLE_NOTIFICATIONS = [
     severity: ADMIN_NOTIFICATION_SEVERITY.INFO,
     title: 'Kết nối mới được thiết lập',
     message: 'Gia đình bé Bơ và bé Sữa vừa chấp nhận kết nối ghép đôi thành công.',
-    entityType: 'connection',
+    entityType: 'Connection',
     entityId: new mongoose.Types.ObjectId(),
     readBy: [],
     createdAt: new Date(Date.now() - 4 * 3600 * 1000), // 4 hours ago
@@ -67,7 +65,7 @@ const SAMPLE_NOTIFICATIONS = [
     severity: ADMIN_NOTIFICATION_SEVERITY.WARNING,
     title: 'Cảnh báo đồng bộ dữ liệu hệ thống',
     message: 'Tác vụ đồng bộ địa điểm vui chơi định kỳ mất nhiều thời gian hơn ngưỡng quy định (42s).',
-    entityType: 'system',
+    entityType: 'System',
     entityId: null,
     readBy: [],
     createdAt: new Date(Date.now() - 6 * 3600 * 1000), // 6 hours ago

@@ -623,16 +623,6 @@ class AuthService {
   async revokeAllUserRefreshTokens(userId) {
     return authRepository.revokeAllUserRefreshTokens(userId);
   }
-
-  /**
-   * Count distinct users holding active sessions between dates
-   * @param {Date} fromDate
-   * @param {Date} toDate
-   * @returns {Promise<number>}
-   */
-  async countActiveUserSessions(fromDate, toDate) {
-    return authRepository.countActiveUserIdsBetween(fromDate, toDate);
-  }
 }
 
 export default new AuthService();

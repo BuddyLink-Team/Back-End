@@ -79,23 +79,6 @@ class AuthRepository {
       { $set: { isRevoked: true, revokedAt: new Date() } }
     );
   }
-
-  /**
-   * Count distinct users who held a valid or active refresh session within a timeframe
-   * @param {Date} fromDate
-   * @param {Date} toDate
-   * @returns {Promise<number>}
-   */
-  async countActiveUserIdsBetween(fromDate, toDate) {
-    const filter = {};
-    if (fromDate || toDate) {
-      filter.createdAt = {};
-      if (fromDate) filter.createdAt.$gte = fromDate;
-      if (toDate) filter.createdAt.$lte = toDate;
-    }
-    const distinctUsers = await RefreshToken.distinct('userId', filter);
-    return distinctUsers.length;
-  }
 }
 
 export default new AuthRepository();

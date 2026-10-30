@@ -211,17 +211,6 @@ class UserRepository {
     ]);
     return rows.map((r) => ({ period: r._id, count: r.count }));
   }
-
-  /**
-   * Count active parent accounts created on or before a date
-   * @param {Date} [asOfDate]
-   * @returns {Promise<number>}
-   */
-  async countActiveParents(asOfDate) {
-    const filter = { role: USER_ROLES.PARENT, isActive: true, deletedAt: null };
-    if (asOfDate) filter.createdAt = { $lte: asOfDate };
-    return User.countDocuments(filter);
-  }
 }
 
 export default new UserRepository();

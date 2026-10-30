@@ -3,7 +3,8 @@ import app from './app.js';
 import adminApp from './admin-app.js';
 import env from './config/env.js';
 import connectDatabase from './config/database.js';
-import { initSocket } from './config/socket.js';
+import { initSocket, initAdminSocket } from './config/socket.js';
+import adminNotificationService from './modules/admin/admin-notification.service.js';
 import logger from './shared/logger/index.js';
 import subscriptionService from './modules/subscription/subscription.service.js';
 import userService from './modules/user/user.service.js';
@@ -67,7 +68,11 @@ const startServer = async () => {
 
     // 6. Admin API on its own port (local setup; in production it is a separate service)
     if (env.ADMIN_PORT) {
-      http.createServer(adminApp).listen(env.ADMIN_PORT, () => {
+      const adminServer = http.createServer(adminApp);
+      initAdminSocket(adminServer);
+      adminNotificationService.startRealtimeBroadcast();
+
+      adminServer.listen(env.ADMIN_PORT, () => {
         logger.info(`BuddyLink admin server running at http://localhost:${env.ADMIN_PORT}`);
       });
     }

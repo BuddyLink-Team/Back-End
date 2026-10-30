@@ -274,43 +274,19 @@ class ChildRepository {
   }
 
   /**
-   * Count active children by age groups (0-2, 3-5, 6-10, 11+)
-   * @returns {Promise<Array<{ group: string, count: number }>>}
+   * Count active children by birth date groups
+   * @param {Array<{ key: string, bornAfter: Date|null }>} groups - Youngest first; the last one takes everyone left
+   * @returns {Promise<Array<{ key: string, count: number }>>}
    */
-  async countByAgeGroups() {
-    const now = new Date();
-    const d3YearsAgo = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
-    const d6YearsAgo = new Date(now.getFullYear() - 6, now.getMonth(), now.getDate());
-    const d11YearsAgo = new Date(now.getFullYear() - 11, now.getMonth(), now.getDate());
-
+  async countByBirthDateGroups(groups) {
+    const branches = groups
+      .filter((group) => group.bornAfter)
+      .map((group) => ({ case: { $gt: ['$dateOfBirth', group.bornAfter] }, then: group.key }));
     const rows = await Child.aggregate([
       { $match: { isArchived: false, dateOfBirth: { $ne: null } } },
-      {
-        $project: {
-          ageGroup: {
-            $cond: [
-              { $gt: ['$dateOfBirth', d3YearsAgo] },
-              '0-2 tuổi',
-              {
-                $cond: [
-                  { $gt: ['$dateOfBirth', d6YearsAgo] },
-                  '3-5 tuổi',
-                  {
-                    $cond: [
-                      { $gt: ['$dateOfBirth', d11YearsAgo] },
-                      '6-10 tuổi',
-                      '11+ tuổi',
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      },
-      { $group: { _id: '$ageGroup', count: { $sum: 1 } } },
+      { $group: { _id: { $switch: { branches, default: groups[groups.length - 1].key } }, count: { $sum: 1 } } },
     ]);
-    return rows.map((r) => ({ group: r._id, count: r.count }));
+    return rows.map((row) => ({ key: row._id, count: row.count }));
   }
 }
 

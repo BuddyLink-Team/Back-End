@@ -89,7 +89,6 @@ router.get('/notifications', validate(listAdminNotificationsValidation), adminCo
 router.get('/notifications/unread-count', adminController.getUnreadNotificationCount);
 router.patch('/notifications/read-all', validate(readAllAdminNotificationsValidation), adminController.markAllNotificationsAsRead);
 router.patch('/notifications/:id/read', validate(mongoIdParamValidation), adminController.markNotificationAsRead);
-router.post('/notifications/test', adminController.triggerTestNotification);
 
 export default router;
 

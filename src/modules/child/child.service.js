@@ -6,7 +6,7 @@ import userService from '../user/user.service.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { startTransactionIfSupported } from '../../shared/helpers/transaction.helper.js';
 import { ChildResponseDTO, ChildPublicProfileDTO } from './child.dto.js';
-import { CHILD_EDITABLE_FIELDS } from './child.constants.js';
+import { CHILD_AGE_GROUPS, CHILD_EDITABLE_FIELDS } from './child.constants.js';
 // Repository, not ConnectionService: that service imports this one
 import connectionRepository from '../connection/connection.repository.js';
 import { CONNECTION_STATUS, VIEWER_CONNECTION_STATUS } from '../connection/connection.constants.js';
@@ -450,15 +450,6 @@ class ChildService {
   }
 
   /**
-   * Total active children count
-   * @param {Date} [date]
-   * @returns {Promise<number>}
-   */
-  async getTotalChildCount(date) {
-    return childRepository.countActiveBeforeDate(date);
-  }
-
-  /**
    * Count distinct parents who created at least one active child profile on or before a date
    * @param {Date} [date]
    * @returns {Promise<number>}
@@ -472,18 +463,16 @@ class ChildService {
    * @returns {Promise<Array<{ group: string, count: number }>>}
    */
   async getChildAgeGroupStats() {
-    const defaultGroups = [
-      { group: '0-2 tuổi', count: 0 },
-      { group: '3-5 tuổi', count: 0 },
-      { group: '6-10 tuổi', count: 0 },
-      { group: '11+ tuổi', count: 0 },
-    ];
-    const stats = await childRepository.countByAgeGroups();
-    const map = new Map(stats.map((s) => [s.group, s.count]));
-    return defaultGroups.map((g) => ({
-      group: g.group,
-      count: map.get(g.group) || 0,
+    const now = new Date();
+    const groups = CHILD_AGE_GROUPS.map(({ label, bornAfterYears }) => ({
+      key: label,
+      bornAfter: bornAfterYears
+        ? new Date(now.getFullYear() - bornAfterYears, now.getMonth(), now.getDate())
+        : null,
     }));
+    const rows = await childRepository.countByBirthDateGroups(groups);
+    const countByKey = new Map(rows.map((row) => [row.key, row.count]));
+    return CHILD_AGE_GROUPS.map(({ label }) => ({ group: label, count: countByKey.get(label) || 0 }));
   }
 }
 

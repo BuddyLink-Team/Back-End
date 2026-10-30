@@ -231,15 +231,6 @@ class UserService {
   }
 
   /**
-   * Active parent accounts as of a date
-   * @param {Date} [asOfDate]
-   * @returns {Promise<number>}
-   */
-  async countActiveParents(asOfDate) {
-    return userRepository.countActiveParents(asOfDate);
-  }
-
-  /**
    * Aggregate new parent signups grouped by period
    * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string }} params
    * @returns {Promise<Array<{ period: string, count: number }>>}

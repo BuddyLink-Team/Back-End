@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import logger from '../shared/logger/index.js';
 import gamificationService from '../modules/gamification/gamification.service.js';
 import { GAMIFICATION_TIMEZONE } from '../modules/gamification/gamification.constants.js';
+import { emitSystemEvent, SYSTEM_EVENTS } from '../shared/events/system.events.js';
 
 // Every Monday at 00:00 (Vietnam time): close the previous week
 const SCHEDULE = '0 0 * * 1';
@@ -20,6 +21,7 @@ export const runGamificationJob = async () => {
     await gamificationService.reconcileAchievements();
   } catch (error) {
     logger.error(`[GamificationJob] Failed: ${error.message}`);
+    void emitSystemEvent(SYSTEM_EVENTS.CRON_JOB_FAILED, { jobName: 'GamificationJob', error: error.message });
   } finally {
     isRunning = false;
   }

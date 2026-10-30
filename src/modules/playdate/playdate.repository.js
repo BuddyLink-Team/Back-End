@@ -657,6 +657,7 @@ class PlaydateRepository {
 
     const filter = andConditions.length > 1 ? { $and: andConditions } : andConditions[0] || {};
 
+    // The list only shows the number of participants, so they are not populated
     const [items, total] = await Promise.all([
       Playdate.find(filter)
         .sort({ scheduledDate: -1, createdAt: -1 })
@@ -671,30 +672,34 @@ class PlaydateRepository {
   }
 
   /**
-   * Count playdates created on or before a date
-   * @param {Date} [date]
+   * Playdates created between two instants
+   * @param {Date} fromDate
+   * @param {Date} toDate
    * @returns {Promise<number>}
    */
-  async countBeforeDate(date) {
-    const filter = {};
-    if (date) filter.createdAt = { $lte: date };
-    return Playdate.countDocuments(filter);
+  async countCreatedBetween(fromDate, toDate) {
+    return Playdate.countDocuments({ createdAt: { $gte: fromDate, $lte: toDate } });
   }
 
   /**
-   * Count distinct parents who hosted or participated in a playdate on or before a date
+   * Count distinct parents who hosted a playdate or accepted an invitation, on or before a date.
+   * Cancelled playdates and invitations left unanswered or declined do not count.
    * @param {Date} [date]
    * @returns {Promise<number>}
    */
   async countDistinctParentsWithPlaydateBeforeDate(date) {
-    const filter = {};
+    const filter = { status: { $ne: PLAYDATE_STATUS.CANCELLED } };
     if (date) filter.createdAt = { $lte: date };
     const [hosts, participants] = await Promise.all([
       Playdate.distinct('hostParentId', filter),
-      Playdate.distinct('participants.parentId', filter),
+      Playdate.aggregate([
+        { $match: { ...filter, 'participants.status': PARTICIPANT_STATUS.ACCEPTED } },
+        { $unwind: '$participants' },
+        { $match: { 'participants.status': PARTICIPANT_STATUS.ACCEPTED } },
+        { $group: { _id: '$participants.parentId' } },
+      ]),
     ]);
-    const set = new Set([...hosts.map(String), ...participants.map(String)]);
-    return set.size;
+    return new Set([...hosts.map(String), ...participants.map((row) => String(row._id))]).size;
   }
 
   /**

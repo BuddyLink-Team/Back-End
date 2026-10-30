@@ -111,6 +111,7 @@ class AIAssistantRepository {
    */
   async countUserMessagesBetween(fromDate, toDate) {
     const rows = await AIChatSession.aggregate([
+      { $match: { messages: { $elemMatch: { role: 'user', timestamp: { $gte: fromDate, $lte: toDate } } } } },
       { $unwind: '$messages' },
       {
         $match: {
@@ -118,22 +119,6 @@ class AIAssistantRepository {
           'messages.timestamp': { $gte: fromDate, $lte: toDate },
         },
       },
-      { $count: 'count' },
-    ]);
-    return rows[0]?.count || 0;
-  }
-
-  /**
-   * Count user messages on or before a date
-   * @param {Date} [date]
-   * @returns {Promise<number>}
-   */
-  async countUserMessagesBeforeDate(date) {
-    const match = { 'messages.role': 'user' };
-    if (date) match['messages.timestamp'] = { $lte: date };
-    const rows = await AIChatSession.aggregate([
-      { $unwind: '$messages' },
-      { $match: match },
       { $count: 'count' },
     ]);
     return rows[0]?.count || 0;
@@ -149,6 +134,7 @@ class AIAssistantRepository {
    */
   async aggregateAiUsageByPeriod(fromDate, toDate, dateFormat, timeZone) {
     const rows = await AIChatSession.aggregate([
+      { $match: { messages: { $elemMatch: { role: 'user', timestamp: { $gte: fromDate, $lte: toDate } } } } },
       { $unwind: '$messages' },
       {
         $match: {
@@ -171,11 +157,12 @@ class AIAssistantRepository {
    * Find top parents by AI requests in period
    * @param {Date} fromDate
    * @param {Date} toDate
-   * @param {number} [limit=5]
+   * @param {number} limit
    * @returns {Promise<Array<{ parentId: ObjectId, requestCount: number }>>}
    */
-  async getTopParentsByUsage(fromDate, toDate, limit = 5) {
+  async getTopParentsByUsage(fromDate, toDate, limit) {
     const rows = await AIChatSession.aggregate([
+      { $match: { messages: { $elemMatch: { role: 'user', timestamp: { $gte: fromDate, $lte: toDate } } } } },
       { $unwind: '$messages' },
       {
         $match: {

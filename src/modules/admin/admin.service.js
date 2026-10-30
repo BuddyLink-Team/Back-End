@@ -7,13 +7,21 @@ import connectionService from '../connection/connection.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import aiAssistantService from '../ai-assistant/ai-assistant.service.js';
-import adminNotificationRepository from './admin-notification.repository.js';
-import { getAdminIO } from '../../config/socket.js';
+import adminNotificationService from './admin-notification.service.js';
 import env from '../../config/env.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES, PAGINATION } from '../../shared/constants/index.js';
 import { getZonedParts, getZonedDayRange } from '../../shared/helpers/date.helper.js';
-import { CHILD_VISIBILITY, LOGIN_METHODS, REVENUE_DEFAULT_MONTHS } from './admin.constants.js';
+import {
+  ADMIN_NOTIFICATION_FILTER_ALL,
+  ANALYTICS_DATE_FORMATS,
+  ANALYTICS_DEFAULT_DAYS,
+  ANALYTICS_GROUP_BY,
+  ANALYTICS_TOP_AI_PARENTS,
+  CHILD_VISIBILITY,
+  LOGIN_METHODS,
+  REVENUE_DEFAULT_MONTHS,
+} from './admin.constants.js';
 import { emitUserEvent, USER_EVENTS } from '../user/user.events.js';
 import {
   AdminUserListItemDTO,
@@ -101,50 +109,62 @@ const calculateKpi = (value, previousValue) => {
   };
 };
 
-const getWeekBucketString = (date) => {
-  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNr = (target.getUTCDay() + 6) % 7;
-  target.setUTCDate(target.getUTCDate() - dayNr + 3);
-  const firstThursday = target.getTime();
-  target.setUTCMonth(0, 1);
-  if (target.getUTCDay() !== 4) {
-    target.setUTCMonth(0, 1 + ((4 - target.getUTCDay() + 7) % 7));
-  }
-  const weekNumber = 1 + Math.ceil((firstThursday - target.getTime()) / (7 * 24 * 3600 * 1000));
-  return `${target.getUTCFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const pad2 = (value) => String(value).padStart(2, '0');
+
+// ISO 8601 week of a calendar day: the week belongs to the year of its Thursday
+const getIsoWeek = (utcDay) => {
+  const thursday = new Date(utcDay);
+  thursday.setUTCDate(thursday.getUTCDate() - ((thursday.getUTCDay() + 6) % 7) + 3);
+  const isoYear = thursday.getUTCFullYear();
+  const firstWeekThursday = new Date(Date.UTC(isoYear, 0, 4));
+  firstWeekThursday.setUTCDate(firstWeekThursday.getUTCDate() - ((firstWeekThursday.getUTCDay() + 6) % 7) + 3);
+  return { isoYear, week: 1 + Math.round((thursday - firstWeekThursday) / (7 * DAY_MS)) };
 };
 
-const generatePeriodBuckets = (start, end, groupBy, timeZone = env.APP_TIMEZONE || 'Asia/Ho_Chi_Minh') => {
-  if (groupBy === 'month') {
-    return listMonths(start, end);
+// Key (same as the MongoDB ANALYTICS_DATE_FORMATS) and display label of the period a calendar day falls in
+const toAnalyticsPeriod = (utcDay, groupBy) => {
+  const year = utcDay.getUTCFullYear();
+  const month = pad2(utcDay.getUTCMonth() + 1);
+  const day = pad2(utcDay.getUTCDate());
+  if (groupBy === ANALYTICS_GROUP_BY.MONTH) {
+    return { period: `${year}-${month}`, label: `T${utcDay.getUTCMonth() + 1}/${year}` };
   }
-
-  const buckets = [];
-  const current = new Date(start);
-  const endMs = end.getTime();
-
-  if (groupBy === 'week') {
-    while (current.getTime() <= endMs) {
-      const weekStr = getWeekBucketString(current);
-      if (!buckets.includes(weekStr)) {
-        buckets.push(weekStr);
-      }
-      current.setDate(current.getDate() + 7);
-    }
-    return buckets;
+  if (groupBy === ANALYTICS_GROUP_BY.WEEK) {
+    const { isoYear, week } = getIsoWeek(utcDay);
+    return { period: `${isoYear}-W${pad2(week)}`, label: `Tuần ${week}/${isoYear}` };
   }
-
-  // default 'day'
-  while (current.getTime() <= endMs) {
-    const parts = getZonedParts(current, timeZone);
-    const dayStr = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
-    if (!buckets.includes(dayStr)) {
-      buckets.push(dayStr);
-    }
-    current.setDate(current.getDate() + 1);
-  }
-  return buckets;
+  return { period: `${year}-${month}-${day}`, label: `${day}/${month}` };
 };
+
+// Every period touched by a range, in APP_TIMEZONE, in order: those without data still show as 0
+const listAnalyticsPeriods = (start, end, groupBy) => {
+  const first = getZonedParts(start);
+  const last = getZonedParts(end);
+  const lastDayMs = Date.UTC(last.year, last.month - 1, last.day);
+  const periods = new Map();
+  for (let dayMs = Date.UTC(first.year, first.month - 1, first.day); dayMs <= lastDayMs; dayMs += DAY_MS) {
+    const period = toAnalyticsPeriod(new Date(dayMs), groupBy);
+    if (!periods.has(period.period)) periods.set(period.period, period);
+  }
+  return [...periods.values()];
+};
+
+// Range of the analytics: both bounds are whole days in APP_TIMEZONE, by default the last days up to today
+const toAnalyticsRange = ({ fromDate, toDate }) => {
+  const today = getZonedParts(new Date());
+  const end =
+    toDateBound(toDate, { endOfDay: true }) ||
+    getZonedDayRange(`${today.year}-${pad2(today.month)}-${pad2(today.day)}`).end;
+  const start = toDateBound(fromDate);
+  if (start) return { start, end };
+
+  const lastDay = getZonedParts(end);
+  const firstDay = new Date(Date.UTC(lastDay.year, lastDay.month - 1, lastDay.day - (ANALYTICS_DEFAULT_DAYS - 1)));
+  return { start: getZonedDayRange(firstDay.toISOString().slice(0, 10)).start, end };
+};
+
+const toCountByPeriod = (rows) => new Map(rows.map((row) => [row.period, row.count]));
 
 class AdminService {
   /**
@@ -663,31 +683,23 @@ class AdminService {
    * detailed section breakdowns, and conversion funnel
    * @param {{ fromDate?: string, toDate?: string, groupBy?: 'day'|'week'|'month' }} query
    */
-  async getAnalytics({ fromDate, toDate, groupBy = 'day' } = {}) {
-    const timeZone = env.APP_TIMEZONE || 'Asia/Ho_Chi_Minh';
-    const end = toDateBound(toDate, { endOfDay: true }) || new Date();
-    let start = toDateBound(fromDate);
-    if (!start) {
-      // Default: last 30 days
-      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-      start = new Date(end.getTime() - thirtyDaysMs);
-    }
+  async getAnalytics({ fromDate, toDate, groupBy = ANALYTICS_GROUP_BY.DAY } = {}) {
+    const timeZone = env.APP_TIMEZONE;
+    const { start, end } = toAnalyticsRange({ fromDate, toDate });
 
     // Previous period of equal length
     const durationMs = end.getTime() - start.getTime();
     const prevEnd = new Date(start.getTime() - 1);
     const prevStart = new Date(prevEnd.getTime() - durationMs);
 
-    const dateFormat = groupBy === 'month' ? '%Y-%m' : groupBy === 'week' ? '%Y-W%V' : '%Y-%m-%d';
+    const dateFormat = ANALYTICS_DATE_FORMATS[groupBy];
+    const periods = listAnalyticsPeriods(start, end, groupBy);
 
-    // Fetch Overview KPIs in parallel
     const [
       totalParentsVal,
       totalParentsPrev,
       newParentsVal,
       newParentsPrev,
-      activeUsersVal,
-      activeUsersPrev,
       totalChildrenVal,
       totalChildrenPrev,
       totalPlaydatesVal,
@@ -705,17 +717,15 @@ class AdminService {
       userService.countParentsBeforeDate(prevEnd),
       userService.countNewParentsBetween(start, end),
       userService.countNewParentsBetween(prevStart, prevEnd),
-      userService.countActiveParents(end),
-      userService.countActiveParents(prevEnd),
       childService.countActiveBeforeDate(end),
       childService.countActiveBeforeDate(prevEnd),
-      playdateService.countBeforeDate(end),
-      playdateService.countBeforeDate(prevEnd),
-      connectionService.countAcceptedBeforeDate(end),
-      connectionService.countAcceptedBeforeDate(prevEnd),
-      subscriptionService.countActivePaid(end),
-      subscriptionService.countActivePaid(prevEnd),
-      subscriptionService.getRevenueMetrics({ fromDate: start, toDate: end }),
+      playdateService.countCreatedBetween(start, end),
+      playdateService.countCreatedBetween(prevStart, prevEnd),
+      connectionService.countAcceptedBetween(start, end),
+      connectionService.countAcceptedBetween(prevStart, prevEnd),
+      subscriptionService.countParentsWithPremiumAt(end),
+      subscriptionService.countParentsWithPremiumAt(prevEnd),
+      subscriptionService.getRevenueMetrics({ fromDate: start, toDate: end, dateFormat }),
       subscriptionService.getRevenueMetrics({ fromDate: prevStart, toDate: prevEnd }),
       aiAssistantService.countAiMessagesBetween(start, end),
       aiAssistantService.countAiMessagesBetween(prevStart, prevEnd),
@@ -724,21 +734,20 @@ class AdminService {
     const overview = {
       totalParents: calculateKpi(totalParentsVal, totalParentsPrev),
       newParents: calculateKpi(newParentsVal, newParentsPrev),
-      activeUsers: calculateKpi(activeUsersVal, activeUsersPrev),
       totalChildProfiles: calculateKpi(totalChildrenVal, totalChildrenPrev),
       totalPlaydates: calculateKpi(totalPlaydatesVal, totalPlaydatesPrev),
       acceptedConnections: calculateKpi(acceptedConnectionsVal, acceptedConnectionsPrev),
       activePremiumSubscriptions: calculateKpi(activePremiumVal, activePremiumPrev),
       totalRevenue: calculateKpi(revenueMetricsVal.totalRevenue, revenueMetricsPrev.totalRevenue),
+      successfulTransactions: calculateKpi(
+        revenueMetricsVal.successfulTransactions,
+        revenueMetricsPrev.successfulTransactions
+      ),
       aiUsage: calculateKpi(aiUsageVal, aiUsagePrev),
     };
 
-    // Detailed stats sections
-    const buckets = generatePeriodBuckets(start, end, groupBy, timeZone);
-
     const [
       newParentsTimeline,
-      revenueTimelineRows,
       playdateAnalytics,
       connectionAnalytics,
       subscriptionPlanCounts,
@@ -747,59 +756,62 @@ class AdminService {
       parentsWithChildrenCount,
       parentsWithConnectionCount,
       parentsWithPlaydateCount,
+      payingParentsCount,
     ] = await Promise.all([
       userService.getNewParentsTimeline({ fromDate: start, toDate: end, dateFormat, timeZone }),
-      subscriptionService.sumSuccessfulPaidByPeriod({ fromDate: start, toDate: end, dateFormat, timeZone }),
       playdateService.getPlaydateAnalytics({ fromDate: start, toDate: end, dateFormat, timeZone }),
       connectionService.getConnectionAnalytics({ fromDate: start, toDate: end }),
       subscriptionService.countActiveByPlan(end),
-      aiAssistantService.getAiAnalytics({ fromDate: start, toDate: end, dateFormat, timeZone }),
+      aiAssistantService.getAiAnalytics({
+        fromDate: start,
+        toDate: end,
+        dateFormat,
+        timeZone,
+        topLimit: ANALYTICS_TOP_AI_PARENTS,
+      }),
       childService.getChildAgeGroupStats(),
       childService.countDistinctParentsWithActiveChildrenBeforeDate(end),
       connectionService.countDistinctParentsWithConnectionBeforeDate(end),
       playdateService.countDistinctParentsWithPlaydateBeforeDate(end),
+      subscriptionService.countPayingParentsUntil(end),
     ]);
 
-    // Format User Growth timeline
-    const userGrowthMap = new Map(newParentsTimeline.map((r) => [r.period, r.count]));
-    const userGrowthTimeline = buckets.map((period) => ({
+    const newParentsByPeriod = toCountByPeriod(newParentsTimeline);
+    const userGrowthTimeline = periods.map(({ period, label }) => ({
       period,
-      count: userGrowthMap.get(period) || 0,
+      label,
+      count: newParentsByPeriod.get(period) || 0,
     }));
 
-    // Format Revenue timeline
-    const revenueMap = new Map(revenueTimelineRows.map((r) => [r.period, r]));
-    const revenueTimeline = buckets.map((period) => ({
+    const revenueByPeriod = new Map(revenueMetricsVal.revenueByPeriod.map((row) => [row.period, row]));
+    const revenueTimeline = periods.map(({ period, label }) => ({
       period,
-      revenue: revenueMap.get(period)?.revenue || 0,
-      transactionCount: revenueMap.get(period)?.transactionCount || 0,
+      label,
+      revenue: revenueByPeriod.get(period)?.revenue || 0,
+      transactionCount: revenueByPeriod.get(period)?.transactionCount || 0,
     }));
 
-    // Format Playdate timeline
-    const playdateMap = new Map(playdateAnalytics.timeline.map((r) => [r.period, r.count]));
-    const playdateTimeline = buckets.map((period) => ({
+    const playdatesByPeriod = toCountByPeriod(playdateAnalytics.timeline);
+    const playdateTimeline = periods.map(({ period, label }) => ({
       period,
-      count: playdateMap.get(period) || 0,
+      label,
+      count: playdatesByPeriod.get(period) || 0,
     }));
 
-    // Format AI timeline
-    const aiMap = new Map(aiAnalytics.timeline.map((r) => [r.period, r.count]));
-    const aiTimeline = buckets.map((period) => ({
+    const aiByPeriod = toCountByPeriod(aiAnalytics.timeline);
+    const aiTimeline = periods.map(({ period, label }) => ({
       period,
-      count: aiMap.get(period) || 0,
+      label,
+      count: aiByPeriod.get(period) || 0,
     }));
 
-    // Conversion Funnel
     const funnel = [
       { step: 'registered', label: 'Đăng ký tài khoản', count: totalParentsVal },
       { step: 'withChildProfile', label: 'Tạo hồ sơ bé', count: parentsWithChildrenCount },
       { step: 'firstConnection', label: 'Có kết nối', count: parentsWithConnectionCount },
       { step: 'firstPlaydate', label: 'Tham gia playdate', count: parentsWithPlaydateCount },
-      { step: 'paid', label: 'Nâng cấp Premium', count: revenueMetricsVal.allTimePayingParents },
+      { step: 'paid', label: 'Nâng cấp Premium', count: payingParentsCount },
     ];
-
-    const conversionRate = toPercent(revenueMetricsVal.allTimePayingParents, totalParentsVal);
-    const churnRate = toPercent(revenueMetricsVal.churnedParents, revenueMetricsVal.premiumAtStart);
 
     return {
       overview,
@@ -816,8 +828,8 @@ class AdminService {
       },
       conversion: {
         funnel,
-        conversionRate,
-        churnRate,
+        conversionRate: toPercent(payingParentsCount, totalParentsVal),
+        churnRate: toPercent(revenueMetricsVal.churnedParents, revenueMetricsVal.premiumAtStart),
       },
       playdates: {
         byStatus: playdateAnalytics.byStatus,
@@ -830,7 +842,7 @@ class AdminService {
         churnedParents: revenueMetricsVal.churnedParents,
       },
       aiUsage: {
-        totalMessagesInPeriod: aiAnalytics.totalMessagesInPeriod,
+        totalMessagesInPeriod: aiUsageVal,
         timeline: aiTimeline,
         topParents: aiAnalytics.topParents,
       },
@@ -852,9 +864,9 @@ class AdminService {
    */
   async getNotifications({ category, severity, isRead, page = 1, limit = 20, adminId }) {
     const paging = toPaging({ page, limit });
-    const { items, total } = await adminNotificationRepository.findPage({
-      category: category && category !== 'all' ? category.toLowerCase() : undefined,
-      severity: severity && severity !== 'all' ? severity.toLowerCase() : undefined,
+    const { items, total } = await adminNotificationService.getNotificationPage({
+      category: category !== ADMIN_NOTIFICATION_FILTER_ALL ? category : undefined,
+      severity: severity !== ADMIN_NOTIFICATION_FILTER_ALL ? severity : undefined,
       isRead: toOptionalBoolean(isRead),
       adminId,
       page: paging.page,
@@ -871,7 +883,7 @@ class AdminService {
    * @param {string|ObjectId} adminId
    */
   async getUnreadNotificationCount(adminId) {
-    return adminNotificationRepository.countUnread(adminId);
+    return adminNotificationService.getUnreadCount(adminId);
   }
 
   /**
@@ -880,20 +892,7 @@ class AdminService {
    * @param {string|ObjectId} adminId
    */
   async markNotificationAsRead(id, adminId) {
-    const updated = await adminNotificationRepository.markAsRead(id, adminId);
-    if (!updated) {
-      throw new AppError('Notification not found', 404, 'NOTIFICATION_NOT_FOUND');
-    }
-    try {
-      const adminIO = getAdminIO();
-      if (adminIO) {
-        const counts = await adminNotificationRepository.countUnread(adminId);
-        adminIO.to('admins').emit('admin:notification:unread-count', counts);
-      }
-    } catch {
-      // Non-blocking socket broadcast
-    }
-    return updated;
+    return adminNotificationService.markAsRead(id, adminId);
   }
 
   /**
@@ -902,57 +901,10 @@ class AdminService {
    * @param {string} [category]
    */
   async markAllNotificationsAsRead(adminId, category) {
-    const cat = category && category !== 'all' ? category.toLowerCase() : undefined;
-    const result = await adminNotificationRepository.markAllAsRead(adminId, cat);
-    try {
-      const adminIO = getAdminIO();
-      if (adminIO) {
-        const counts = await adminNotificationRepository.countUnread(adminId);
-        adminIO.to('admins').emit('admin:notification:unread-count', counts);
-      }
-    } catch {
-      // Non-blocking socket broadcast
-    }
-    return result;
-  }
-
-  /**
-   * Create and broadcast a test notification via socket
-   * @param {Object} data
-   */
-  async triggerTestNotification({
-    category = 'system',
-    type = 'test_event',
-    severity = 'info',
-    title = 'Thông báo kiểm thử Realtime',
-    message = 'Hệ thống gửi thông báo kiểm thử Socket.io thành công.',
-    entityType = 'System',
-    entityId = null,
-  } = {}) {
-    const created = await adminNotificationRepository.create({
-      category,
-      type,
-      severity,
-      title,
-      message,
-      entityType,
-      entityId,
-    });
-    const notificationObj = created.toObject ? created.toObject() : created;
-    try {
-      const adminIO = getAdminIO();
-      if (adminIO) {
-        adminIO.to('admins').emit('admin:notification:new', {
-          ...notificationObj,
-          isRead: false,
-        });
-        const counts = await adminNotificationRepository.countUnread(null);
-        adminIO.to('admins').emit('admin:notification:unread-count', counts);
-      }
-    } catch {
-      // Non-blocking socket broadcast
-    }
-    return notificationObj;
+    return adminNotificationService.markAllAsRead(
+      adminId,
+      category !== ADMIN_NOTIFICATION_FILTER_ALL ? category : undefined
+    );
   }
 }
 

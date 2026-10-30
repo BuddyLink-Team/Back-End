@@ -23,6 +23,13 @@ export const apiLimiter = buildLimiter({
   skip: (req) => req.originalUrl?.includes('/subscriptions/payments/verify/'),
 });
 
+// PayOS webhook: public route, each rejected call also writes to the database
+export const webhookLimiter = buildLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  message: 'Too many webhook requests, please try again later.',
+});
+
 // Admin portal sign-in (password guessing against the most privileged accounts)
 export const adminLoginLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000,

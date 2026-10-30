@@ -331,24 +331,14 @@ class AIAssistantService {
   }
 
   /**
-   * Count user messages on or before date
-   * @param {Date} [date]
-   * @returns {Promise<number>}
-   */
-  async countAiMessagesBeforeDate(date) {
-    return aiAssistantRepository.countUserMessagesBeforeDate(date);
-  }
-
-  /**
    * Get AI analytics with period breakdown and top parents
-   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string }} params
-   * @returns {Promise<{ totalMessagesInPeriod: number, timeline: Array<{ period: string, count: number }>, topParents: Array<Object> }>}
+   * @param {{ fromDate: Date, toDate: Date, dateFormat: string, timeZone: string, topLimit: number }} params
+   * @returns {Promise<{ timeline: Array<{ period: string, count: number }>, topParents: Array<Object> }>}
    */
-  async getAiAnalytics({ fromDate, toDate, dateFormat, timeZone }) {
-    const [totalMessagesInPeriod, timeline, topParentRows] = await Promise.all([
-      aiAssistantRepository.countUserMessagesBetween(fromDate, toDate),
+  async getAiAnalytics({ fromDate, toDate, dateFormat, timeZone, topLimit }) {
+    const [timeline, topParentRows] = await Promise.all([
       aiAssistantRepository.aggregateAiUsageByPeriod(fromDate, toDate, dateFormat, timeZone),
-      aiAssistantRepository.getTopParentsByUsage(fromDate, toDate, 5),
+      aiAssistantRepository.getTopParentsByUsage(fromDate, toDate, topLimit),
     ]);
 
     const parentIds = topParentRows.map((r) => r.parentId);
@@ -371,11 +361,7 @@ class AIAssistantService {
       };
     });
 
-    return {
-      totalMessagesInPeriod,
-      timeline,
-      topParents,
-    };
+    return { timeline, topParents };
   }
 }
 

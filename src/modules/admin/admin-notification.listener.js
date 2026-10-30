@@ -1,10 +1,11 @@
 import logger from '../../shared/logger/index.js';
-import adminNotificationRepository from './admin-notification.repository.js';
+import adminNotificationService from './admin-notification.service.js';
 import {
   ADMIN_NOTIFICATION_CATEGORIES,
+  ADMIN_NOTIFICATION_GATEWAY_ERROR_WINDOW_MS,
   ADMIN_NOTIFICATION_SEVERITY,
-} from './admin-notification.model.js';
-import { getAdminIO } from '../../config/socket.js';
+} from './admin.constants.js';
+import parentService from '../parent/parent.service.js';
 import { onUserEvent, USER_EVENTS } from '../user/user.events.js';
 import { onSubscriptionEvent, SUBSCRIPTION_EVENTS } from '../subscription/subscription.events.js';
 import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
@@ -13,41 +14,12 @@ import { onSafetyEvent, SAFETY_EVENTS } from '../safety/safety.events.js';
 import { onSystemEvent, SYSTEM_EVENTS } from '../../shared/events/system.events.js';
 
 /**
- * Broadcast notification and updated unread count to admins room
- * @param {Object} notification
- */
-const broadcastToAdmins = async (notification) => {
-  try {
-    const adminIO = getAdminIO();
-    if (!adminIO) return;
-
-    // Send the new notification
-    adminIO.to('admins').emit('admin:notification:new', {
-      ...notification,
-      isRead: false,
-    });
-
-    // Send updated unread counts
-    // For a general room broadcast, unread counts without an adminId filter count items where readBy is empty
-    const { total, byCategory } = await adminNotificationRepository.countUnread(null);
-    adminIO.to('admins').emit('admin:notification:unread-count', {
-      total,
-      byCategory,
-    });
-  } catch (err) {
-    logger.error(`[AdminNotificationListener] Socket broadcast failed: ${err.message}`);
-  }
-};
-
-/**
- * Create and broadcast an admin notification safely
+ * Create a notification without letting a failure reach the emitting service
  * @param {Object} data
  */
 const createAndBroadcast = async (data) => {
   try {
-    const created = await adminNotificationRepository.create(data);
-    const notificationObj = created.toObject ? created.toObject() : created;
-    await broadcastToAdmins(notificationObj);
+    await adminNotificationService.createNotification(data);
   } catch (err) {
     logger.error(`[AdminNotificationListener] Failed to create notification: ${err.message}`);
   }
@@ -127,12 +99,13 @@ export const registerAdminNotificationListeners = () => {
   });
 
   onSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_EXPIRED, async (payload) => {
+    const parent = payload.parentId ? await parentService.getParentById(payload.parentId).catch(() => null) : null;
     await createAndBroadcast({
       category: ADMIN_NOTIFICATION_CATEGORIES.PAYMENTS,
       type: 'subscription_expired',
       severity: ADMIN_NOTIFICATION_SEVERITY.INFO,
       title: 'Thuê bao đã hết hạn',
-      message: `Gói ${payload.planName || payload.planCode || ''} của phụ huynh ${payload.parentName || ''} đã hết hạn.`,
+      message: `Gói ${payload.planName || payload.planCode || ''} của phụ huynh ${parent?.fullName || 'không xác định'} đã hết hạn.`,
       entityType: 'Subscription',
       entityId: payload.subscriptionId,
     });
@@ -215,15 +188,22 @@ export const registerAdminNotificationListeners = () => {
   });
 
   onSystemEvent(SYSTEM_EVENTS.PAYMENT_GATEWAY_ERROR, async (payload) => {
-    await createAndBroadcast({
-      category: ADMIN_NOTIFICATION_CATEGORIES.SYSTEM,
-      type: 'payment_gateway_error',
-      severity: ADMIN_NOTIFICATION_SEVERITY.CRITICAL,
-      title: 'Lỗi cổng thanh toán PayOS',
-      message: `Lỗi xử lý webhook PayOS: ${payload.error || 'Xác thực dữ liệu thất bại'}.`,
-      entityType: 'Payment',
-      entityId: null,
-    });
+    try {
+      await adminNotificationService.createThrottledNotification(
+        {
+          category: ADMIN_NOTIFICATION_CATEGORIES.SYSTEM,
+          type: 'payment_gateway_error',
+          severity: ADMIN_NOTIFICATION_SEVERITY.CRITICAL,
+          title: 'Lỗi cổng thanh toán PayOS',
+          message: `Lỗi xử lý webhook PayOS: ${payload.error || 'Xác thực dữ liệu thất bại'}.`,
+          entityType: 'System',
+          entityId: null,
+        },
+        ADMIN_NOTIFICATION_GATEWAY_ERROR_WINDOW_MS
+      );
+    } catch (err) {
+      logger.error(`[AdminNotificationListener] Failed to create notification: ${err.message}`);
+    }
   });
 
   logger.info('Admin notification listeners registered successfully');

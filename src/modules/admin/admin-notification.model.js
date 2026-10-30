@@ -1,19 +1,9 @@
 import mongoose from 'mongoose';
-
-export const ADMIN_NOTIFICATION_CATEGORIES = Object.freeze({
-  USERS: 'users',
-  PAYMENTS: 'payments',
-  PLAYDATES: 'playdates',
-  CONNECTIONS: 'connections',
-  SAFETY: 'safety',
-  SYSTEM: 'system',
-});
-
-export const ADMIN_NOTIFICATION_SEVERITY = Object.freeze({
-  INFO: 'info',
-  WARNING: 'warning',
-  CRITICAL: 'critical',
-});
+import {
+  ADMIN_NOTIFICATION_CATEGORIES,
+  ADMIN_NOTIFICATION_SEVERITY,
+  ADMIN_NOTIFICATION_TTL_SECONDS,
+} from './admin.constants.js';
 
 const adminNotificationSchema = new mongoose.Schema(
   {
@@ -21,18 +11,15 @@ const adminNotificationSchema = new mongoose.Schema(
       type: String,
       enum: Object.values(ADMIN_NOTIFICATION_CATEGORIES),
       required: true,
-      index: true,
     },
     type: {
       type: String,
       required: true,
-      index: true,
     },
     severity: {
       type: String,
       enum: Object.values(ADMIN_NOTIFICATION_SEVERITY),
       default: ADMIN_NOTIFICATION_SEVERITY.INFO,
-      index: true,
     },
     title: {
       type: String,
@@ -75,8 +62,9 @@ const adminNotificationSchema = new mongoose.Schema(
 );
 
 // 90-day TTL index
-adminNotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+adminNotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: ADMIN_NOTIFICATION_TTL_SECONDS });
 adminNotificationSchema.index({ category: 1, createdAt: -1 });
+adminNotificationSchema.index({ type: 1, createdAt: -1 });
 adminNotificationSchema.index({ readBy: 1 });
 
 const AdminNotification =

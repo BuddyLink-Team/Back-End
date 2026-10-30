@@ -249,14 +249,16 @@ class ConnectionRepository {
   }
 
   /**
-   * Count accepted connections on or before a date
-   * @param {Date} [date]
+   * Connections accepted between two instants (and still accepted)
+   * @param {Date} fromDate
+   * @param {Date} toDate
    * @returns {Promise<number>}
    */
-  async countAcceptedBeforeDate(date) {
-    const filter = { status: CONNECTION_STATUS.ACCEPTED };
-    if (date) filter.connectedAt = { $lte: date };
-    return Connection.countDocuments(filter);
+  async countAcceptedBetween(fromDate, toDate) {
+    return Connection.countDocuments({
+      status: CONNECTION_STATUS.ACCEPTED,
+      connectedAt: { $gte: fromDate, $lte: toDate },
+    });
   }
 
   /**
@@ -272,11 +274,11 @@ class ConnectionRepository {
   }
 
   /**
-   * Connection metrics in a date range (sent, accepted, declined, pending, removed, acceptance rate)
+   * Connection requests of a date range, by status
    * @param {{ fromDate?: Date, toDate?: Date }} params
-   * @returns {Promise<{ sent: number, accepted: number, declined: number, pending: number, removed: number, acceptanceRate: number }>}
+   * @returns {Promise<{ sent: number, accepted: number, declined: number, pending: number, removed: number }>}
    */
-  async getConnectionAnalytics({ fromDate, toDate } = {}) {
+  async countRequestsByStatus({ fromDate, toDate } = {}) {
     const match = {};
     if (fromDate || toDate) {
       match.createdAt = {};
@@ -288,13 +290,13 @@ class ConnectionRepository {
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
     const countOf = (status) => rows.find((r) => r._id === status)?.count || 0;
-    const sent = rows.reduce((sum, r) => sum + r.count, 0);
-    const accepted = countOf(CONNECTION_STATUS.ACCEPTED);
-    const declined = countOf(CONNECTION_STATUS.DECLINED);
-    const pending = countOf(CONNECTION_STATUS.PENDING);
-    const removed = countOf(CONNECTION_STATUS.REMOVED);
-    const acceptanceRate = sent > 0 ? Number(((accepted / sent) * 100).toFixed(1)) : 0;
-    return { sent, accepted, declined, pending, removed, acceptanceRate };
+    return {
+      sent: rows.reduce((sum, r) => sum + r.count, 0),
+      accepted: countOf(CONNECTION_STATUS.ACCEPTED),
+      declined: countOf(CONNECTION_STATUS.DECLINED),
+      pending: countOf(CONNECTION_STATUS.PENDING),
+      removed: countOf(CONNECTION_STATUS.REMOVED),
+    };
   }
 }
 
