@@ -35,6 +35,18 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    strikeCount: {
+      type: Number,
+      default: 0,
+    },
+    suspensionUntil: {
+      type: Date,
+      default: null,
+    },
+    banReason: {
+      type: String,
+      default: null,
+    },
     deletedAt: {
       type: Date,
       default: null,
@@ -49,6 +61,7 @@ const userSchema = new mongoose.Schema(
 // Indexes
 userSchema.index({ role: 1, isActive: 1 });
 userSchema.index({ deletedAt: 1 });
+userSchema.index({ suspensionUntil: 1 });
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 

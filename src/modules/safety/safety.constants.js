@@ -11,6 +11,13 @@ export const REPORT_STATUS = Object.freeze({
   DISMISSED: 'dismissed',
 });
 
+export const REPORT_SEVERITY = Object.freeze({
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+  CRITICAL: 'critical',
+});
+
 export const REPORT_CATEGORIES = Object.freeze({
   HARASSMENT: 'harassment',
   INAPPROPRIATE_CONTENT: 'inappropriate_content',
@@ -19,6 +26,48 @@ export const REPORT_CATEGORIES = Object.freeze({
   CHILD_SAFETY: 'child_safety',
   NO_SHOW: 'no_show',
   OTHER: 'other',
+});
+
+export const CATEGORY_TO_SEVERITY = Object.freeze({
+  [REPORT_CATEGORIES.CHILD_SAFETY]: REPORT_SEVERITY.CRITICAL,
+  [REPORT_CATEGORIES.HARASSMENT]: REPORT_SEVERITY.HIGH,
+  [REPORT_CATEGORIES.INAPPROPRIATE_CONTENT]: REPORT_SEVERITY.HIGH,
+  [REPORT_CATEGORIES.FAKE_PROFILE]: REPORT_SEVERITY.MEDIUM,
+  [REPORT_CATEGORIES.NO_SHOW]: REPORT_SEVERITY.LOW,
+  [REPORT_CATEGORIES.SPAM]: REPORT_SEVERITY.LOW,
+  [REPORT_CATEGORIES.OTHER]: REPORT_SEVERITY.MEDIUM,
+});
+
+export const OVERDUE_THRESHOLDS_HOURS = Object.freeze({
+  [REPORT_SEVERITY.CRITICAL]: 2,
+  [REPORT_SEVERITY.HIGH]: 24,
+  [REPORT_SEVERITY.MEDIUM]: 24,
+  [REPORT_SEVERITY.LOW]: 24,
+});
+
+export const REPORT_ACTION_TYPES = Object.freeze({
+  WARN: 'warn',
+  DELETE_MESSAGE: 'delete_message',
+  CANCEL_PLAYDATE: 'cancel_playdate',
+  SUSPEND: 'suspend',
+  BAN: 'ban',
+  DISMISS: 'dismiss',
+  NO_ACTION: 'no_action',
+});
+
+export const REPORT_RESOLUTION_TYPES = Object.freeze({
+  ACTION_TAKEN: 'action_taken',
+  NO_ACTION: 'no_action',
+  DISMISSED: 'dismissed',
+});
+
+export const REPORT_HISTORY_EVENT_TYPES = Object.freeze({
+  STATUS_CHANGE: 'status_change',
+  CLAIM: 'claim',
+  TAKEOVER: 'takeover',
+  SEVERITY_CHANGE: 'severity_change',
+  ACTION_APPLIED: 'action_applied',
+  REOPEN: 'reopen',
 });
 
 export const REPORT_LIMITS = Object.freeze({

@@ -451,3 +451,132 @@ export class AdminTransactionDTO {
     };
   }
 }
+
+
+export class AdminReportListItemDTO {
+  static toResponse({ report, reporterParent, reportedParent, reportedUser, assignedUser, isOverdue }) {
+    return {
+      id: report._id.toString(),
+      category: report.category,
+      severity: report.severity,
+      targetType: report.targetType,
+      status: report.status,
+      reason: report.reason || '',
+      reporter: {
+        id: (reporterParent?._id || report.reporterId)?.toString(),
+        fullName: reporterParent?.fullName || 'Người dùng BuddyLink',
+        avatarUrl: reporterParent?.avatarUrl || '',
+      },
+      reportedUser: {
+        id: (reportedParent?._id || report.reportedUserId)?.toString(),
+        fullName: reportedParent?.fullName || 'Người dùng BuddyLink',
+        avatarUrl: reportedParent?.avatarUrl || '',
+        strikeCount: reportedUser?.strikeCount || 0,
+        isLocked: reportedUser ? !reportedUser.isActive : false,
+      },
+      assignedTo: assignedUser
+        ? {
+            id: assignedUser._id.toString(),
+            fullName: assignedUser.fullName || assignedUser.email,
+            email: assignedUser.email,
+          }
+        : null,
+      isOverdue: Boolean(isOverdue),
+      resolution: report.resolution || null,
+      createdAt: report.createdAt,
+      updatedAt: report.updatedAt,
+    };
+  }
+}
+
+export class AdminReportDetailDTO {
+  static toResponse({
+    report,
+    reporterParent,
+    reporterUser,
+    reportedParent,
+    reportedUser,
+    assignedUser,
+    resolvedByUser,
+    targetContext,
+    relatedOpenReports = [],
+    isOverdue,
+    totalReportsSubmitted = 0,
+    previousSanctions = [],
+  }) {
+    return {
+      id: report._id.toString(),
+      category: report.category,
+      severity: report.severity,
+      targetType: report.targetType,
+      status: report.status,
+      reason: report.reason || '',
+      description: report.description || '',
+      evidenceUrls: report.evidenceUrls || [],
+      reporter: {
+        id: (reporterParent?._id || report.reporterId)?.toString(),
+        fullName: reporterParent?.fullName || 'Người dùng BuddyLink',
+        email: reporterUser?.email || '',
+        phone: reporterUser?.phone || '',
+        avatarUrl: reporterParent?.avatarUrl || '',
+        totalReportsSubmitted,
+      },
+      reportedUser: {
+        id: (reportedParent?._id || report.reportedUserId)?.toString(),
+        userId: reportedUser?._id?.toString() || reportedParent?.userId?.toString() || '',
+        fullName: reportedParent?.fullName || 'Người dùng BuddyLink',
+        email: reportedUser?.email || '',
+        phone: reportedUser?.phone || '',
+        avatarUrl: reportedParent?.avatarUrl || '',
+        strikeCount: reportedUser?.strikeCount || 0,
+        isActive: reportedUser ? reportedUser.isActive !== false : true,
+        suspensionUntil: reportedUser?.suspensionUntil || null,
+        previousSanctions,
+      },
+      targetContext: targetContext || null,
+      assignedTo: assignedUser
+        ? {
+            id: assignedUser._id.toString(),
+            fullName: assignedUser.fullName || assignedUser.email,
+            email: assignedUser.email,
+          }
+        : null,
+      isOverdue: Boolean(isOverdue),
+      actions: (report.actions || []).map((act) => ({
+        id: act._id?.toString(),
+        type: act.type,
+        params: act.params || {},
+        performedBy: act.performedBy?._id
+          ? { id: act.performedBy._id.toString(), fullName: act.performedBy.fullName || act.performedBy.email }
+          : { id: act.performedBy?.toString() },
+        performedAt: act.performedAt,
+        note: act.note || '',
+      })),
+      history: (report.history || []).map((h) => ({
+        id: h._id?.toString(),
+        eventType: h.eventType,
+        fromStatus: h.fromStatus,
+        toStatus: h.toStatus,
+        by: h.by?._id
+          ? { id: h.by._id.toString(), fullName: h.by.fullName || h.by.email }
+          : { id: h.by?.toString() },
+        at: h.at,
+        note: h.note || '',
+        metadata: h.metadata || null,
+      })),
+      relatedOpenReports,
+      resolution: report.resolution || null,
+      adminNotes: report.adminNotes || '',
+      resolvedBy: resolvedByUser
+        ? {
+            id: resolvedByUser._id.toString(),
+            fullName: resolvedByUser.fullName || resolvedByUser.email,
+            email: resolvedByUser.email,
+          }
+        : null,
+      resolvedAt: report.resolvedAt || null,
+      createdAt: report.createdAt,
+      updatedAt: report.updatedAt,
+    };
+  }
+}
