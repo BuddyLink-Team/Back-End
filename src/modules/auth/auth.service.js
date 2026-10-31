@@ -175,6 +175,7 @@ class AuthService {
       throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
     }
 
+    await userService.liftExpiredSuspension(user);
     if (!user.isActive) {
       throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
     }
@@ -285,6 +286,7 @@ class AuthService {
         },
       }));
     } else {
+      await userService.liftExpiredSuspension(user);
       if (!user.isActive) {
         throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
       }

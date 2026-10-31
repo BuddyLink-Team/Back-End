@@ -10,6 +10,9 @@ export const MESSAGE_TYPES = Object.freeze({
   SYSTEM: 'system',
 });
 
+// Shown instead of a message removed by a moderator (history, realtime and conversation preview)
+export const DELETED_MESSAGE_PLACEHOLDER = 'Tin nhắn này đã bị Quản trị viên gỡ do vi phạm quy tắc cộng đồng.';
+
 export const SOCKET_EVENTS = Object.freeze({
   JOIN_CHAT: 'join_chat',
   LEAVE_CHAT: 'leave_chat',
@@ -20,5 +23,7 @@ export const SOCKET_EVENTS = Object.freeze({
   READ_STATUS: 'read_status',
   MESSAGE_READ: 'message_read',
   CONVERSATION_UPDATED: 'conversation_updated',
+  MESSAGE_DELETED: 'message_deleted',
+  ACCOUNT_LOCKED: 'account_locked',
   ERROR: 'chat_error',
 });

@@ -6,7 +6,10 @@ import connectionService from '../connection/connection.service.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { MESSAGE_PRIVACY } from '../parent/parent.constants.js';
-import { CONVERSATION_TYPES, MESSAGE_TYPES } from './chat.constants.js';
+import { CONVERSATION_TYPES, DELETED_MESSAGE_PLACEHOLDER, MESSAGE_TYPES } from './chat.constants.js';
+
+// Messages shown on each side of a reported one
+const MESSAGE_CONTEXT_RADIUS = 5;
 
 class ChatService {
   /**
@@ -404,6 +407,87 @@ class ChatService {
       mediaUrl: result.url,
       publicId: result.publicId,
     };
+  }
+
+  /**
+   * Moderator removes a message: it stays in the history as a placeholder.
+   * The conversation preview changes first, so whoever sees the deletion also finds the new preview.
+   * @param {string|ObjectId} messageId
+   * @returns {Promise<{ message: Object|null, alreadyDeleted: boolean }>} message is null when it does not exist
+   */
+  async adminDeleteMessage(messageId) {
+    const message = await chatRepository.findMessageById(messageId);
+    if (!message) return { message: null, alreadyDeleted: false };
+    if (message.isDeleted) return { message, alreadyDeleted: true };
+
+    await chatRepository.replaceLastMessageContent(message.conversationId, message._id, DELETED_MESSAGE_PLACEHOLDER);
+    const deleted = await chatRepository.softDeleteMessage(messageId);
+    return { message: deleted || message, alreadyDeleted: !deleted };
+  }
+
+  /**
+   * What the participants of a conversation receive when one of its messages is deleted
+   * @param {{ _id: ObjectId, conversationId: ObjectId }} message
+   * @returns {Promise<{ messageId: string, conversationId: string, content: string, participantIds: string[] }>}
+   */
+  async getDeletedMessageNotice(message) {
+    const conversation = await chatRepository.findConversationDocById(message.conversationId);
+    return {
+      messageId: message._id.toString(),
+      conversationId: message.conversationId.toString(),
+      content: DELETED_MESSAGE_PLACEHOLDER,
+      participantIds: (conversation?.participants || []).map((id) => id.toString()),
+    };
+  }
+
+  watchDeletedMessages() {
+    return chatRepository.watchDeletedMessages();
+  }
+
+  /**
+   * Investigation context of a reported message: the messages around it and the message itself,
+   * whose original content stays readable to the moderator even after it is deleted.
+   * @param {string|ObjectId} messageId
+   * @returns {Promise<Object|null>} null when the message does not exist
+   */
+  async getMessageContext(messageId) {
+    const target = await chatRepository.findMessageWithSender(messageId);
+    if (!target) return null;
+
+    const { before, after } = await chatRepository.findSurroundingMessages(
+      target.conversationId,
+      target.createdAt,
+      MESSAGE_CONTEXT_RADIUS
+    );
+
+    const toItem = (message, content) => ({
+      id: message._id.toString(),
+      content,
+      mediaUrl: message.mediaUrl,
+      isDeleted: message.isDeleted,
+      createdAt: message.createdAt,
+      senderId: (message.senderId?._id || message.senderId)?.toString(),
+      senderName: message.senderId?.fullName || '',
+    });
+    const toSurroundingItem = (message) => toItem(message, message.isDeleted ? DELETED_MESSAGE_PLACEHOLDER : message.content);
+    const reportedMessage = toItem(target, target.content);
+
+    return {
+      type: 'message',
+      reportedMessage,
+      surroundingMessages: [...before.map(toSurroundingItem), reportedMessage, ...after.map(toSurroundingItem)],
+    };
+  }
+
+  /**
+   * Text of the given messages
+   * @param {Array<string|ObjectId>} messageIds
+   * @returns {Promise<Map<string, string>>} By message id
+   */
+  async getMessageContents(messageIds) {
+    if (messageIds.length === 0) return new Map();
+    const messages = await chatRepository.findMessageContents(messageIds);
+    return new Map(messages.map((message) => [message._id.toString(), message.content]));
   }
 }
 

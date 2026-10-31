@@ -1,4 +1,5 @@
 import { PARTICIPANT_STATUS } from '../playdate/playdate.constants.js';
+import { DELETED_MESSAGE_PLACEHOLDER } from './chat.constants.js';
 
 export class ChatDTO {
   static formatParticipant(participant) {
@@ -146,8 +147,9 @@ export class ChatDTO {
         : { id: senderId },
       senderId,
       type: message.type || 'text',
-      content: message.content || '',
-      mediaUrl: message.mediaUrl || null,
+      content: message.isDeleted ? DELETED_MESSAGE_PLACEHOLDER : message.content || '',
+      mediaUrl: message.isDeleted ? null : message.mediaUrl || null,
+      isDeleted: Boolean(message.isDeleted),
       isMine,
       isRead,
       readBy: message.readBy || [],

@@ -5,10 +5,11 @@ import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import SafetyDTO from './safety.dto.js';
 import { emitSafetyEvent, SAFETY_EVENTS } from './safety.events.js';
 import {
+  CATEGORY_TO_SEVERITY,
   REPORT_TARGET_TYPES,
   REPORT_LIMITS,
   REPORT_CATEGORIES,
-  REPORT_STATUS,
+  REPORT_OPEN_STATUSES,
   DEFAULT_BLOCK_REASON,
 } from './safety.constants.js';
 
@@ -103,6 +104,17 @@ class SafetyService {
     if (!parentId || otherParentIds.length === 0) return false;
     const block = await safetyRepository.findBlockBetween(parentId, otherParentIds);
     return Boolean(block);
+  }
+
+  /**
+   * Check if a parent blocked any of the given parents (their own blocks only, never the blocks against them)
+   * @param {string|ObjectId} parentId
+   * @param {Array<string|ObjectId>} otherParentIds
+   * @returns {Promise<boolean>}
+   */
+  async hasBlockedAny(parentId, otherParentIds = []) {
+    if (!parentId || otherParentIds.length === 0) return false;
+    return safetyRepository.hasBlockedAny(parentId, otherParentIds);
   }
 
   /**
@@ -225,6 +237,7 @@ class SafetyService {
       targetMessageId: targetType === REPORT_TARGET_TYPES.MESSAGE ? targetMessageId : null,
       targetPlaydateId: targetType === REPORT_TARGET_TYPES.PLAYDATE ? targetPlaydateId : null,
       category,
+      severity: CATEGORY_TO_SEVERITY[category],
       reason: (reason && reason.trim()) || category,
       description: description || '',
       evidenceUrls: evidence,
@@ -291,7 +304,54 @@ class SafetyService {
    * @returns {Promise<{ total: number, open: number }>}
    */
   async countReportsAgainstParent(parentId) {
-    return safetyRepository.countReportsAgainst(parentId, [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING]);
+    return safetyRepository.countReportsAgainst(parentId, REPORT_OPEN_STATUSES);
+  }
+
+  /**
+   * Moderation queue page (options of safetyRepository.findReportPage)
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findReportPage(options) {
+    return safetyRepository.findReportPage(options);
+  }
+
+  /**
+   * Queue counts of the admin stat strip (options of safetyRepository.getReportStats)
+   */
+  async getReportStats(options) {
+    return safetyRepository.getReportStats(options);
+  }
+
+  async getReportById(id) {
+    return safetyRepository.findReportById(id);
+  }
+
+  async getReportDocById(id) {
+    return safetyRepository.findReportDocById(id);
+  }
+
+  async getOpenReportDocsAgainst(parentId, ids) {
+    return safetyRepository.findOpenReportDocsAgainst(parentId, ids);
+  }
+
+  async getOtherReportsAgainst(parentId, excludedReportId) {
+    return safetyRepository.findOtherReportsAgainst(parentId, excludedReportId);
+  }
+
+  async countReportsFiledBy(parentId) {
+    return safetyRepository.countReportsFiledBy(parentId);
+  }
+
+  async saveReport(report) {
+    return safetyRepository.saveReport(report);
+  }
+
+  /**
+   * Migration of the reports created before they had a severity
+   * @returns {Promise<number>} Reports updated
+   */
+  async backfillReportSeverities() {
+    return safetyRepository.backfillReportSeverities();
   }
 }
 

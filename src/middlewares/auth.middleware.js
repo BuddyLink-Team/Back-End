@@ -47,6 +47,7 @@ export const authenticate = async (req, _res, next) => {
       throw new AppError("User not found", 401, "USER_NOT_FOUND");
     }
 
+    await userService.liftExpiredSuspension(user);
     if (!user.isActive) {
       throw new AppError("User account is disabled", 403, "ACCOUNT_DISABLED");
     }

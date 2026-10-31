@@ -29,6 +29,7 @@ const notificationSchema = new mongoose.Schema(
       playdateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Playdate', default: null },
       conversationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', default: null },
       badgeCode: { type: String, default: null },
+      reportId: { type: mongoose.Schema.Types.ObjectId, ref: 'Report', default: null },
     },
     isRead: {
       type: Boolean,

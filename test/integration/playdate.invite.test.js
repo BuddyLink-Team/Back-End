@@ -5,7 +5,9 @@ import Child from '../../src/modules/child/child.model.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import Notification from '../../src/modules/notification/notification.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
+import Block from '../../src/modules/safety/block.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
+import { grantPremium } from '../helpers/subscriptionHelper.js';
 
 const PASSWORD = 'Password123!';
 const DAY = 24 * 60 * 60 * 1000;
@@ -127,7 +129,113 @@ describe('Inviting more friends to a playdate (POST /playdates/:id/participants)
     expect((await Playdate.findById(id).lean()).participants).toHaveLength(1);
   });
 
-  it('invites again a family who declined or left, back to pending in place, but never one still in', async () => {
+  it('invites several children of a family: one answer, one notification, one participation, one vote', async () => {
+    const mHost = await registerParent('multi-host');
+    const family = await registerParent('multi-family');
+    // Free locks every child past the first one
+    await grantPremium(family.parentId);
+    const sibling = await Child.create({ parentId: family.parentId, displayName: 'Kid sibling', dateOfBirth: new Date('2021-01-01'), gender: 'boy' });
+    const siblingId = sibling._id.toString();
+    await connect(mHost, family);
+    const both = [family, { parentId: family.parentId, childId: siblingId }];
+
+    const created = await as(mHost).create(both, { scheduledDate: isoDay(18) });
+    expect(created.status).toBe(201);
+    const id = created.body.data.id;
+    expect(created.body.data.participants.map((p) => p.childId)).toEqual([family.childId, siblingId]);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await Notification.countDocuments({ recipientId: family.userId, 'data.playdateId': id })).toBe(1);
+
+    const seen = (await as(family).get(id)).body.data;
+    expect(seen.myChildIds).toEqual([family.childId, siblingId]);
+
+    // The parent answers once, for both children
+    expect((await as(family).respond(id, 'accepted')).status).toBe(200);
+    const stored = await Playdate.findById(id).lean();
+    expect(stored.participants.map((p) => p.status)).toEqual(['accepted', 'accepted']);
+    expect(stored.participants.every((p) => p.quotaConsumedAt)).toBe(true);
+    const used = async () => (await subscriptionService.getActionUsage(family.parentId, 'playdateParticipate')).used;
+    expect(await used()).toBe(1);
+
+    // One vote per family on a reschedule
+    const reschedule = await request(app)
+      .post(`/api/v1/playdates/${id}/reschedule`)
+      .set('Authorization', `Bearer ${mHost.token}`)
+      .send({ newDate: isoDay(19), newStartTime: '10:00' });
+    expect(reschedule.status).toBe(201);
+    expect(reschedule.body.data.rescheduleRequest.responses).toHaveLength(1);
+
+    // Leaving takes both children out; cancelling afterwards gives nothing back
+    const left = await request(app).post(`/api/v1/playdates/${id}/leave`).set('Authorization', `Bearer ${family.token}`);
+    expect(left.status).toBe(200);
+    expect((await Playdate.findById(id).lean()).participants.map((p) => p.status)).toEqual(['declined', 'declined']);
+
+    // Invited again with one child only: it replaces both entries, the participation stays counted
+    const reinvited = await as(mHost).invite(id, [{ parentId: family.parentId, childId: siblingId }]);
+    expect(reinvited.status).toBe(200);
+    expect(reinvited.body.data.participants.map((p) => [p.childId, p.status])).toEqual([[siblingId, 'pending']]);
+    expect((await as(family).respond(id, 'accepted')).status).toBe(200);
+    expect(await used()).toBe(1);
+
+    // Host cancels: the family gets its single participation back
+    expect((await as(mHost).cancel(id)).status).toBe(200);
+    expect(await used()).toBe(0);
+  }, 20000);
+
+  it('refuses the answer when one of the invited children is busy at that time', async () => {
+    const bHost = await registerParent('busy-host');
+    const otherHost = await registerParent('busy-other');
+    const family = await registerParent('busy-family');
+    await grantPremium(family.parentId);
+    const sibling = await Child.create({ parentId: family.parentId, displayName: 'Kid busy', dateOfBirth: new Date('2021-01-01'), gender: 'boy' });
+    const siblingEntry = { parentId: family.parentId, childId: sibling._id.toString() };
+    await Promise.all([connect(bHost, family), connect(otherHost, family)]);
+
+    const first = await as(otherHost).create([siblingEntry], { scheduledDate: isoDay(20) });
+    expect((await as(family).respond(first.body.data.id, 'accepted')).status).toBe(200);
+
+    const second = await as(bHost).create([family, siblingEntry], { scheduledDate: isoDay(20) });
+    const res = await as(family).respond(second.body.data.id, 'accepted');
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('SCHEDULE_CONFLICT');
+    expect((await as(family).respond(second.body.data.id, 'declined')).status).toBe(200);
+  }, 20000);
+
+  it('offers canLeave only to a family who joined and blocked the host or another joined family', async () => {
+    const lHost = await registerParent('leave-host');
+    const blocker = await registerParent('leave-blocker');
+    const joined = await registerParent('leave-joined');
+    const invited = await registerParent('leave-invited');
+    await Promise.all([connect(lHost, blocker), connect(lHost, joined), connect(lHost, invited)]);
+    const created = await as(lHost).create([blocker, joined, invited], { scheduledDate: isoDay(22) });
+    const id = created.body.data.id;
+    const canLeave = async (parent) => (await as(parent).get(id)).body.data.canLeave;
+    const block = (from, to) =>
+      Block.create({ blockerId: from.parentId, blockedId: to.parentId });
+
+    await as(blocker).respond(id, 'accepted');
+    await as(joined).respond(id, 'accepted');
+    expect(await canLeave(blocker)).toBe(false);
+
+    // A family still invited does not count: who was invited stays private
+    await block(blocker, invited);
+    expect(await canLeave(blocker)).toBe(false);
+
+    await block(blocker, joined);
+    expect(await canLeave(blocker)).toBe(true);
+    // Being blocked gives nothing away, and the host cancels instead of leaving
+    expect(await canLeave(joined)).toBe(false);
+    expect(await canLeave(lHost)).toBe(false);
+    // Still invited: the invitation can simply be declined
+    expect(await canLeave(invited)).toBe(false);
+
+    const left = await request(app).post(`/api/v1/playdates/${id}/leave`).set('Authorization', `Bearer ${blocker.token}`);
+    expect(left.status).toBe(200);
+    expect(await canLeave(blocker)).toBe(false);
+  }, 20000);
+
+  it('invites again a family who declined or left, back to pending, but never one still in', async () => {
     // Own host: the shared one is kept within its monthly creation quota
     const reHost = await registerParent('rehost');
     const leaver = await registerParent('leaver');

@@ -108,6 +108,14 @@ class NotificationRepository {
     );
     return { modifiedCount: result.modifiedCount || 0 };
   }
+
+  /**
+   * Change stream of newly saved notifications
+   * @returns {import('mongoose').mongo.ChangeStream}
+   */
+  watchInserts() {
+    return Notification.watch([{ $match: { operationType: 'insert' } }]);
+  }
 }
 
 export const notificationRepository = new NotificationRepository();

@@ -1,5 +1,71 @@
 import mongoose from 'mongoose';
-import { REPORT_TARGET_TYPES, REPORT_STATUS, REPORT_CATEGORIES } from './safety.constants.js';
+import {
+  REPORT_TARGET_TYPES,
+  REPORT_STATUS,
+  REPORT_CATEGORIES,
+  REPORT_SEVERITY,
+  REPORT_ACTION_TYPES,
+  REPORT_RESOLUTION_TYPES,
+  REPORT_HISTORY_EVENT_TYPES,
+} from './safety.constants.js';
+
+const reportActionSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: Object.values(REPORT_ACTION_TYPES),
+      required: true,
+    },
+    params: {
+      durationDays: { type: Number, default: null },
+      reason: { type: String, default: '' },
+    },
+    performedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    performedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    note: {
+      type: String,
+      default: '',
+    },
+  },
+  { _id: true }
+);
+
+const reportHistorySchema = new mongoose.Schema(
+  {
+    eventType: {
+      type: String,
+      enum: Object.values(REPORT_HISTORY_EVENT_TYPES),
+      required: true,
+    },
+    fromStatus: { type: String, default: null },
+    toStatus: { type: String, default: null },
+    by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    at: {
+      type: Date,
+      default: Date.now,
+    },
+    note: {
+      type: String,
+      default: '',
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+  },
+  { _id: true }
+);
 
 const reportSchema = new mongoose.Schema(
   {
@@ -38,6 +104,12 @@ const reportSchema = new mongoose.Schema(
       default: REPORT_CATEGORIES.OTHER,
       index: true,
     },
+    severity: {
+      type: String,
+      enum: Object.values(REPORT_SEVERITY),
+      default: REPORT_SEVERITY.MEDIUM,
+      index: true,
+    },
     reason: {
       type: String,
       default: '',
@@ -54,6 +126,17 @@ const reportSchema = new mongoose.Schema(
       default: REPORT_STATUS.PENDING,
       index: true,
     },
+    assignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    resolution: {
+      type: String,
+      enum: Object.values(REPORT_RESOLUTION_TYPES),
+      default: null,
+    },
     adminNotes: {
       type: String,
       default: '',
@@ -67,6 +150,14 @@ const reportSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    actions: {
+      type: [reportActionSchema],
+      default: [],
+    },
+    history: {
+      type: [reportHistorySchema],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -74,6 +165,9 @@ const reportSchema = new mongoose.Schema(
   }
 );
 
+// Indexes
+reportSchema.index({ reportedUserId: 1, status: 1 });
+reportSchema.index({ assignedTo: 1, status: 1 });
 reportSchema.index({ status: 1, createdAt: -1 });
 
 const Report = mongoose.models.Report || mongoose.model('Report', reportSchema);

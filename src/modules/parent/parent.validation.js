@@ -52,13 +52,13 @@ export const onboardingPreferencesValidation = [
 ];
 
 export const updateParentProfileValidation = [
-  // Empty string clears the phone number; a changed number must be re-verified via OTP
+  // Can be left out but never cleared (null or empty); a changed number must be re-verified via OTP
   body('phone')
-    .optional({ values: 'null' })
+    .optional()
     .isString()
     .withMessage('Phone must be a string')
     .trim()
-    .custom((value) => value === '' || /^\+?[0-9]{9,15}$/.test(value))
+    .matches(/^\+?[0-9]{9,15}$/)
     .withMessage('Invalid phone number format. Must contain 9 to 15 digits'),
   body('fullName')
     .optional()

@@ -134,6 +134,9 @@ erDiagram
         string googleId "Google OAuth ID"
         string role "parent | admin"
         boolean isActive
+        int strikeCount "Số lần bị cảnh cáo"
+        date suspensionUntil "Hết hạn đình chỉ, null nếu không bị đình chỉ"
+        string banReason "Có giá trị khi bị khóa vĩnh viễn"
         date createdAt
         date updatedAt
     }
@@ -514,13 +517,18 @@ erDiagram
         ObjectId targetMessageId FK "Ref: messages._id (nếu báo cáo tin nhắn)"
         ObjectId targetPlaydateId FK "Ref: playdates._id (nếu báo cáo playdate)"
         string category "harassment | inappropriate_content | spam | fake_profile | child_safety | no_show | other"
+        string severity "low | medium | high | critical (gán theo category khi tạo)"
         string reason "Nhãn lý do (tùy chọn, mặc định = category)"
         string description "Mô tả chi tiết"
         string[] evidenceUrls "Ảnh chụp bằng chứng"
         string status "pending | reviewing | resolved | dismissed"
+        ObjectId assignedTo FK "Ref: users._id của Admin đang xử lý"
+        string resolution "action_taken | no_action | dismissed"
         string adminNotes "Ghi chú của Admin"
         ObjectId resolvedBy FK "Ref: users._id của Admin"
         date resolvedAt
+        array actions "Array of { type, params, performedBy, performedAt, note }"
+        array history "Array of { eventType, fromStatus, toStatus, by, at, note, metadata }"
         date createdAt
         date updatedAt
     }
@@ -544,6 +552,9 @@ interface IUser {
   role: "parent" | "admin"; // Quyền truy cập (Default: 'parent')
   // Quản lý trạng thái tài khoản bởi Admin (Mục 15.1)
   isActive: Boolean;
+  strikeCount: number; // Số lần bị cảnh cáo từ báo cáo vi phạm (Default: 0)
+  suspensionUntil?: Date | null; // Hết hạn đình chỉ: tự mở lại khi đăng nhập hoặc bởi job 15 phút/lần
+  banReason?: string | null; // Có giá trị khi tài khoản bị khóa vĩnh viễn từ báo cáo vi phạm
   createdAt: Date;
   updatedAt: Date;
 }
@@ -555,6 +566,7 @@ _Indexes:_
 - `{ phone: 1 }` (sparse)
 - `{ googleId: 1 }` (sparse)
 - `{ role: 1, isActive: 1 }`
+- `{ suspensionUntil: 1 }`
 
 ---
 
@@ -1062,6 +1074,7 @@ interface INotification {
     playdateId?: ObjectId;
     conversationId?: ObjectId;
     badgeCode?: string;
+    reportId?: ObjectId; // Tham chiếu reports._id (thông báo kết quả xử lý vi phạm)
   };
   isRead: boolean; // Default: false
   readAt?: Date;
@@ -1130,13 +1143,33 @@ interface IReport {
   targetMessageId?: ObjectId; // Tham chiếu messages._id (nếu báo cáo tin nhắn)
   targetPlaydateId?: ObjectId; // Tham chiếu playdates._id (nếu báo cáo playdate)
   category: "harassment" | "inappropriate_content" | "spam" | "fake_profile" | "child_safety" | "no_show" | "other"; // Danh mục vi phạm (bắt buộc; report cũ chưa có được đọc là "other")
+  severity: "low" | "medium" | "high" | "critical"; // Gán theo category khi tạo (CATEGORY_TO_SEVERITY), Admin đổi được khi đang xem xét. Report cũ: scripts/migrate-report-severities.js
   reason?: string; // Nhãn lý do hiển thị (tùy chọn, mặc định bằng category)
   description?: string; // Chi tiết phản ánh
   evidenceUrls?: string[]; // Ảnh chụp màn hình / bằng chứng
   status: "pending" | "reviewing" | "resolved" | "dismissed"; // Default: 'pending'
+  assignedTo?: ObjectId | null; // Tham chiếu users._id của Admin đang xử lý
+  resolution?: "action_taken" | "no_action" | "dismissed" | null;
   adminNotes?: string; // Ghi chú xử lý của Admin
   resolvedBy?: ObjectId; // Tham chiếu users._id của Admin xử lý
   resolvedAt?: Date;
+  actions: Array<{
+    type: "warn" | "delete_message" | "cancel_playdate" | "suspend" | "ban";
+    params: { durationDays: number | null; reason: string };
+    performedBy: ObjectId; // Tham chiếu users._id của Admin
+    performedAt: Date;
+    note: string;
+  }>;
+  // Nhật ký kiểm duyệt: mọi thao tác và đổi trạng thái
+  history: Array<{
+    eventType: "status_change" | "claim" | "takeover" | "severity_change" | "action_applied" | "reopen";
+    fromStatus: string | null;
+    toStatus: string | null;
+    by: ObjectId; // Tham chiếu users._id của Admin
+    at: Date;
+    note: string;
+    metadata: object | null;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -1147,6 +1180,9 @@ _Indexes:_
 - `{ status: 1, createdAt: -1 }` (Admin lọc danh sách report theo trạng thái)
 - `{ reportedUserId: 1 }` (Thống kê số lần bị report của một user)
 - `{ category: 1 }` (Admin lọc report theo danh mục vi phạm)
+- `{ severity: 1 }` (Admin lọc report theo mức độ)
+- `{ assignedTo: 1 }`, `{ assignedTo: 1, status: 1 }` (Báo cáo do một Admin phụ trách)
+- `{ reportedUserId: 1, status: 1 }` (Báo cáo đang mở cùng một người bị báo cáo)
 
 #### D. `places_cache` Collection (Mục 7.2)
 

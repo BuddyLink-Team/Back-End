@@ -95,6 +95,8 @@ class PlaydateSuggestionService {
 
     const friendParents = new Map();
     otherChildren.forEach((child) => {
+      // Another child of the caller (a parent answering for several invited children)
+      if (toId(child.parentId) === toId(parent)) return;
       const friend = friendsById.get(toId(child.parentId));
       if (!friend) {
         throw new AppError('Only children of connected friends can be planned for', 403, 'NOT_CONNECTED_FRIEND');
@@ -186,14 +188,15 @@ class PlaydateSuggestionService {
    * GET /playdates/busy-times
    * When the children are already busy on one day (their other upcoming playdates), so the form can show
    * the conflict as soon as a time is picked instead of waiting for the 409 on submit.
-   * Only the caller's own child carries the id of the playdate it is busy with; for a friend's child only
+   * Only the caller's own children carry the id of the playdate they are busy with; for a friend's child only
    * the time is shared.
    * @param {string} userId
    * @param {{ childId: string, participantChildIds?: string, date: string, excludePlaydateId?: string }} query
    * @returns {Promise<{ date: string, busy: Array<Object> }>} busy intervals, earliest first
    */
   async getBusyTimes(userId, { childId, participantChildIds, date, excludePlaydateId } = {}) {
-    const { children } = await this._loadGroup(userId, { childId, participantChildIds });
+    const { parents, children } = await this._loadGroup(userId, { childId, participantChildIds });
+    const ownChildIds = new Set(children.filter((child) => toId(child.parentId) === toId(parents[0])).map(toId));
     const dayStart = getScheduledStart(new Date(date), '00:00');
     const dayEnd = new Date(dayStart.getTime() + DAY_MS);
     const intervals = await playdateService.getBusyIntervals(
@@ -215,7 +218,7 @@ class PlaydateSuggestionService {
       })
       .sort((a, b) => a.start - b.start)
       .map((interval) => {
-        const isOwnChild = interval.childId === childId;
+        const isOwnChild = ownChildIds.has(interval.childId);
         return {
           childId: interval.childId,
           childName: namesById.get(interval.childId) || '',

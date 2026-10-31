@@ -5,6 +5,7 @@ import AppError from '../../shared/exceptions/app-error.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import { UserProfileDTO } from './user.dto.js';
 import { normalizePhone } from '../../shared/helpers/phone.helper.js';
+import { emitUserEvent, USER_EVENTS } from './user.events.js';
 
 class UserService {
   async getUserById(id) {
@@ -41,6 +42,60 @@ class UserService {
 
   async updateById(userId, updateData) {
     return userRepository.updateById(userId, updateData);
+  }
+
+  async getUsersByIds(ids) {
+    return userRepository.findByIds(ids);
+  }
+
+  async addStrike(userId) {
+    return userRepository.incrementStrikeCount(userId);
+  }
+
+  async suspendAccount(userId, suspensionUntil) {
+    return userRepository.updateById(userId, { isActive: false, suspensionUntil });
+  }
+
+  async banAccount(userId, banReason) {
+    return userRepository.updateById(userId, { isActive: false, suspensionUntil: null, banReason });
+  }
+
+  /**
+   * Reactivate the given account when its suspension has ended, so it can sign in right away.
+   * @param {Object} user - Updated in place
+   * @returns {Promise<Object>} The same user
+   */
+  async liftExpiredSuspension(user) {
+    const hasEnded = !user.isActive && user.suspensionUntil && new Date(user.suspensionUntil) <= new Date();
+    if (!hasEnded) return user;
+
+    if (await userRepository.liftSuspensionIfEnded(user._id, new Date())) {
+      void emitUserEvent(USER_EVENTS.USER_STATUS_CHANGED, { userId: user._id, email: user.email, isActive: true });
+    }
+    user.isActive = true;
+    user.suspensionUntil = null;
+    return user;
+  }
+
+  /**
+   * Reactivate every account whose suspension has ended (for those who do not come back on their own)
+   * @returns {Promise<number>} Accounts reactivated
+   */
+  async liftEndedSuspensions() {
+    const now = new Date();
+    const users = await userRepository.findEndedSuspensions(now);
+    let lifted = 0;
+    for (const user of users) {
+      if (await userRepository.liftSuspensionIfEnded(user._id, now)) {
+        lifted += 1;
+        void emitUserEvent(USER_EVENTS.USER_STATUS_CHANGED, { userId: user._id, email: user.email, isActive: true });
+      }
+    }
+    return lifted;
+  }
+
+  watchLockedAccounts() {
+    return userRepository.watchLockedAccounts();
   }
 
   /**
@@ -97,11 +152,9 @@ class UserService {
       const isPhoneChanged = normalizedPhone !== normalizePhone(user.phone);
 
       if (isPhoneChanged) {
-        if (normalizedPhone) {
-          const existingPhone = await this.getUserByPhone(normalizedPhone);
-          if (existingPhone && existingPhone._id.toString() !== userId.toString()) {
-            throw new AppError('Phone number is already in use', 409, 'PHONE_ALREADY_EXISTS');
-          }
+        const existingPhone = await this.getUserByPhone(normalizedPhone);
+        if (existingPhone && existingPhone._id.toString() !== userId.toString()) {
+          throw new AppError('Phone number is already in use', 409, 'PHONE_ALREADY_EXISTS');
         }
         user = await this.updatePhone(userId, normalizedPhone);
 

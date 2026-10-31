@@ -366,32 +366,32 @@ class PlaydateRepository {
   }
 
   /**
-   * Atomically set the RSVP of a participant who has not answered yet
+   * Atomically set the RSVP of a family who has not answered yet (one answer for all its invited children)
    * @param {string|ObjectId} id
    * @param {string|ObjectId} parentId
    * @param {string} status - accepted | declined
-   * @returns {Promise<Object|null>} null when the participant was not pending anymore
+   * @returns {Promise<Object|null>} null when the family was not pending anymore
    */
   async updatePendingParticipantStatus(id, parentId, status) {
     return Playdate.findOneAndUpdate(
       { _id: id, participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.PENDING } } },
-      { $set: { 'participants.$.status': status, 'participants.$.respondedAt': new Date() } },
-      { new: true },
+      { $set: { 'participants.$[family].status': status, 'participants.$[family].respondedAt': new Date() } },
+      { new: true, arrayFilters: [{ 'family.parentId': parentId }] },
     ).lean();
   }
 
   /**
-   * Atomically invite families to an upcoming playdate: new families are appended, families who
-   * declined or left get their entry back to pending (same place in the list, quotaConsumedAt kept)
+   * Atomically invite families to an upcoming playdate. A family who declined or left is invited again
+   * with the children of this invitation, which replace its previous entries.
    * @param {string|ObjectId} id
-   * @param {Array<{ parentId: string, childId: string, status: string, invitedAt: Date }>} participants
+   * @param {Array<{ parentId: string, childId: string, status: string, invitedAt: Date, quotaConsumedAt?: Date|null }>} participants
    * @param {Array<string>} [reinvitedParentIds] - families already in the playdate with a declined status
    * @returns {Promise<Object|null>} null when the playdate is not upcoming anymore, a new family got in
    *   or a re-invited family is not declined anymore in the meantime
    */
   async addParticipants(id, participants, reinvitedParentIds = []) {
     const toObjectId = (value) => new mongoose.Types.ObjectId(String(value));
-    const reinvited = new Set(reinvitedParentIds.map(String));
+    const reinvited = [...new Set(reinvitedParentIds.map(String))];
     // Update pipelines are not cast by Mongoose
     const entries = participants.map((p) => ({
       parentId: toObjectId(p.parentId),
@@ -399,21 +399,16 @@ class PlaydateRepository {
       status: p.status,
       invitedAt: p.invitedAt,
       respondedAt: null,
+      quotaConsumedAt: p.quotaConsumedAt ?? null,
     }));
-    const fresh = entries.filter((e) => !reinvited.has(e.parentId.toString()));
-    const renewed = entries.filter((e) => reinvited.has(e.parentId.toString()));
+    const freshParentIds = entries.map((e) => e.parentId).filter((parentId) => !reinvited.includes(parentId.toString()));
 
-    const kept = renewed.length
+    const kept = reinvited.length
       ? {
-          $map: {
+          $filter: {
             input: '$participants',
             as: 'p',
-            in: {
-              $switch: {
-                branches: renewed.map((e) => ({ case: { $eq: ['$$p.parentId', e.parentId] }, then: { $mergeObjects: ['$$p', { $literal: e }] } })),
-                default: '$$p',
-              },
-            },
+            cond: { $not: [{ $in: ['$$p.parentId', reinvited.map(toObjectId)] }] },
           },
         }
       : '$participants';
@@ -422,20 +417,20 @@ class PlaydateRepository {
       {
         _id: id,
         status: PLAYDATE_STATUS.UPCOMING,
-        'participants.parentId': { $nin: fresh.map((e) => e.parentId) },
-        ...(renewed.length && {
-          $and: renewed.map((e) => ({
-            participants: { $elemMatch: { parentId: e.parentId, status: PARTICIPANT_STATUS.DECLINED } },
+        'participants.parentId': { $nin: freshParentIds },
+        ...(reinvited.length && {
+          $and: reinvited.map((parentId) => ({
+            participants: { $elemMatch: { parentId: toObjectId(parentId), status: PARTICIPANT_STATUS.DECLINED } },
           })),
         }),
       },
-      [{ $set: { participants: { $concatArrays: [kept, { $literal: fresh }] } } }],
+      [{ $set: { participants: { $concatArrays: [kept, { $literal: entries }] } } }],
       { new: true },
     ).lean();
   }
 
   /**
-   * Mark a participant who has not declined yet as declined, only while the playdate is upcoming
+   * Mark a family who has not declined yet as declined, only while the playdate is upcoming
    * (atomic: a concurrent cancel/complete or a double click cannot leave twice)
    * @param {string|ObjectId} id
    * @param {string|ObjectId} parentId
@@ -448,8 +443,8 @@ class PlaydateRepository {
         status: PLAYDATE_STATUS.UPCOMING,
         participants: { $elemMatch: { parentId, status: { $ne: PARTICIPANT_STATUS.DECLINED } } },
       },
-      { $set: { 'participants.$.status': PARTICIPANT_STATUS.DECLINED, 'participants.$.respondedAt': new Date() } },
-      { new: true },
+      { $set: { 'participants.$[family].status': PARTICIPANT_STATUS.DECLINED, 'participants.$[family].respondedAt': new Date() } },
+      { new: true, arrayFilters: [{ 'family.parentId': parentId }] },
     ).lean();
   }
 
@@ -475,19 +470,21 @@ class PlaydateRepository {
   async markParticipantQuotaConsumed(id, parentId) {
     return Playdate.updateOne(
       { _id: id, 'participants.parentId': parentId },
-      { $set: { 'participants.$.quotaConsumedAt': new Date() } },
+      { $set: { 'participants.$[family].quotaConsumedAt': new Date() } },
+      { arrayFilters: [{ 'family.parentId': parentId }] },
     );
   }
 
   /**
-   * Revert a participant's RSVP back to pending (rollback when quota consumption fails)
+   * Revert a family's RSVP back to pending (rollback when quota consumption fails)
    * @param {string|ObjectId} id
    * @param {string|ObjectId} parentId
    */
   async resetParticipantToPending(id, parentId) {
     return Playdate.updateOne(
       { _id: id, 'participants.parentId': parentId },
-      { $set: { 'participants.$.status': PARTICIPANT_STATUS.PENDING, 'participants.$.respondedAt': null } },
+      { $set: { 'participants.$[family].status': PARTICIPANT_STATUS.PENDING, 'participants.$[family].respondedAt': null } },
+      { arrayFilters: [{ 'family.parentId': parentId }] },
     );
   }
 

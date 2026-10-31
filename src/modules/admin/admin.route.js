@@ -23,6 +23,14 @@ import {
   listSubscriptionsValidation,
   listTransactionsValidation,
   revenueSummaryValidation,
+  listReportsValidation,
+  reportStatsValidation,
+  reportIdParamValidation,
+  reviewReportValidation,
+  updateReportSeverityValidation,
+  applyReportActionValidation,
+  resolveReportValidation,
+  reopenReportValidation,
   adminAnalyticsValidation,
   listAdminNotificationsValidation,
   readAllAdminNotificationsValidation,
@@ -80,6 +88,16 @@ router.get('/subscriptions/:id', validate(mongoIdParamValidation), adminControll
 router.get('/transactions', validate(listTransactionsValidation), adminController.getTransactions);
 router.get('/transactions/:id', validate(mongoIdParamValidation), adminController.getTransactionDetail);
 router.get('/revenue/summary', validate(revenueSummaryValidation), adminController.getRevenueSummary);
+
+// Safety & Reports Moderation
+router.get('/reports', validate(listReportsValidation), adminController.getReports);
+router.get('/reports/stats', validate(reportStatsValidation), adminController.getReportStats);
+router.get('/reports/:id', validate(reportIdParamValidation), adminController.getReportDetail);
+router.patch('/reports/:id/review', validate(reviewReportValidation), adminController.reviewReport);
+router.patch('/reports/:id/severity', validate(updateReportSeverityValidation), adminController.updateReportSeverity);
+router.post('/reports/:id/action', validate(applyReportActionValidation), adminController.applyReportAction);
+router.patch('/reports/:id/resolve', validate(resolveReportValidation), adminController.resolveReport);
+router.patch('/reports/:id/reopen', validate(reopenReportValidation), adminController.reopenReport);
 
 // System Analytics & Dashboard
 router.get('/analytics', validate(adminAnalyticsValidation), adminController.getAnalytics);
