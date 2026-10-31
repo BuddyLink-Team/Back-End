@@ -3,6 +3,7 @@ import subscriptionController from './subscription.controller.js';
 import { authenticate } from '../../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../../middlewares/role.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
+import { webhookLimiter } from '../../middlewares/rate-limit.middleware.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 import {
   checkoutValidation,
@@ -17,7 +18,7 @@ const router = Router();
 router.get('/plans', subscriptionController.getActivePlans);
 
 // 2. PayOS IPN Webhook endpoint
-router.post('/webhook', subscriptionController.handleWebhook);
+router.post('/webhook', webhookLimiter, subscriptionController.handleWebhook);
 
 // Parent authenticated routes
 router.use(authenticate);

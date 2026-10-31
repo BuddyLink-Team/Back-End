@@ -15,6 +15,28 @@ const toVerification = (parent) => ({
   isVerifiedParent: parent?.verification?.isVerifiedParent || false,
 });
 
+export class AdminNotificationDTO {
+  /**
+   * @param {Object} notification
+   * @param {string|ObjectId} [adminId] - Admin the read state is for; a notification just created is unread
+   */
+  static toResponse(notification, adminId = null) {
+    const readerId = adminId ? adminId.toString() : null;
+    return {
+      id: notification._id,
+      category: notification.category,
+      type: notification.type,
+      severity: notification.severity,
+      title: notification.title,
+      message: notification.message,
+      entityType: notification.entityType || null,
+      entityId: notification.entityId || null,
+      isRead: Boolean(readerId) && (notification.readBy || []).some((id) => id.toString() === readerId),
+      createdAt: notification.createdAt,
+    };
+  }
+}
+
 export class AdminUserListItemDTO {
   /**
    * @param {{ user: Object, parent: Object|null, childrenCount: number, plan: Object }} data

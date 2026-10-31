@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import env from '../config/env.js';
 import logger from '../shared/logger/index.js';
 import playdateService from '../modules/playdate/playdate.service.js';
+import { emitSystemEvent, SYSTEM_EVENTS } from '../shared/events/system.events.js';
 
 // Every day at 00:00 (business timezone)
 const SCHEDULE = '0 0 * * *';
@@ -19,6 +20,7 @@ export const runPlaydateAutoClose = async () => {
     }
   } catch (error) {
     logger.error(`[PlaydateAutoCloseJob] Failed: ${error.message}`);
+    void emitSystemEvent(SYSTEM_EVENTS.CRON_JOB_FAILED, { jobName: 'PlaydateAutoCloseJob', error: error.message });
   }
 };
 

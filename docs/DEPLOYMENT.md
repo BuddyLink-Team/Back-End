@@ -23,7 +23,9 @@ Web admin (Vercel) ──────► API admin (Render) ──────�
 
 - Ở local, admin chạy trên port riêng: API `5001`, web `5174`. Render chỉ mở **một port cho mỗi service**, nên trên production admin phải là **service riêng**.
 - Token đăng nhập gắn với app đã cấp ra nó (`aud`): token phụ huynh bị API admin từ chối và ngược lại. Tài khoản admin không đăng nhập được ở web phụ huynh.
-- Cron job, phần seed dữ liệu và Socket.io **chỉ chạy ở API phụ huynh**. API admin chỉ kết nối MongoDB rồi phục vụ `/api/v1/admin`.
+- Cron job và phần seed dữ liệu **chỉ chạy ở API phụ huynh**. API admin kết nối MongoDB, phục vụ `/api/v1/admin` và Socket.io namespace `/admin`.
+- Thông báo realtime của admin đi qua MongoDB change stream nên cần replica set (Atlas đã có sẵn). Web admin tự lấy địa chỉ socket từ `VITE_API_URL`, không cần thêm biến môi trường.
+- Khi cập nhật tính năng realtime của admin, deploy API admin trước rồi mới deploy web admin.
 
 **Thứ tự deploy:** chuẩn bị (mục 2) → 2 service Render (mục 3, 4) → 2 project Vercel (mục 5, 6) → quay lại điền URL thật (mục 7) → dịch vụ bên ngoài (mục 8) → kiểm tra (mục 9).
 
@@ -215,6 +217,7 @@ CORS so sánh URL **chính xác**: phải đúng `https://`, không có `/` ở 
 | Request đầu tiên rất chậm hoặc timeout | Service Render đang ngủ (gói free), chờ khoảng 30–60 giây |
 | Web admin hiện trang phụ huynh | Thiếu `VITE_APP_TARGET=admin`, hoặc chưa Redeploy sau khi thêm env |
 | Web admin gọi nhầm API phụ huynh | `VITE_API_URL` của project admin phải kết thúc bằng `/api/v1/admin` |
+| Thông báo admin không hiện realtime | Xem log API admin có `[AdminNotifications] No change streams` hoặc `Change stream failed` không, và kiểm tra `ADMIN_CLIENT_URL`. Danh sách vẫn đúng sau khi tải lại trang |
 | F5 trang con bị 404 trên Vercel | Thiếu `vercel.json` ở thư mục gốc repo Front-End |
 | Không gửi được email (timeout) | Host chặn port SMTP → dùng `BREVO_API_KEY` |
 | Service không kết nối được MongoDB | Atlas chưa mở *Network Access* `0.0.0.0/0`, hoặc `MONGODB_URI` sai |

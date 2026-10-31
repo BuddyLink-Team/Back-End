@@ -18,9 +18,9 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 - Bỏ `activityCategory` và `endTime` trong `playdates`, đồng thời bỏ `newEndTime` trong `reschedule_requests` để tối giản và linh hoạt theo lịch thực tế của gia đình. Thời lượng lưu bằng `durationMinutes` (BUD-48); giờ kết thúc (`endTime`) chỉ được tính ra trong response, không lưu.
 - Kết nối vẫn ở cấp **phụ huynh**; các cặp bé được ghép (`childPairs`) là metadata trên `connections` (BUD-48).
 - Sơ đồ quan hệ thực thể (ERD) được phân tách chi tiết theo 7 Module nghiệp vụ độc lập bằng cú pháp **Mermaid ERD**, dễ dàng theo dõi và export hình ảnh.
-- Script khởi tạo toàn bộ 23 Collections, Indexes và Skeleton Documents nạp sẵn vào MongoDB được lưu độc lập tại file [`scripts/init-mongo.js`](scripts/init-mongo.js).
+- Script khởi tạo toàn bộ 25 Collections, Indexes và Skeleton Documents nạp sẵn vào MongoDB được lưu độc lập tại file [`scripts/init-mongo.js`](scripts/init-mongo.js).
 
-### Bảng phân mục 23 Collections:
+### Bảng phân mục 25 Collections:
 
 | STT | Collection              | Mô tả & Mục tiêu nghiệp vụ                                              | Phân hệ tương ứng trong`PROJECT_OVERVIEW.md`          |
 | :-: | :---------------------- | :---------------------------------------------------------------------------- | :----------------------------------------------------------- |
@@ -48,11 +48,12 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 | 22 | `blocks`              | Danh sách phụ huynh bị chặn                                               | Mục 4.3 & 12.1 (Block User)                                 |
 | 23 | `places_cache`        | Cache thông tin địa điểm vui chơi từ OpenStreetMap (Overpass API)      | Mục 7.2 (Nearby Places & Activity)                          |
 | 24 | `places_sync_tiles`   | Các ô lưới bản đồ đã nạp vào `places_cache` (sync tay & tự động)       | Mục 7.2 (Nearby Places & Activity)                          |
+| 25 | `admin_notifications` | Thông báo thời gian thực cho Admin Portal (6 nhóm sự kiện, TTL 90 ngày)| Mục 15 (Admin Portal & Real-time Notification Board)        |
 
 ---
 ## 2. Mermaid Entity Relationship Diagrams (Phân tách theo từng Module)
 
-Để sơ đồ không bị rối rắm và tiện theo dõi, hệ thống quan hệ thực thể (ERD) của 23 Collections được **phân tách thành 7 Module nghiệp vụ độc lập**. Bạn có thể sao chép riêng từng khối mã Mermaid để xem trên [mermaid.live](https://mermaid.live) hoặc xem trực tiếp qua Markdown Preview trong IDE.
+Để sơ đồ không bị rối rắm và tiện theo dõi, hệ thống quan hệ thực thể (ERD) của 25 Collections được **phân tách thành 7 Module nghiệp vụ độc lập**. Bạn có thể sao chép riêng từng khối mã Mermaid để xem trên [mermaid.live](https://mermaid.live) hoặc xem trực tiếp qua Markdown Preview trong IDE.
 
 ---
 
@@ -313,11 +314,12 @@ erDiagram
 
 ### 2.5 Module 4: Trò chuyện, Thông báo & Trợ lý AI (Chat, Notifications & AI Assistant)
 
-> **Collections:** `conversations`, `messages`, `notifications`, `ai_chat_sessions`  
+> **Collections:** `conversations`, `messages`, `notifications`, `admin_notifications`, `ai_chat_sessions`  
 > **Nghiệp vụ:** Nhắn tin trực tiếp 1-1, chat nhóm Playdate theo thời gian thực qua Socket.IO, thông báo in-app, hội thoại với AI Family Assistant.
 
 ```mermaid
 erDiagram
+    USERS ||--o{ ADMIN_NOTIFICATIONS : "N:M read by admins (readBy)"
     PLAYDATES ||--o| CONVERSATIONS : "playdateId (1:1 dedicated chat)"
     PARENTS ||--o{ CONVERSATIONS : "participants (Array of parentId)"
     CONVERSATIONS ||--o{ MESSAGES : "contains (1:N)"
@@ -1070,6 +1072,34 @@ interface INotification {
 _Indexes:_
 
 - `{ recipientId: 1, isRead: 1, createdAt: -1 }` (Lấy thông báo chưa đọc / mới nhất)
+
+#### A2. `admin_notifications` Collection (Mục 15 - Admin Portal Real-time Notification Board)
+
+```typescript
+interface IAdminNotification {
+  _id: ObjectId;
+  category: "users" | "payments" | "playdates" | "connections" | "safety" | "system";
+  type: string; // 'new_signup' | 'account_locked' | 'payment_succeeded' | 'new_violation_report' | ...
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  entityType?: string | null; // 'User' | 'Payment' | 'Subscription' | 'Playdate' | 'Connection' | 'Report' | 'System'
+  entityId?: ObjectId | null;
+  readBy: ObjectId[]; // Danh sách users._id (admin) đã đọc thông báo
+  isActive: boolean; // Default: true
+  deletedAt: Date | null; // Default: null
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+_Indexes:_
+
+- `{ createdAt: 1 }` (`expireAfterSeconds: 7776000` - TTL Index 90 ngày)
+- `{ category: 1, createdAt: -1 }`
+- `{ type: 1, createdAt: -1 }` (Gộp thông báo cùng loại, ví dụ lỗi webhook PayOS)
+- `{ readBy: 1 }`
+- `{ isActive: 1 }`
 
 #### B. `blocks` Collection (Mục 12.1)
 

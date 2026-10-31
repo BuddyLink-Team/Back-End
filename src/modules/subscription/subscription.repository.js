@@ -169,6 +169,32 @@ class SubscriptionRepository {
     ]);
     return { items, total };
   }
+
+  /**
+   * Count subscriptions active as of date grouped by planCode
+   * @param {Date} [asOfDate]
+   * @returns {Promise<{ free: number, premiumMonthly: number, premiumYearly: number }>}
+   */
+  async countActiveByPlan(asOfDate = new Date()) {
+    const rows = await Subscription.aggregate([
+      {
+        $match: {
+          status: SUBSCRIPTION_STATUS.ACTIVE,
+          $or: [
+            { planCode: SUBSCRIPTION_PLAN_CODES.FREE },
+            { endDate: { $gt: asOfDate } },
+          ],
+        },
+      },
+      { $group: { _id: '$planCode', count: { $sum: 1 } } },
+    ]);
+    const countOf = (code) => rows.find((r) => r._id === code)?.count || 0;
+    return {
+      free: countOf(SUBSCRIPTION_PLAN_CODES.FREE),
+      premiumMonthly: countOf(SUBSCRIPTION_PLAN_CODES.PREMIUM_MONTHLY),
+      premiumYearly: countOf(SUBSCRIPTION_PLAN_CODES.PREMIUM_YEARLY),
+    };
+  }
 }
 
 export default new SubscriptionRepository();

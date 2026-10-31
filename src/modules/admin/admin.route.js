@@ -30,6 +30,9 @@ import {
   applyReportActionValidation,
   resolveReportValidation,
   reopenReportValidation,
+  adminAnalyticsValidation,
+  listAdminNotificationsValidation,
+  readAllAdminNotificationsValidation,
 } from './admin.validation.js';
 import { USER_ROLES } from '../../shared/constants/index.js';
 
@@ -94,6 +97,15 @@ router.patch('/reports/:id/severity', validate(updateReportSeverityValidation), 
 router.post('/reports/:id/action', validate(applyReportActionValidation), adminController.applyReportAction);
 router.patch('/reports/:id/resolve', validate(resolveReportValidation), adminController.resolveReport);
 router.patch('/reports/:id/reopen', validate(reopenReportValidation), adminController.reopenReport);
+
+// System Analytics & Dashboard
+router.get('/analytics', validate(adminAnalyticsValidation), adminController.getAnalytics);
+
+// Admin Notifications
+router.get('/notifications', validate(listAdminNotificationsValidation), adminController.getNotifications);
+router.get('/notifications/unread-count', adminController.getUnreadNotificationCount);
+router.patch('/notifications/read-all', validate(readAllAdminNotificationsValidation), adminController.markAllNotificationsAsRead);
+router.patch('/notifications/:id/read', validate(mongoIdParamValidation), adminController.markNotificationAsRead);
 
 export default router;
 

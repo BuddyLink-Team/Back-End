@@ -194,7 +194,7 @@ Backend runs at:
 
 ```text
 http://localhost:5000/api/v1         # Parent app API (+ Socket.io)
-http://localhost:5001/api/v1/admin   # Admin portal API (ADMIN_PORT)
+http://localhost:5001/api/v1/admin   # Admin portal API (ADMIN_PORT, + Socket.io namespace /admin)
 ```
 
 The admin API only starts when `ADMIN_PORT` is set. See [Admin portal API](#admin-portal-api) below.
@@ -244,12 +244,14 @@ The admin portal has its own API, separate from the parent app:
 | Production | Render service `npm start` | Separate Render service `npm run start:admin` |
 
 - Admin routes live in `src/modules/admin/admin.route.js` and are mounted **only** in `admin-app.js`. Never mount them in `app.js`.
-- Tokens carry an audience (`aud`): `app` for the parent app, `admin` for the admin portal (`TOKEN_AUDIENCES` in `auth.constants.js`). `authenticate` and refresh only accept tokens issued for the app serving the request, so a parent token gets 401 on the admin API and an admin token gets 401 on the parent API (and on Socket.io).
+- Tokens carry an audience (`aud`): `app` for the parent app, `admin` for the admin portal (`TOKEN_AUDIENCES` in `auth.constants.js`). `authenticate` and refresh only accept tokens issued for the app serving the request, so a parent token gets 401 on the admin API and an admin token gets 401 on the parent API. On Socket.io, the parent API only accepts parent tokens and the `/admin` namespace of the admin API only accepts admin tokens.
 - Admin accounts cannot sign in on the parent app (`/auth/login`, `/auth/google` answer `403 ADMIN_PORTAL_REQUIRED`).
 - Admin endpoints so far: `POST /auth/login` (rate limited: 10 / 15 min), `POST /auth/refresh-token`, `POST /auth/logout`, `GET /auth/me`, `/user/*` (own profile & password). Everything after login requires `authenticate` + `authorizeRoles('admin')`.
 - Parent & child management (BUD-31): `GET /users` (search, `isActive`, `isVerified`, page, limit), `GET /users/:id`, `PATCH /users/:id/status` (`{ isActive }`: locking revokes the parent's refresh tokens; an open Socket.io connection is rejected and closed on its next chat action), `GET /children` (search, gender, `minAge` / `maxAge`, `isArchived`), `GET /children/:id`, `GET /payments?parentId=` (payment history of a parent).
 - Playdate & connection oversight (BUD-33): `GET /playdates` (search, `status`, `fromDate` / `toDate`), `GET /playdates/stats` (`{ total, upcoming, completed, cancelled }`), `GET /playdates/:id` (participants + pending reschedule), `PATCH /playdates/:id/cancel` (`{ reason }` required: cancels pending reschedules and gives back the participation of families still in), `GET /connections` (search by parent or child name, `status`), `GET /connections/stats` (`{ total, pending, accepted, declined, removed }`), `GET /connections/:id`, `DELETE /connections/:id` (`{ reason? }`: pending or accepted only, otherwise `409 INVALID_CONNECTION_STATE`). Parent locations are sent as area / city only.
-- Background jobs, seeding and Socket.io only run in `src/server.js` (parent API). `src/admin-server.js` only connects MongoDB and serves the admin API.
+- Dashboard (BUD-29): `GET /analytics` (`fromDate`, `toDate`, `groupBy`; 30 days by default, 12 months at most), `GET /notifications` (`category`, `severity`, `isRead`, page, limit), `GET /notifications/unread-count`, `PATCH /notifications/:id/read`, `PATCH /notifications/read-all?category=`.
+- Admin notifications are created by listeners in whichever process emits the event. The admin API opens a MongoDB change stream on `admin_notifications` and sends each new row on the `/admin` namespace (`admin:notification:new`, `admin:notification:unread-count`). On a standalone MongoDB there are no change streams: the process sends them directly, which works locally because `npm run dev` runs both APIs in one process.
+- Background jobs and seeding only run in `src/server.js` (parent API). `src/admin-server.js` connects MongoDB, serves the admin API and the `/admin` namespace.
 
 ---
 
@@ -266,7 +268,7 @@ Render exposes one port per service, so the admin API is its own Web Service fro
 | Service | Start command | Environment |
 |---|---|---|
 | Parent API | `npm start` | Current variables. **Do not set `ADMIN_PORT`.** |
-| Admin API | `npm run start:admin` | Same `MONGODB_URI` / `JWT_*` as the parent API, `ADMIN_CLIENT_URL=<admin frontend URL>`, `TRUST_PROXY=1` |
+| Admin API | `npm run start:admin` | Same `MONGODB_URI` as the parent API, its own `JWT_*` secrets, `ADMIN_CLIENT_URL=<admin frontend URL>`, `TRUST_PROXY=1` |
 
 Both services listen on the `PORT` Render provides.
 

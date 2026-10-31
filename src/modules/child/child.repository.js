@@ -249,6 +249,45 @@ class ChildRepository {
       { $group: { _id: '$parentId', count: { $sum: 1 } } },
     ]);
   }
+
+  /**
+   * Count active children created on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countActiveBeforeDate(date) {
+    const filter = { isArchived: false };
+    if (date) filter.createdAt = { $lte: date };
+    return Child.countDocuments(filter);
+  }
+
+  /**
+   * Count distinct parents who created at least one active child profile on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithActiveChildrenBeforeDate(date) {
+    const filter = { isArchived: false };
+    if (date) filter.createdAt = { $lte: date };
+    const distinctParents = await Child.distinct('parentId', filter);
+    return distinctParents.length;
+  }
+
+  /**
+   * Count active children by birth date groups
+   * @param {Array<{ key: string, bornAfter: Date|null }>} groups - Youngest first; the last one takes everyone left
+   * @returns {Promise<Array<{ key: string, count: number }>>}
+   */
+  async countByBirthDateGroups(groups) {
+    const branches = groups
+      .filter((group) => group.bornAfter)
+      .map((group) => ({ case: { $gt: ['$dateOfBirth', group.bornAfter] }, then: group.key }));
+    const rows = await Child.aggregate([
+      { $match: { isArchived: false, dateOfBirth: { $ne: null } } },
+      { $group: { _id: { $switch: { branches, default: groups[groups.length - 1].key } }, count: { $sum: 1 } } },
+    ]);
+    return rows.map((row) => ({ key: row._id, count: row.count }));
+  }
 }
 
 export default new ChildRepository();

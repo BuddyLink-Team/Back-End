@@ -10,6 +10,8 @@ export const CONNECTION_EVENTS = Object.freeze({
   ACCEPTED: 'connection.accepted',
   // A connection request was sent
   REQUESTED: 'connection.requested',
+  // A connection was removed
+  REMOVED: 'connection.removed',
 });
 
 const emitter = new EventEmitter();

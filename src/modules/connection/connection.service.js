@@ -310,7 +310,11 @@ class ConnectionService {
     const isOwnPendingRequest =
       connection.status === CONNECTION_STATUS.PENDING && connection.requesterId.toString() === parentId.toString();
     const fromStatus = isOwnPendingRequest ? CONNECTION_STATUS.PENDING : CONNECTION_STATUS.ACCEPTED;
-    return this._transition(connectionId, fromStatus, CONNECTION_STATUS.REMOVED);
+    const result = await this._transition(connectionId, fromStatus, CONNECTION_STATUS.REMOVED);
+    void emitConnectionEvent(CONNECTION_EVENTS.REMOVED, {
+      connectionId: connectionId.toString(),
+    });
+    return result;
   }
 
   /**
@@ -452,7 +456,41 @@ class ConnectionService {
       ...(reason ? { removalReason: reason } : {}),
     });
 
+    void emitConnectionEvent(CONNECTION_EVENTS.REMOVED, {
+      connectionId: id.toString(),
+    });
+
     return connectionRepository.findWithDetailsForAdmin(id);
+  }
+
+  /**
+   * Connections accepted between two instants
+   * @param {Date} fromDate
+   * @param {Date} toDate
+   * @returns {Promise<number>}
+   */
+  async countAcceptedBetween(fromDate, toDate) {
+    return connectionRepository.countAcceptedBetween(fromDate, toDate);
+  }
+
+  /**
+   * Count distinct parents who have an accepted connection on or before a date
+   * @param {Date} [date]
+   * @returns {Promise<number>}
+   */
+  async countDistinctParentsWithConnectionBeforeDate(date) {
+    return connectionRepository.countDistinctParentsWithConnectionBeforeDate(date);
+  }
+
+  /**
+   * Get connection analytics in date range
+   * @param {{ fromDate?: Date, toDate?: Date }} params
+   * @returns {Promise<{ sent: number, accepted: number, declined: number, pending: number, removed: number, acceptanceRate: number }>}
+   */
+  async getConnectionAnalytics(params) {
+    const counts = await connectionRepository.countRequestsByStatus(params);
+    const acceptanceRate = counts.sent > 0 ? Number(((counts.accepted / counts.sent) * 100).toFixed(1)) : 0;
+    return { ...counts, acceptanceRate };
   }
 }
 

@@ -1,6 +1,14 @@
 import { query, param, body } from 'express-validator';
 import { CHILD_GENDERS } from '../child/child.constants.js';
-import { ADMIN_SEARCH_MAX_LENGTH, ADMIN_REASON_MAX_LENGTH } from './admin.constants.js';
+import {
+  ADMIN_NOTIFICATION_CATEGORIES,
+  ADMIN_NOTIFICATION_FILTER_ALL,
+  ADMIN_NOTIFICATION_SEVERITY,
+  ADMIN_REASON_MAX_LENGTH,
+  ADMIN_SEARCH_MAX_LENGTH,
+  ANALYTICS_GROUP_BY,
+  ANALYTICS_MAX_RANGE_DAYS,
+} from './admin.constants.js';
 import { PLAYDATE_STATUS } from '../playdate/playdate.constants.js';
 import { CONNECTION_STATUS } from '../connection/connection.constants.js';
 import {
@@ -505,3 +513,67 @@ export const reopenReportValidation = [
       return true;
     }),
 ];
+
+/**
+ * Validation rules for GET /api/v1/admin/analytics
+ */
+export const adminAnalyticsValidation = [
+  query('fromDate')
+    .optional()
+    .isISO8601()
+    .withMessage('fromDate must be a valid ISO8601 date')
+    .bail()
+    .custom((value, { req }) => {
+      // Without toDate the range ends today, so a lone fromDate is checked too
+      const start = new Date(value);
+      const end = req.query.toDate ? new Date(req.query.toDate) : new Date();
+      if (start > end) {
+        throw new Error('fromDate must be on or before toDate');
+      }
+      if (end.getTime() - start.getTime() > ANALYTICS_MAX_RANGE_DAYS * 24 * 60 * 60 * 1000) {
+        throw new Error('Date range cannot exceed 12 months');
+      }
+      return true;
+    }),
+  query('toDate')
+    .optional()
+    .isISO8601()
+    .withMessage('toDate must be a valid ISO8601 date'),
+  query('groupBy')
+    .optional()
+    .isIn(Object.values(ANALYTICS_GROUP_BY))
+    .withMessage('groupBy must be one of: day, week, month'),
+];
+
+const notificationCategoryValidation = query('category')
+  .optional()
+  .isIn([...Object.values(ADMIN_NOTIFICATION_CATEGORIES), ADMIN_NOTIFICATION_FILTER_ALL])
+  .withMessage('Invalid notification category');
+
+/**
+ * Validation rules for GET /api/v1/admin/notifications
+ */
+export const listAdminNotificationsValidation = [
+  notificationCategoryValidation,
+  query('severity')
+    .optional()
+    .isIn([...Object.values(ADMIN_NOTIFICATION_SEVERITY), ADMIN_NOTIFICATION_FILTER_ALL])
+    .withMessage('Invalid notification severity'),
+  query('isRead')
+    .optional()
+    .isBoolean()
+    .withMessage('isRead must be a boolean'),
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100'),
+];
+
+/**
+ * Validation rules for PATCH /api/v1/admin/notifications/read-all
+ */
+export const readAllAdminNotificationsValidation = [notificationCategoryValidation];
