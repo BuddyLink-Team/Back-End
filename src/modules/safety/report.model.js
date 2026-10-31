@@ -166,7 +166,6 @@ const reportSchema = new mongoose.Schema(
 );
 
 // Indexes
-reportSchema.index({ status: 1, severity: -1, createdAt: 1 });
 reportSchema.index({ reportedUserId: 1, status: 1 });
 reportSchema.index({ assignedTo: 1, status: 1 });
 reportSchema.index({ status: 1, createdAt: -1 });

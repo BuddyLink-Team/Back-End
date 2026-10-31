@@ -2,7 +2,7 @@ import Conversation from './conversation.model.js';
 import Message from './message.model.js';
 import '../parent/parent.model.js';
 import '../playdate/playdate.model.js';
-import { CONVERSATION_TYPES } from './chat.constants.js';
+import { CONVERSATION_TYPES, MESSAGE_TYPES } from './chat.constants.js';
 
 const PARENT_FIELDS = 'fullName avatarUrl verification location';
 const CHILD_FIELDS = 'displayName dateOfBirth gender interests';
@@ -62,7 +62,7 @@ class ChatRepository {
    * @returns {Promise<Object|null>}
    */
   async findConversationById(conversationId, { withPlaydateDetails = false } = {}) {
-    return Conversation.findById(conversationId)
+    return Conversation.findOne({ _id: conversationId, isActive: true })
       .populate(CONVERSATION_BASE_POPULATE)
       .populate(withPlaydateDetails ? PLAYDATE_DETAIL_POPULATE : PLAYDATE_SUMMARY_POPULATE)
       .lean();
@@ -92,59 +92,37 @@ class ChatRepository {
   }
 
   /**
-   * Find raw conversation document (for mutations)
+   * Find raw conversation document by ID (for updates)
    * @param {string|ObjectId} conversationId
-   * @returns {Promise<Object|null>}
+   * @returns {Promise<Document|null>}
    */
   async findConversationDocById(conversationId) {
-    return Conversation.findById(conversationId);
+    return Conversation.findOne({ _id: conversationId, isActive: true });
   }
 
   /**
-   * Find existing direct conversation between two parents
-   * @param {string|ObjectId} parentAId
-   * @param {string|ObjectId} parentBId
+   * Find an existing direct conversation between two parents
+   * @param {string|ObjectId} parentIdA
+   * @param {string|ObjectId} parentIdB
    * @returns {Promise<Object|null>}
    */
-  async findDirectConversation(parentAId, parentBId) {
-    const pairKey = [parentAId.toString(), parentBId.toString()].sort().join('_');
+  async findDirectConversation(parentIdA, parentIdB) {
+    const pairKey = [parentIdA.toString(), parentIdB.toString()].sort().join('_');
     return Conversation.findOne({
-      type: CONVERSATION_TYPES.DIRECT,
-      pairKey,
-      isActive: true,
+      $or: [
+        { pairKey, isActive: true },
+        {
+          type: CONVERSATION_TYPES.DIRECT,
+          participants: { $all: [parentIdA, parentIdB], $size: 2 },
+          isActive: true,
+        },
+      ],
     })
       .populate(CONVERSATION_BASE_POPULATE)
       .populate(PLAYDATE_SUMMARY_POPULATE)
       .lean();
   }
 
-  /**
-   * Find playdate conversation by playdate ID
-   * @param {string|ObjectId} playdateId
-   * @param {Object} [options]
-   * @returns {Promise<Object|null>}
-   */
-  async findPlaydateConversation(playdateId, options = {}) {
-    return this.findConversationById(
-      await Conversation.findOne({ playdateId }).select('_id'),
-      options
-    );
-  }
-
-  /**
-   * Find raw playdate conversation document (for mutations like participant joins)
-   * @param {string|ObjectId} playdateId
-   * @returns {Promise<Object|null>}
-   */
-  async findPlaydateConversationDoc(playdateId) {
-    return Conversation.findOne({
-      playdateId,
-      type: CONVERSATION_TYPES.PLAYDATE,
-    })
-      .populate(CONVERSATION_BASE_POPULATE)
-      .populate(PLAYDATE_SUMMARY_POPULATE)
-      .lean();
-  }
 
   /**
    * Create a new conversation document
@@ -166,10 +144,8 @@ class ChatRepository {
    * @returns {Promise<Array>}
    */
   async findMessages(conversationId, { limit = 50, before = null } = {}) {
-    const query = {
-      conversationId,
-      isDeleted: false,
-    };
+    // Deleted messages stay in the list: ChatDTO shows a placeholder instead of their content
+    const query = { conversationId };
 
     if (before) {
       query._id = { $lt: before };
@@ -207,11 +183,10 @@ class ChatRepository {
   }
 
   /**
-   * Update conversation's lastMessage and increment unread counts
+   * Update conversation's lastMessage and unread counts for recipients
    * @param {string|ObjectId} conversationId
    * @param {Object} messageDoc
    * @param {Array<string|ObjectId>} recipientIds
-   * @returns {Promise<Object>}
    */
   async updateLastMessage(conversationId, messageDoc, recipientIds = []) {
     const updateOps = {
@@ -238,7 +213,7 @@ class ChatRepository {
   }
 
   /**
-   * Mark messages as read by a parent in a conversation
+   * Mark messages in a conversation as read by a parent
    * @param {string|ObjectId} conversationId
    * @param {string|ObjectId} parentId
    */
@@ -278,32 +253,69 @@ class ChatRepository {
   }
 
   /**
-   * Find surrounding messages around a target message timestamp within the same conversation
+   * Messages around a target one in its conversation (deleted ones included)
    * @param {string|ObjectId} conversationId
-   * @param {Date} targetMessageCreatedAt
-   * @param {number} [radius=5]
+   * @param {Date} targetCreatedAt
+   * @param {number} radius - Messages on each side
+   * @returns {Promise<{ before: Array, after: Array }>} Chronological
    */
-  async findSurroundingMessages(conversationId, targetMessageCreatedAt, radius = 5) {
+  async findSurroundingMessages(conversationId, targetCreatedAt, radius) {
+    const find = (createdAt, order) =>
+      Message.find({ conversationId, createdAt })
+        .sort({ createdAt: order })
+        .limit(radius)
+        .populate('senderId', 'fullName avatarUrl')
+        .lean();
     const [before, after] = await Promise.all([
-      Message.find({
-        conversationId,
-        createdAt: { $lt: targetMessageCreatedAt },
-      })
-        .sort({ createdAt: -1 })
-        .limit(radius)
-        .populate('senderId', 'fullName avatarUrl')
-        .lean(),
-      Message.find({
-        conversationId,
-        createdAt: { $gt: targetMessageCreatedAt },
-      })
-        .sort({ createdAt: 1 })
-        .limit(radius)
-        .populate('senderId', 'fullName avatarUrl')
-        .lean(),
+      find({ $lt: targetCreatedAt }, -1),
+      find({ $gt: targetCreatedAt }, 1),
     ]);
+    return { before: before.reverse(), after };
+  }
 
-    return [...before.reverse(), ...after];
+  /**
+   * A message with its sender
+   * @returns {Promise<Object|null>}
+   */
+  async findMessageWithSender(messageId) {
+    return Message.findById(messageId).populate('senderId', 'fullName avatarUrl').lean();
+  }
+
+  /**
+   * @param {Array<string|ObjectId>} messageIds
+   * @returns {Promise<Array<{ _id: ObjectId, content: string }>>}
+   */
+  async findMessageContents(messageIds) {
+    return Message.find({ _id: { $in: messageIds } }).select('content').lean();
+  }
+
+  /**
+   * Mark a message as deleted
+   * @returns {Promise<Object|null>} null when it was already deleted
+   */
+  async softDeleteMessage(messageId) {
+    return Message.findOneAndUpdate({ _id: messageId, isDeleted: false }, { $set: { isDeleted: true } }, { new: true }).lean();
+  }
+
+  /**
+   * Replace the conversation preview when it shows the given message
+   */
+  async replaceLastMessageContent(conversationId, messageId, content) {
+    return Conversation.updateOne(
+      { _id: conversationId, 'lastMessage.messageId': messageId },
+      { $set: { 'lastMessage.content': content, 'lastMessage.type': MESSAGE_TYPES.TEXT } }
+    );
+  }
+
+  /**
+   * Messages deleted from now on, whichever process deletes them
+   * @returns {import('mongodb').ChangeStream}
+   */
+  watchDeletedMessages() {
+    return Message.watch(
+      [{ $match: { operationType: 'update', 'updateDescription.updatedFields.isDeleted': true } }],
+      { fullDocument: 'updateLookup' }
+    );
   }
 }
 

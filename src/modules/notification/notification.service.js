@@ -1,27 +1,86 @@
 import notificationRepository from './notification.repository.js';
-import { NOTIFICATION_TYPES } from './notification.constants.js';
+import { NOTIFICATION_STREAM_RETRY_MS, NOTIFICATION_TYPES } from './notification.constants.js';
 import { emitNotificationEvent, NOTIFICATION_EVENTS } from './notification.events.js';
 import AppError from '../../shared/exceptions/app-error.js';
+import logger from '../../shared/logger/index.js';
+import { supportsChangeStreams } from '../../shared/helpers/transaction.helper.js';
 import NotificationDTO from './notification.dto.js';
 
 class NotificationService {
+  constructor() {
+    this.stream = null;
+    this.retryTimer = null;
+  }
+
   /**
-   * Create an in-app notification and trigger realtime event
+   * Create an in-app notification. The recipient gets it from the change stream when one is open
+   * (see startRealtimeBroadcast); without one (standalone MongoDB, one process) it is sent right away.
    * @param {Object} notificationData
    * @returns {Promise<Object>}
    */
   async createNotification(notificationData) {
     const notification = await notificationRepository.create(notificationData);
     const populated = await notificationRepository.findById(notification._id);
-    const recipientId = notification.recipientId?._id || notification.recipientId;
-    const unreadCount = await notificationRepository.countUnread(recipientId);
 
-    await emitNotificationEvent(NOTIFICATION_EVENTS.CREATED, {
-      notification: populated || notification,
-      unreadCount,
-    });
+    if (!this.stream) await this._emitCreated(populated || notification);
 
     return populated || notification;
+  }
+
+  /**
+   * Send notifications to the recipients as soon as they are saved, whichever process saved them:
+   * in production the admin API creates some of them and only the parent API has the parent sockets.
+   * Only the parent API calls it. Change streams need a replica set: on a standalone MongoDB
+   * createNotification sends them instead.
+   */
+  startRealtimeBroadcast() {
+    if (!supportsChangeStreams()) {
+      logger.info('[Notifications] No change streams on this MongoDB, notifications are sent directly');
+      return;
+    }
+    this._openStream();
+  }
+
+  /**
+   * Close the change stream (shutdown and tests)
+   */
+  async stopRealtimeBroadcast() {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    const stream = this.stream;
+    this.stream = null;
+    if (stream) await stream.close();
+  }
+
+  _openStream() {
+    const stream = notificationRepository.watchInserts();
+    this.stream = stream;
+
+    stream.on('change', ({ fullDocument }) => {
+      void this._broadcastSaved(fullDocument);
+    });
+
+    stream.on('error', (err) => {
+      logger.error(`[Notifications] Change stream failed: ${err.message}`);
+      this.stream = null;
+      stream.close().catch(() => {});
+      // Parents reload the list when they reconnect; until the retry, notifications are sent directly
+      this.retryTimer = setTimeout(() => this._openStream(), NOTIFICATION_STREAM_RETRY_MS);
+      this.retryTimer.unref?.();
+    });
+  }
+
+  async _broadcastSaved(saved) {
+    try {
+      await this._emitCreated((await notificationRepository.findById(saved._id)) || saved);
+    } catch (err) {
+      logger.error(`[Notifications] Broadcast failed: ${err.message}`);
+    }
+  }
+
+  async _emitCreated(notification) {
+    const unreadCount = await notificationRepository.countUnread(notification.recipientId);
+    await emitNotificationEvent(NOTIFICATION_EVENTS.CREATED, { notification, unreadCount });
   }
 
   /**

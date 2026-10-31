@@ -70,6 +70,46 @@ export const REPORT_HISTORY_EVENT_TYPES = Object.freeze({
   REOPEN: 'reopen',
 });
 
+// What an admin can apply from POST /admin/reports/:id/action (closing a report has its own endpoint)
+export const REPORT_SANCTION_TYPES = Object.freeze([
+  REPORT_ACTION_TYPES.WARN,
+  REPORT_ACTION_TYPES.DELETE_MESSAGE,
+  REPORT_ACTION_TYPES.CANCEL_PLAYDATE,
+  REPORT_ACTION_TYPES.SUSPEND,
+  REPORT_ACTION_TYPES.BAN,
+]);
+
+// Sanctions on the whole account: open reports against the same user can be closed together with them
+export const REPORT_ACCOUNT_SANCTION_TYPES = Object.freeze([REPORT_ACTION_TYPES.SUSPEND, REPORT_ACTION_TYPES.BAN]);
+
+export const REPORT_OPEN_STATUSES = Object.freeze([REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING]);
+export const REPORT_CLOSED_STATUSES = Object.freeze([REPORT_STATUS.RESOLVED, REPORT_STATUS.DISMISSED]);
+
+// Queue order: the higher, the sooner
+export const REPORT_SEVERITY_WEIGHTS = Object.freeze({
+  [REPORT_SEVERITY.CRITICAL]: 4,
+  [REPORT_SEVERITY.HIGH]: 3,
+  [REPORT_SEVERITY.MEDIUM]: 2,
+  [REPORT_SEVERITY.LOW]: 1,
+});
+
+export const REPORT_SORTS = Object.freeze({
+  QUEUE: 'queue', // Severity, then oldest first
+  NEWEST: 'newest',
+  OLDEST: 'oldest',
+});
+
+// Generic reason given to the reported user, never the words of the reporter
+export const REPORT_CATEGORY_NOTICES = Object.freeze({
+  [REPORT_CATEGORIES.HARASSMENT]: 'quấy rối hoặc đe dọa người khác',
+  [REPORT_CATEGORIES.INAPPROPRIATE_CONTENT]: 'nội dung không phù hợp',
+  [REPORT_CATEGORIES.SPAM]: 'gửi tin rác',
+  [REPORT_CATEGORIES.FAKE_PROFILE]: 'hồ sơ không xác thực',
+  [REPORT_CATEGORIES.CHILD_SAFETY]: 'vi phạm quy tắc an toàn trẻ em',
+  [REPORT_CATEGORIES.NO_SHOW]: 'không tham gia cuộc hẹn đã xác nhận',
+  [REPORT_CATEGORIES.OTHER]: 'vi phạm Quy chuẩn Cộng đồng',
+});
+
 export const REPORT_LIMITS = Object.freeze({
   MAX_EVIDENCE_URLS: 5,
   // A reporter can report the same parent at most once per window

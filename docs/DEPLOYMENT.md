@@ -24,7 +24,7 @@ Web admin (Vercel) ──────► API admin (Render) ──────�
 - Ở local, admin chạy trên port riêng: API `5001`, web `5174`. Render chỉ mở **một port cho mỗi service**, nên trên production admin phải là **service riêng**.
 - Token đăng nhập gắn với app đã cấp ra nó (`aud`): token phụ huynh bị API admin từ chối và ngược lại. Tài khoản admin không đăng nhập được ở web phụ huynh.
 - Cron job và phần seed dữ liệu **chỉ chạy ở API phụ huynh**. API admin kết nối MongoDB, phục vụ `/api/v1/admin` và Socket.io namespace `/admin`.
-- Thông báo realtime của admin đi qua MongoDB change stream nên cần replica set (Atlas đã có sẵn). Web admin tự lấy địa chỉ socket từ `VITE_API_URL`, không cần thêm biến môi trường.
+- Thông báo realtime của admin, thông báo in-app của phụ huynh, và chế tài từ màn kiểm duyệt (ngắt kết nối tài khoản bị khóa, gỡ tin nhắn), đi qua MongoDB change stream nên cần replica set (Atlas đã có sẵn). Web admin tự lấy địa chỉ socket từ `VITE_API_URL`, không cần thêm biến môi trường.
 - Khi cập nhật tính năng realtime của admin, deploy API admin trước rồi mới deploy web admin.
 
 **Thứ tự deploy:** chuẩn bị (mục 2) → 2 service Render (mục 3, 4) → 2 project Vercel (mục 5, 6) → quay lại điền URL thật (mục 7) → dịch vụ bên ngoài (mục 8) → kiểm tra (mục 9).

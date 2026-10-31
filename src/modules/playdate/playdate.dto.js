@@ -18,15 +18,15 @@ export class PlaydateResponseDTO {
     const isHost = Boolean(parentIdStr && hostParentIdStr === parentIdStr);
 
     let myParticipantStatus = isHost ? 'host' : null;
-    // The viewer's own child in this playdate (host child, or the invited one)
-    let myChildId = isHost ? (playdate.hostChildId?._id || playdate.hostChildId)?.toString() : null;
+    // The viewer's own children in this playdate (host child, or the invited ones: same answer for all of them)
+    let myChildIds = isHost ? [(playdate.hostChildId?._id || playdate.hostChildId)?.toString()] : [];
     if (!isHost && Array.isArray(playdate.participants)) {
-      const match = playdate.participants.find(
+      const mine = playdate.participants.filter(
         (p) => (p.parentId?._id || p.parentId)?.toString() === parentIdStr
       );
-      if (match) {
-        myParticipantStatus = match.status;
-        myChildId = (match.childId?._id || match.childId)?.toString() || null;
+      if (mine.length) {
+        myParticipantStatus = mine[0].status;
+        myChildIds = mine.map((p) => (p.childId?._id || p.childId)?.toString()).filter(Boolean);
       }
     }
 
@@ -85,7 +85,7 @@ export class PlaydateResponseDTO {
       : allParticipants.filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED || idOf(p) === parentIdStr);
     const otherPendingCount = seesAll
       ? 0
-      : allParticipants.filter((p) => p.status === PARTICIPANT_STATUS.PENDING && idOf(p) !== parentIdStr).length;
+      : new Set(allParticipants.filter((p) => p.status === PARTICIPANT_STATUS.PENDING && idOf(p) !== parentIdStr).map(idOf)).size;
 
     // Format participants
     const participants = visibleParticipants.map((p) => ({
@@ -120,7 +120,7 @@ export class PlaydateResponseDTO {
       hostChildId: playdate.hostChildId?._id?.toString() || playdate.hostChildId?.toString(),
       hostChild,
       participants,
-      // Invitees still to answer that the viewer does not see (always 0 for the host)
+      // Families still to answer that the viewer does not see (always 0 for the host)
       otherPendingCount,
       scheduledDate: playdate.scheduledDate,
       time: playdate.time,
@@ -133,7 +133,8 @@ export class PlaydateResponseDTO {
       displayStatus,
       isHost,
       myParticipantStatus,
-      myChildId,
+      myChildId: myChildIds[0] || null,
+      myChildIds,
       cancellation: playdate.cancellation || null,
       completedAt: playdate.completedAt || null,
       chatConversationId: playdate.chatConversationId?.toString() || null,

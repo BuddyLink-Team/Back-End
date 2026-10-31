@@ -15,6 +15,9 @@ import { startPlaydateReminderJob } from './jobs/playdate-reminder.job.js';
 import mailAdapter from './integrations/mail/mail.adapter.js';
 import gamificationService from './modules/gamification/gamification.service.js';
 import { startGamificationJob, runGamificationJob } from './jobs/gamification.job.js';
+import { startSuspensionExpiryJob } from './jobs/suspension-expiry.job.js';
+import moderationRealtimeService from './modules/safety/moderation-realtime.service.js';
+import notificationService from './modules/notification/notification.service.js';
 import UserBadge from './modules/gamification/user-badge.model.js';
 import RatingFeedback from './modules/rating-feedback/rating-feedback.model.js';
 
@@ -57,6 +60,14 @@ const startServer = async () => {
     // Recalculate streaks missed while the server was down (not awaited: never delays startup)
     void runGamificationJob();
     startGamificationJob();
+
+    // Suspensions that ended while the server was down, then every 15 minutes
+    await userService.liftEndedSuspensions();
+    startSuspensionExpiryJob();
+
+    // Sanctions and notifications saved by the admin API reach the sockets of this process
+    moderationRealtimeService.startRealtimeBroadcast();
+    notificationService.startRealtimeBroadcast();
 
     // Not awaited: only reports SMTP problems in the logs, never blocks startup
     mailAdapter.verifyConnection();

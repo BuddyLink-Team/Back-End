@@ -475,8 +475,54 @@ export class AdminTransactionDTO {
 }
 
 
+const REPORT_PARENT_FALLBACK_NAME = 'Người dùng BuddyLink';
+
+const toReportActor = (userId, actorsById) => {
+  if (!userId) return null;
+  const id = userId.toString();
+  const actor = actorsById.get(id);
+  return { id, fullName: actor?.email || '', email: actor?.email || '' };
+};
+
+const toReportActions = (actions, actorsById) =>
+  (actions || []).map((action) => ({
+    id: action._id?.toString(),
+    type: action.type,
+    params: action.params || {},
+    performedBy: toReportActor(action.performedBy, actorsById),
+    performedAt: action.performedAt,
+    note: action.note || '',
+  }));
+
+const toReportPerson = (parent, parentId, user) => ({
+  id: (parent?._id || parentId)?.toString(),
+  fullName: parent?.fullName || REPORT_PARENT_FALLBACK_NAME,
+  email: user?.email || '',
+  avatarUrl: parent?.avatarUrl || '',
+});
+
 export class AdminReportListItemDTO {
-  static toResponse({ report, reporterParent, reportedParent, reportedUser, assignedUser, isOverdue }) {
+  /**
+   * @param {Object} data
+   * @param {Object} data.report
+   * @param {Object} [data.reporterParent]
+   * @param {Object} [data.reporterUser]
+   * @param {Object} [data.reportedParent]
+   * @param {Object} [data.reportedUser]
+   * @param {Map<string, Object>} data.actorsById - Admin accounts by id
+   * @param {boolean} data.isOverdue
+   * @param {string|null} [data.reportedMessageContent] - Only for a report on a message
+   */
+  static toResponse({
+    report,
+    reporterParent,
+    reporterUser,
+    reportedParent,
+    reportedUser,
+    actorsById,
+    isOverdue,
+    reportedMessageContent = null,
+  }) {
     return {
       id: report._id.toString(),
       category: report.category,
@@ -484,27 +530,22 @@ export class AdminReportListItemDTO {
       targetType: report.targetType,
       status: report.status,
       reason: report.reason || '',
-      reporter: {
-        id: (reporterParent?._id || report.reporterId)?.toString(),
-        fullName: reporterParent?.fullName || 'Người dùng BuddyLink',
-        avatarUrl: reporterParent?.avatarUrl || '',
-      },
+      description: report.description || '',
+      evidenceUrls: report.evidenceUrls || [],
+      reportedMessageContent,
+      reporter: toReportPerson(reporterParent, report.reporterId, reporterUser),
       reportedUser: {
-        id: (reportedParent?._id || report.reportedUserId)?.toString(),
-        fullName: reportedParent?.fullName || 'Người dùng BuddyLink',
-        avatarUrl: reportedParent?.avatarUrl || '',
+        ...toReportPerson(reportedParent, report.reportedUserId, reportedUser),
         strikeCount: reportedUser?.strikeCount || 0,
         isLocked: reportedUser ? !reportedUser.isActive : false,
       },
-      assignedTo: assignedUser
-        ? {
-            id: assignedUser._id.toString(),
-            fullName: assignedUser.fullName || assignedUser.email,
-            email: assignedUser.email,
-          }
-        : null,
+      assignedTo: toReportActor(report.assignedTo, actorsById),
       isOverdue: Boolean(isOverdue),
       resolution: report.resolution || null,
+      adminNotes: report.adminNotes || '',
+      resolvedBy: toReportActor(report.resolvedBy, actorsById),
+      resolvedAt: report.resolvedAt || null,
+      actions: toReportActions(report.actions, actorsById),
       createdAt: report.createdAt,
       updatedAt: report.updatedAt,
     };
@@ -518,13 +559,13 @@ export class AdminReportDetailDTO {
     reporterUser,
     reportedParent,
     reportedUser,
-    assignedUser,
-    resolvedByUser,
+    actorsById,
     targetContext,
     relatedOpenReports = [],
+    pastReports = [],
+    previousSanctions = [],
     isOverdue,
     totalReportsSubmitted = 0,
-    previousSanctions = [],
   }) {
     return {
       id: report._id.toString(),
@@ -536,66 +577,39 @@ export class AdminReportDetailDTO {
       description: report.description || '',
       evidenceUrls: report.evidenceUrls || [],
       reporter: {
-        id: (reporterParent?._id || report.reporterId)?.toString(),
-        fullName: reporterParent?.fullName || 'Người dùng BuddyLink',
-        email: reporterUser?.email || '',
+        ...toReportPerson(reporterParent, report.reporterId, reporterUser),
         phone: reporterUser?.phone || '',
-        avatarUrl: reporterParent?.avatarUrl || '',
         totalReportsSubmitted,
       },
       reportedUser: {
-        id: (reportedParent?._id || report.reportedUserId)?.toString(),
+        ...toReportPerson(reportedParent, report.reportedUserId, reportedUser),
         userId: reportedUser?._id?.toString() || reportedParent?.userId?.toString() || '',
-        fullName: reportedParent?.fullName || 'Người dùng BuddyLink',
-        email: reportedUser?.email || '',
         phone: reportedUser?.phone || '',
-        avatarUrl: reportedParent?.avatarUrl || '',
         strikeCount: reportedUser?.strikeCount || 0,
         isActive: reportedUser ? reportedUser.isActive !== false : true,
         suspensionUntil: reportedUser?.suspensionUntil || null,
+        isBanned: Boolean(reportedUser?.banReason),
+        pastReports,
         previousSanctions,
       },
       targetContext: targetContext || null,
-      assignedTo: assignedUser
-        ? {
-            id: assignedUser._id.toString(),
-            fullName: assignedUser.fullName || assignedUser.email,
-            email: assignedUser.email,
-          }
-        : null,
+      assignedTo: toReportActor(report.assignedTo, actorsById),
       isOverdue: Boolean(isOverdue),
-      actions: (report.actions || []).map((act) => ({
-        id: act._id?.toString(),
-        type: act.type,
-        params: act.params || {},
-        performedBy: act.performedBy?._id
-          ? { id: act.performedBy._id.toString(), fullName: act.performedBy.fullName || act.performedBy.email }
-          : { id: act.performedBy?.toString() },
-        performedAt: act.performedAt,
-        note: act.note || '',
-      })),
-      history: (report.history || []).map((h) => ({
-        id: h._id?.toString(),
-        eventType: h.eventType,
-        fromStatus: h.fromStatus,
-        toStatus: h.toStatus,
-        by: h.by?._id
-          ? { id: h.by._id.toString(), fullName: h.by.fullName || h.by.email }
-          : { id: h.by?.toString() },
-        at: h.at,
-        note: h.note || '',
-        metadata: h.metadata || null,
+      actions: toReportActions(report.actions, actorsById),
+      history: (report.history || []).map((entry) => ({
+        id: entry._id?.toString(),
+        eventType: entry.eventType,
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        by: toReportActor(entry.by, actorsById),
+        at: entry.at,
+        note: entry.note || '',
+        metadata: entry.metadata || null,
       })),
       relatedOpenReports,
       resolution: report.resolution || null,
       adminNotes: report.adminNotes || '',
-      resolvedBy: resolvedByUser
-        ? {
-            id: resolvedByUser._id.toString(),
-            fullName: resolvedByUser.fullName || resolvedByUser.email,
-            email: resolvedByUser.email,
-          }
-        : null,
+      resolvedBy: toReportActor(report.resolvedBy, actorsById),
       resolvedAt: report.resolvedAt || null,
       createdAt: report.createdAt,
       updatedAt: report.updatedAt,

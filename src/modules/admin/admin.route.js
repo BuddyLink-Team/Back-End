@@ -24,6 +24,7 @@ import {
   listTransactionsValidation,
   revenueSummaryValidation,
   listReportsValidation,
+  reportStatsValidation,
   reportIdParamValidation,
   reviewReportValidation,
   updateReportSeverityValidation,
@@ -90,7 +91,7 @@ router.get('/revenue/summary', validate(revenueSummaryValidation), adminControll
 
 // Safety & Reports Moderation
 router.get('/reports', validate(listReportsValidation), adminController.getReports);
-router.get('/reports/stats', adminController.getReportStats);
+router.get('/reports/stats', validate(reportStatsValidation), adminController.getReportStats);
 router.get('/reports/:id', validate(reportIdParamValidation), adminController.getReportDetail);
 router.patch('/reports/:id/review', validate(reviewReportValidation), adminController.reviewReport);
 router.patch('/reports/:id/severity', validate(updateReportSeverityValidation), adminController.updateReportSeverity);

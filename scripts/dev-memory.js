@@ -8,7 +8,7 @@
  *   npm run dev:memory -- --sync-places=ha-noi     # another area of PLACES_SYNC_AREAS
  *
  * The places sync runs in the background after the server starts (public Overpass can take minutes);
- * the seed already has 10 places, the others appear as cells finish.
+ * the seed already has its hand-added places, the others appear as cells finish.
  */
 /* eslint-disable no-console -- CLI script output */
 import { MongoMemoryServer } from 'mongodb-memory-server';
@@ -28,7 +28,7 @@ await mongoose.connect(process.env.MONGODB_URI);
 const counts = await seedDatabase();
 console.table(counts);
 await mongoose.disconnect();
-console.log(`All accounts use the password: ${SEED_PASSWORD} (admin: admin@buddylink.vn)`);
+console.log(`Seeded accounts use the password: ${SEED_PASSWORD} (admin: admin@buddylink.vn)`);
 
 const shutdown = async () => {
   await mongoose.disconnect().catch(() => {});

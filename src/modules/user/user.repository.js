@@ -46,6 +46,50 @@ class UserRepository {
   }
 
   /**
+   * Accounts by id, without the password hash
+   * @param {Array<string|ObjectId>} ids
+   * @returns {Promise<Array<Object>>}
+   */
+  async findByIds(ids) {
+    return User.find({ _id: { $in: ids } }).select('-passwordHash').lean();
+  }
+
+  async incrementStrikeCount(id) {
+    return User.findByIdAndUpdate(id, { $inc: { strikeCount: 1 } }, { new: true });
+  }
+
+  /**
+   * Reactivate an account whose suspension has ended
+   * @returns {Promise<boolean>} false when it was already lifted, or does not end yet
+   */
+  async liftSuspensionIfEnded(id, now) {
+    const result = await User.updateOne(
+      { _id: id, isActive: false, suspensionUntil: { $ne: null, $lte: now } },
+      { $set: { isActive: true, suspensionUntil: null } }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Accounts whose suspension has ended and are still locked
+   * @returns {Promise<Array<Object>>}
+   */
+  async findEndedSuspensions(now) {
+    return User.find({ isActive: false, suspensionUntil: { $ne: null, $lte: now } }).select('email').lean();
+  }
+
+  /**
+   * Accounts locked from now on, whichever process locks them
+   * @returns {import('mongodb').ChangeStream}
+   */
+  watchLockedAccounts() {
+    return User.watch(
+      [{ $match: { operationType: 'update', 'updateDescription.updatedFields.isActive': false } }],
+      { fullDocument: 'updateLookup' }
+    );
+  }
+
+  /**
    * IDs (as strings) of the given users whose account is active and not deleted
    * @param {Array<string|ObjectId>} ids
    * @returns {Promise<string[]>}

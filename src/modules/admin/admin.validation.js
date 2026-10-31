@@ -17,6 +17,18 @@ import {
   PAYMENT_STATUS,
   SUBSCRIPTION_PLAN_DEFAULTS,
 } from '../subscription/subscription.constants.js';
+import {
+  REPORT_STATUS,
+  REPORT_SEVERITY,
+  REPORT_CATEGORIES,
+  REPORT_TARGET_TYPES,
+  REPORT_SANCTION_TYPES,
+  REPORT_ACTION_TYPES,
+  REPORT_RESOLUTION_TYPES,
+  REPORT_SORTS,
+} from '../safety/safety.constants.js';
+
+const MONGO_ID_PATTERN = /^[a-f\d]{24}$/i;
 
 /**
  * Validation rules for GET /api/v1/admin/users
@@ -336,16 +348,6 @@ export const listTransactionsValidation = [
  */
 export const revenueSummaryValidation = [...dateRangeValidation];
 
-
-import {
-  REPORT_STATUS,
-  REPORT_SEVERITY,
-  REPORT_CATEGORIES,
-  REPORT_TARGET_TYPES,
-  REPORT_ACTION_TYPES,
-  REPORT_RESOLUTION_TYPES,
-} from '../safety/safety.constants.js';
-
 /**
  * Validation rules for GET /api/v1/admin/reports
  */
@@ -370,8 +372,8 @@ export const listReportsValidation = [
     .withMessage(`Target type must be one of: ${Object.values(REPORT_TARGET_TYPES).join(', ')}`),
   query('assignedTo')
     .optional()
-    .isString()
-    .trim(),
+    .custom((value) => value === 'me' || MONGO_ID_PATTERN.test(String(value)))
+    .withMessage("assignedTo must be 'me' or a valid admin ID"),
   query('isOverdue')
     .optional()
     .isBoolean()
@@ -384,9 +386,14 @@ export const listReportsValidation = [
     .withMessage(`Search must be at most ${ADMIN_SEARCH_MAX_LENGTH} characters`),
   query('sort')
     .optional()
-    .isString()
-    .trim(),
+    .isIn(Object.values(REPORT_SORTS))
+    .withMessage(`Sort must be one of: ${Object.values(REPORT_SORTS).join(', ')}`),
 ];
+
+/**
+ * Validation rules for GET /api/v1/admin/reports/stats
+ */
+export const reportStatsValidation = [...dateRangeValidation];
 
 /**
  * Validation rules for :id param on report endpoints
@@ -439,15 +446,15 @@ export const applyReportActionValidation = [
   body('type')
     .notEmpty()
     .withMessage('Action type is required')
-    .isIn(Object.values(REPORT_ACTION_TYPES))
-    .withMessage(`Action type must be one of: ${Object.values(REPORT_ACTION_TYPES).join(', ')}`),
+    .isIn(REPORT_SANCTION_TYPES)
+    .withMessage(`Action type must be one of: ${REPORT_SANCTION_TYPES.join(', ')}`),
   body('durationDays')
     .optional({ nullable: true })
     .isInt({ min: 1, max: 365 })
     .withMessage('Duration days must be an integer between 1 and 365')
     .bail()
     .custom((val, { req }) => {
-      if (req.body.type === 'suspend' && !val) {
+      if (req.body.type === REPORT_ACTION_TYPES.SUSPEND && !val) {
         throw new Error('durationDays is required when action type is suspend');
       }
       return true;
@@ -474,7 +481,15 @@ export const resolveReportValidation = [
     .notEmpty()
     .withMessage('Resolution is required')
     .isIn(Object.values(REPORT_RESOLUTION_TYPES))
-    .withMessage(`Resolution must be one of: ${Object.values(REPORT_RESOLUTION_TYPES).join(', ')}`),
+    .withMessage(`Resolution must be one of: ${Object.values(REPORT_RESOLUTION_TYPES).join(', ')}`)
+    .bail()
+    .custom((value, { req }) => {
+      const isDismissal = req.body.status === REPORT_STATUS.DISMISSED;
+      if (isDismissal !== (value === REPORT_RESOLUTION_TYPES.DISMISSED)) {
+        throw new Error('A dismissed report needs the dismissed resolution, and only a dismissed report can have it');
+      }
+      return true;
+    }),
   body('adminNotes')
     .notEmpty()
     .withMessage('Admin notes are required')

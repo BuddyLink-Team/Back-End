@@ -15,3 +15,5 @@ export const NOTIFICATION_SOCKET_EVENTS = Object.freeze({
   READ_ALL: 'notification:read_all',
 });
 
+export const NOTIFICATION_STREAM_RETRY_MS = 5000;
+

@@ -8,10 +8,9 @@ import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import chatService from '../chat/chat.service.js';
 import notificationService from '../notification/notification.service.js';
-import Report from '../safety/report.model.js';
-import User from '../user/user.model.js';
-import Parent from '../parent/parent.model.js';
-import { getIO } from '../../config/socket.js';
+import { NOTIFICATION_TYPES } from '../notification/notification.constants.js';
+import moderationRealtimeService from '../safety/moderation-realtime.service.js';
+import logger from '../../shared/logger/index.js';
 import aiAssistantService from '../ai-assistant/ai-assistant.service.js';
 import adminNotificationService from './admin-notification.service.js';
 import env from '../../config/env.js';
@@ -20,6 +19,7 @@ import { USER_ROLES, PAGINATION } from '../../shared/constants/index.js';
 import { getZonedParts, getZonedDayRange } from '../../shared/helpers/date.helper.js';
 import {
   ADMIN_NOTIFICATION_FILTER_ALL,
+  ADMIN_REPORT_ERRORS,
   ANALYTICS_DATE_FORMATS,
   ANALYTICS_DEFAULT_DAYS,
   ANALYTICS_GROUP_BY,
@@ -30,11 +30,17 @@ import {
 } from './admin.constants.js';
 import { emitUserEvent, USER_EVENTS } from '../user/user.events.js';
 import {
-  REPORT_STATUS,
-  REPORT_SEVERITY,
+  REPORT_ACCOUNT_SANCTION_TYPES,
   REPORT_ACTION_TYPES,
-  REPORT_RESOLUTION_TYPES,
+  REPORT_CATEGORY_NOTICES,
+  REPORT_CLOSED_STATUSES,
   REPORT_HISTORY_EVENT_TYPES,
+  REPORT_OPEN_STATUSES,
+  REPORT_RESOLUTION_TYPES,
+  REPORT_SANCTION_TYPES,
+  REPORT_SEVERITY,
+  REPORT_STATUS,
+  REPORT_TARGET_TYPES,
   OVERDUE_THRESHOLDS_HOURS,
 } from '../safety/safety.constants.js';
 import {
@@ -113,14 +119,29 @@ const listMonths = (from, to) => {
   return months;
 };
 
+const HOUR_MS = 60 * 60 * 1000;
+
 const checkIsOverdue = (report) => {
-  if (![REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING].includes(report.status)) {
-    return false;
-  }
-  const thresholdHours = OVERDUE_THRESHOLDS_HOURS[report.severity] || 24;
-  const elapsedMs = Date.now() - new Date(report.createdAt).getTime();
-  return elapsedMs > thresholdHours * 60 * 60 * 1000;
+  if (!REPORT_OPEN_STATUSES.includes(report.status)) return false;
+  const thresholdHours = OVERDUE_THRESHOLDS_HOURS[report.severity] || OVERDUE_THRESHOLDS_HOURS[REPORT_SEVERITY.MEDIUM];
+  return Date.now() - new Date(report.createdAt).getTime() > thresholdHours * HOUR_MS;
 };
+
+// A report created before these moments is overdue when it is still open
+const toOverdueCutoffs = () => ({
+  critical: new Date(Date.now() - OVERDUE_THRESHOLDS_HOURS[REPORT_SEVERITY.CRITICAL] * HOUR_MS),
+  regular: new Date(Date.now() - OVERDUE_THRESHOLDS_HOURS[REPORT_SEVERITY.MEDIUM] * HOUR_MS),
+});
+
+// Monday 00:00 of the current week, in APP_TIMEZONE
+const getZonedWeekStart = () => {
+  const { year, month, day } = getZonedParts(new Date());
+  const monday = new Date(Date.UTC(year, month - 1, day));
+  monday.setUTCDate(day - ((monday.getUTCDay() + 6) % 7));
+  return getZonedDayRange(monday.toISOString().slice(0, 10)).start;
+};
+
+const formatNoticeDate = (date) => date.toLocaleString('vi-VN', { timeZone: env.APP_TIMEZONE });
 
 const calculateKpi = (value, previousValue) => {
   const changePercent =
@@ -315,10 +336,16 @@ class AdminService {
     }
 
     const boolActive = isActive === true || isActive === 'true';
-    await userService.updateById(targetUserId, { isActive: boolActive });
+    // Decided by hand: an unlock ends any sanction, and a lock has no end date
+    const updated = await userService.updateById(targetUserId, {
+      isActive: boolActive,
+      suspensionUntil: null,
+      banReason: null,
+    });
 
     if (!boolActive) {
       await authService.revokeAllUserRefreshTokens(targetUserId);
+      moderationRealtimeService.notifyAccountLocked(updated || targetUser);
     }
 
     void emitUserEvent(USER_EVENTS.USER_STATUS_CHANGED, {
@@ -684,229 +711,93 @@ class AdminService {
   // ---------------------------------------------------------
 
   /**
-   * Get paginated safety reports with filtering and default sorting
+   * Moderation queue: severity then oldest first, unless another order is asked for
    * @param {Object} queryParams
-   * @param {string} [currentAdminUserId]
+   * @param {string|ObjectId} currentAdminUserId - Who assignedTo=me is
    */
   async getReports(queryParams, currentAdminUserId) {
     const paging = toPaging(queryParams);
-    const match = {};
+    const search = queryParams.search?.trim();
 
-    if (queryParams.status) {
-      match.status = queryParams.status;
-    }
-    if (queryParams.severity) {
-      match.severity = queryParams.severity;
-    }
-    if (queryParams.category) {
-      match.category = queryParams.category;
-    }
-    if (queryParams.targetType) {
-      match.targetType = queryParams.targetType;
-    }
-
-    if (queryParams.assignedTo) {
-      if (queryParams.assignedTo === 'me' && currentAdminUserId) {
-        match.assignedTo = currentAdminUserId;
-      } else {
-        match.assignedTo = queryParams.assignedTo;
-      }
-    }
-
-    if (queryParams.fromDate || queryParams.toDate) {
-      const start = toDateBound(queryParams.fromDate);
-      const end = toDateBound(queryParams.toDate, { endOfDay: true });
-      match.createdAt = {};
-      if (start) match.createdAt.$gte = start;
-      if (end) match.createdAt.$lte = end;
-    }
-
-    if (queryParams.search?.trim()) {
-      const searchParentIds = await this._findParentIdsBySearch(queryParams.search.trim());
-      match.$or = [
-        { reporterId: { $in: searchParentIds } },
-        { reportedUserId: { $in: searchParentIds } },
-        { reason: { $regex: queryParams.search.trim(), $options: 'i' } },
-      ];
-    }
-
-    // Overdue filter
-    const isOverdueFilter = toOptionalBoolean(queryParams.isOverdue);
-    if (isOverdueFilter === true) {
-      const now = Date.now();
-      const criticalCutoff = new Date(now - 2 * 3600 * 1000);
-      const regularCutoff = new Date(now - 24 * 3600 * 1000);
-      match.status = { $in: [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING] };
-      match.$and = [
-        ...(match.$and || []),
-        {
-          $or: [
-            { severity: REPORT_SEVERITY.CRITICAL, createdAt: { $lt: criticalCutoff } },
-            { severity: { $ne: REPORT_SEVERITY.CRITICAL }, createdAt: { $lt: regularCutoff } },
-          ],
-        },
-      ];
-    }
-
-    const pipeline = [
-      { $match: match },
-      {
-        $addFields: {
-          severityWeight: {
-            $switch: {
-              branches: [
-                { case: { $eq: ['$severity', REPORT_SEVERITY.CRITICAL] }, then: 4 },
-                { case: { $eq: ['$severity', REPORT_SEVERITY.HIGH] }, then: 3 },
-                { case: { $eq: ['$severity', REPORT_SEVERITY.MEDIUM] }, then: 2 },
-                { case: { $eq: ['$severity', REPORT_SEVERITY.LOW] }, then: 1 },
-              ],
-              default: 2,
-            },
-          },
-        },
-      },
-      { $sort: { severityWeight: -1, createdAt: 1 } },
-      {
-        $facet: {
-          items: [{ $skip: (paging.page - 1) * paging.limit }, { $limit: paging.limit }],
-          totalCount: [{ $count: 'count' }],
-        },
-      },
-    ];
-
-    const [result] = await Report.aggregate(pipeline);
-    const reports = result?.items || [];
-    const total = result?.totalCount?.[0]?.count || 0;
-
-    // Collect IDs for population
-    const parentIds = new Set();
-    const adminUserIds = new Set();
-    reports.forEach((r) => {
-      if (r.reporterId) parentIds.add(String(r.reporterId));
-      if (r.reportedUserId) parentIds.add(String(r.reportedUserId));
-      if (r.assignedTo) adminUserIds.add(String(r.assignedTo));
+    const { items: reports, total } = await safetyService.findReportPage({
+      status: queryParams.status,
+      severity: queryParams.severity,
+      category: queryParams.category,
+      targetType: queryParams.targetType,
+      assignedTo: queryParams.assignedTo === 'me' ? currentAdminUserId : queryParams.assignedTo,
+      from: toDateBound(queryParams.fromDate),
+      to: toDateBound(queryParams.toDate, { endOfDay: true }),
+      search,
+      searchParentIds: search ? await this._findParentIdsBySearch(search) : [],
+      overdueBefore: toOptionalBoolean(queryParams.isOverdue) ? toOverdueCutoffs() : undefined,
+      sort: queryParams.sort,
+      ...paging,
     });
 
-    const [parents, adminUsers] = await Promise.all([
-      parentService.getParentsByIds([...parentIds]),
-      User.find({ _id: { $in: [...adminUserIds] } }).lean(),
+    const parentIds = [...new Set(reports.flatMap((report) => [String(report.reporterId), String(report.reportedUserId)]))];
+    const parents = await parentService.getParentsByIds(parentIds);
+    const [users, actorsById, messageContents] = await Promise.all([
+      userService.getUsersByIds(parents.map((parent) => parent.userId).filter(Boolean)),
+      this._getReportActors(reports),
+      chatService.getMessageContents(reports.map((report) => report.targetMessageId).filter(Boolean)),
     ]);
-
-    const parentMap = new Map(parents.map((p) => [String(p._id), p]));
-    const userIds = parents.map((p) => p.userId).filter(Boolean);
-    const users = await User.find({ _id: { $in: userIds } }).lean();
-    const userMap = new Map(users.map((u) => [String(u._id), u]));
-    const adminUserMap = new Map(adminUsers.map((u) => [String(u._id), u]));
-
-    const items = reports.map((report) => {
-      const reporterParent = parentMap.get(String(report.reporterId));
-      const reportedParent = parentMap.get(String(report.reportedUserId));
-      const reportedUser = reportedParent ? userMap.get(String(reportedParent.userId)) : null;
-      const assignedUser = report.assignedTo ? adminUserMap.get(String(report.assignedTo)) : null;
-      const isOverdue = checkIsOverdue(report);
-
-      return AdminReportListItemDTO.toResponse({
-        report,
-        reporterParent,
-        reportedParent,
-        reportedUser,
-        assignedUser,
-        isOverdue,
-      });
-    });
+    const parentById = new Map(parents.map((parent) => [String(parent._id), parent]));
+    const userById = new Map(users.map((user) => [String(user._id), user]));
+    const toUser = (parent) => (parent ? userById.get(String(parent.userId)) : null);
 
     return {
-      items,
+      items: reports.map((report) => {
+        const reporterParent = parentById.get(String(report.reporterId));
+        const reportedParent = parentById.get(String(report.reportedUserId));
+        return AdminReportListItemDTO.toResponse({
+          report,
+          reporterParent,
+          reporterUser: toUser(reporterParent),
+          reportedParent,
+          reportedUser: toUser(reportedParent),
+          actorsById,
+          isOverdue: checkIsOverdue(report),
+          reportedMessageContent: report.targetMessageId
+            ? messageContents.get(String(report.targetMessageId)) || null
+            : null,
+        });
+      }),
       pagination: toPagination(paging, total),
     };
   }
 
   /**
-   * Queue stats & SLA statistics
-   * @param {Object} queryParams
+   * Queue counts of the stat strip and the status tabs
+   * @param {{ fromDate?: string, toDate?: string }} queryParams
    */
   async getReportStats(queryParams = {}) {
-    const match = {};
-    if (queryParams.fromDate || queryParams.toDate) {
-      const start = toDateBound(queryParams.fromDate);
-      const end = toDateBound(queryParams.toDate, { endOfDay: true });
-      match.createdAt = {};
-      if (start) match.createdAt.$gte = start;
-      if (end) match.createdAt.$lte = end;
-    }
+    const { byStatus, bySeverity, overdue, criticalPending, resolvedThisWeek, avgResolutionMs } =
+      await safetyService.getReportStats({
+        from: toDateBound(queryParams.fromDate),
+        to: toDateBound(queryParams.toDate, { endOfDay: true }),
+        overdueBefore: toOverdueCutoffs(),
+        weekStart: getZonedWeekStart(),
+      });
 
-    const now = Date.now();
-    const criticalCutoff = new Date(now - 2 * 3600 * 1000);
-    const regularCutoff = new Date(now - 24 * 3600 * 1000);
-
-    const today = new Date();
-    const day = today.getDay();
-    const diff = today.getDate() - day + (day === 0 ? -6 : 1);
-    const startOfWeek = new Date(today.setDate(diff));
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const [
-      pending,
-      reviewing,
-      dismissed,
-      resolvedThisWeek,
-      criticalPending,
-      overdueCritical,
-      overdueRegular,
-      avgResult,
-    ] = await Promise.all([
-      Report.countDocuments({ ...match, status: REPORT_STATUS.PENDING }),
-      Report.countDocuments({ ...match, status: REPORT_STATUS.REVIEWING }),
-      Report.countDocuments({ ...match, status: REPORT_STATUS.DISMISSED }),
-      Report.countDocuments({ ...match, status: REPORT_STATUS.RESOLVED, resolvedAt: { $gte: startOfWeek } }),
-      Report.countDocuments({ ...match, status: REPORT_STATUS.PENDING, severity: REPORT_SEVERITY.CRITICAL }),
-      Report.countDocuments({
-        ...match,
-        status: { $in: [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING] },
-        severity: REPORT_SEVERITY.CRITICAL,
-        createdAt: { $lt: criticalCutoff },
-      }),
-      Report.countDocuments({
-        ...match,
-        status: { $in: [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING] },
-        severity: { $ne: REPORT_SEVERITY.CRITICAL },
-        createdAt: { $lt: regularCutoff },
-      }),
-      Report.aggregate([
-        {
-          $match: {
-            ...match,
-            status: REPORT_STATUS.RESOLVED,
-            resolvedAt: { $ne: null },
-          },
-        },
-        {
-          $project: {
-            resolutionHours: {
-              $divide: [{ $subtract: ['$resolvedAt', '$createdAt'] }, 3600000],
-            },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            avgHours: { $avg: '$resolutionHours' },
-          },
-        },
-      ]),
-    ]);
-
-    const overdue = overdueCritical + overdueRegular;
-    const avgResolutionHours = avgResult?.[0]?.avgHours ? Number(avgResult[0].avgHours.toFixed(1)) : 0;
+    const countOf = (counts, value) => counts[value] || 0;
+    const pending = countOf(byStatus, REPORT_STATUS.PENDING);
+    const reviewing = countOf(byStatus, REPORT_STATUS.REVIEWING);
+    const resolved = countOf(byStatus, REPORT_STATUS.RESOLVED);
+    const dismissed = countOf(byStatus, REPORT_STATUS.DISMISSED);
 
     return {
+      total: pending + reviewing + resolved + dismissed,
       pending,
       reviewing,
-      resolvedThisWeek,
+      resolved,
       dismissed,
+      bySeverity: Object.fromEntries(
+        Object.values(REPORT_SEVERITY).map((severity) => [severity, countOf(bySeverity, severity)])
+      ),
+      resolvedThisWeek,
       overdue,
       criticalPending,
-      avgResolutionHours,
+      avgResolutionHours: Number((avgResolutionMs / HOUR_MS).toFixed(1)),
     };
   }
 
@@ -915,125 +806,87 @@ class AdminService {
    * @param {string} id
    */
   async getReportDetail(id) {
-    const report = await Report.findById(id).lean();
+    const report = await safetyService.getReportById(id);
     if (!report) {
-      throw new AppError('Report not found', 404, 'REPORT_NOT_FOUND');
+      throw new AppError('Report not found', 404, ADMIN_REPORT_ERRORS.REPORT_NOT_FOUND);
     }
 
-    const [
-      reporterParent,
-      reportedParent,
-      assignedUser,
-      resolvedByUser,
-      totalReportsSubmitted,
-      previousReportsWithActions,
-      relatedOpenReportsRaw,
-    ] = await Promise.all([
+    const [reporterParent, reportedParent, totalReportsSubmitted, otherReports] = await Promise.all([
       parentService.getParentById(report.reporterId),
       parentService.getParentById(report.reportedUserId),
-      report.assignedTo ? User.findById(report.assignedTo).lean() : null,
-      report.resolvedBy ? User.findById(report.resolvedBy).lean() : null,
-      Report.countDocuments({ reporterId: report.reporterId }),
-      Report.find({
-        reportedUserId: report.reportedUserId,
-        _id: { $ne: report._id },
-        'actions.0': { $exists: true },
-      })
-        .select('actions')
-        .lean(),
-      Report.find({
-        reportedUserId: report.reportedUserId,
-        _id: { $ne: report._id },
-        status: { $in: [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING] },
-      })
-        .select('category severity createdAt reporterId')
-        .sort({ createdAt: -1 })
-        .lean(),
+      safetyService.countReportsFiledBy(report.reporterId),
+      safetyService.getOtherReportsAgainst(report.reportedUserId, report._id),
     ]);
 
-    const [reporterUser, reportedUser] = await Promise.all([
-      reporterParent?.userId ? User.findById(reporterParent.userId).lean() : null,
-      reportedParent?.userId ? User.findById(reportedParent.userId).lean() : null,
+    const [users, actorsById, targetContext, relatedReporters] = await Promise.all([
+      userService.getUsersByIds([reporterParent?.userId, reportedParent?.userId].filter(Boolean)),
+      this._getReportActors([report]),
+      this._getReportTargetContext(report),
+      parentService.getParentsByIds([...new Set(otherReports.map((other) => String(other.reporterId)))]),
     ]);
+    const userById = new Map(users.map((user) => [String(user._id), user]));
+    const reporterNameById = new Map(relatedReporters.map((parent) => [String(parent._id), parent.fullName]));
 
-    const previousSanctions = [];
-    previousReportsWithActions.forEach((r) => {
-      (r.actions || []).forEach((act) => {
-        previousSanctions.push({
-          type: act.type,
-          performedAt: act.performedAt,
-          note: act.note,
-        });
-      });
-    });
+    const relatedOpenReports = otherReports
+      .filter((other) => REPORT_OPEN_STATUSES.includes(other.status))
+      .map((other) => ({
+        id: other._id.toString(),
+        category: other.category,
+        severity: other.severity,
+        createdAt: other.createdAt,
+        reporterName: reporterNameById.get(String(other.reporterId)) || 'Người dùng BuddyLink',
+      }));
 
-    const relatedReporterIds = [...new Set(relatedOpenReportsRaw.map((r) => String(r.reporterId)))];
-    const relatedReporters = await parentService.getParentsByIds(relatedReporterIds);
-    const relatedReportersMap = new Map(relatedReporters.map((p) => [String(p._id), p.fullName]));
-
-    const relatedOpenReports = relatedOpenReportsRaw.map((r) => ({
-      id: r._id.toString(),
-      category: r.category,
-      severity: r.severity,
-      createdAt: r.createdAt,
-      reporterName: relatedReportersMap.get(String(r.reporterId)) || 'Người dùng BuddyLink',
+    const pastReports = otherReports.map((other) => ({
+      id: other._id.toString(),
+      category: other.category,
+      severity: other.severity,
+      status: other.status,
+      resolution: other.resolution || null,
+      createdAt: other.createdAt,
+      resolvedAt: other.resolvedAt || null,
     }));
 
-    let targetContext = null;
-    if (report.targetType === 'message' && report.targetMessageId) {
-      targetContext = await chatService.getMessageContext(report.targetMessageId);
-    } else if (report.targetType === 'playdate' && report.targetPlaydateId) {
-      try {
-        const pdDetail = await playdateService.getPlaydateDetailForAdmin(report.targetPlaydateId);
-        targetContext = {
-          type: 'playdate',
-          playdate: pdDetail.playdate,
-          pendingReschedule: pdDetail.pendingReschedule,
-        };
-      } catch (_e) {
-        targetContext = { type: 'playdate', playdate: null };
-      }
-    } else if (report.targetType === 'user') {
-      const childrenCounts = await childService.countActiveChildrenByParentIds([report.reportedUserId]);
-      targetContext = {
-        type: 'user',
-        childrenCount: childrenCounts.get(String(report.reportedUserId)) || 0,
-      };
-    }
-
-    const isOverdue = checkIsOverdue(report);
+    const previousSanctions = otherReports
+      .flatMap((other) =>
+        (other.actions || []).map((action) => ({
+          reportId: other._id.toString(),
+          type: action.type,
+          params: action.params || {},
+          performedAt: action.performedAt,
+          note: action.note || '',
+        }))
+      )
+      .sort((a, b) => new Date(b.performedAt) - new Date(a.performedAt));
 
     return AdminReportDetailDTO.toResponse({
       report,
       reporterParent,
-      reporterUser,
+      reporterUser: userById.get(String(reporterParent?.userId)),
       reportedParent,
-      reportedUser,
-      assignedUser,
-      resolvedByUser,
+      reportedUser: userById.get(String(reportedParent?.userId)),
+      actorsById,
       targetContext,
       relatedOpenReports,
-      isOverdue,
-      totalReportsSubmitted,
+      pastReports,
       previousSanctions,
+      isOverdue: checkIsOverdue(report),
+      totalReportsSubmitted,
     });
   }
 
   /**
-   * Claim or Takeover a report
+   * Claim or take over a report
    * @param {string} adminUserId
    * @param {string} id
    * @param {{ action: 'claim' | 'takeover' }} param2
    */
   async reviewReport(adminUserId, id, { action }) {
-    const report = await Report.findById(id);
-    if (!report) {
-      throw new AppError('Report not found', 404, 'REPORT_NOT_FOUND');
-    }
+    const report = await this._getReportDocOrFail(id);
 
     if (action === 'claim') {
-      if (report.status !== REPORT_STATUS.PENDING && report.status !== REPORT_STATUS.REVIEWING) {
-        throw new AppError('Can only claim pending or reviewing reports', 400, 'INVALID_STATUS_TRANSITION');
+      if (!REPORT_OPEN_STATUSES.includes(report.status)) {
+        throw new AppError('Can only claim pending or reviewing reports', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
       }
       const fromStatus = report.status;
       report.status = REPORT_STATUS.REVIEWING;
@@ -1048,7 +901,7 @@ class AdminService {
       });
     } else if (action === 'takeover') {
       if (report.status !== REPORT_STATUS.REVIEWING) {
-        throw new AppError('Can only takeover reports in reviewing status', 400, 'INVALID_STATUS_TRANSITION');
+        throw new AppError('Can only takeover reports in reviewing status', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
       }
       report.assignedTo = adminUserId;
       report.history.push({
@@ -1061,7 +914,7 @@ class AdminService {
       });
     }
 
-    await report.save();
+    await safetyService.saveReport(report);
     return this.getReportDetail(id);
   }
 
@@ -1072,13 +925,10 @@ class AdminService {
    * @param {{ severity: string, note?: string }} param2
    */
   async updateReportSeverity(adminUserId, id, { severity, note }) {
-    const report = await Report.findById(id);
-    if (!report) {
-      throw new AppError('Report not found', 404, 'REPORT_NOT_FOUND');
-    }
+    const report = await this._getReportDocOrFail(id);
 
     if (report.status !== REPORT_STATUS.REVIEWING) {
-      throw new AppError('Can only change severity when reviewing', 400, 'INVALID_STATUS_TRANSITION');
+      throw new AppError('Can only change severity when reviewing', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
     }
 
     const oldSeverity = report.severity;
@@ -1093,124 +943,55 @@ class AdminService {
       metadata: { oldSeverity, newSeverity: severity },
     });
 
-    await report.save();
+    await safetyService.saveReport(report);
     return this.getReportDetail(id);
   }
 
   /**
-   * Apply sanction action on reported target
+   * Apply a sanction, through the service of the module that owns its target
    * @param {string} adminUserId
    * @param {string} id
    * @param {{ type: string, durationDays?: number, note?: string }} param2
    */
   async applyReportAction(adminUserId, id, { type, durationDays, note }) {
-    const report = await Report.findById(id);
-    if (!report) {
-      throw new AppError('Report not found', 404, 'REPORT_NOT_FOUND');
-    }
+    const report = await this._getReportDocOrFail(id);
 
-    if ([REPORT_STATUS.RESOLVED, REPORT_STATUS.DISMISSED].includes(report.status)) {
-      throw new AppError('Cannot apply action on closed report', 409, 'REPORT_ALREADY_CLOSED');
+    if (REPORT_CLOSED_STATUSES.includes(report.status)) {
+      throw new AppError('Cannot apply action on closed report', 409, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
     }
-
-    const alreadyApplied = (report.actions || []).some((act) => act.type === type);
-    if (alreadyApplied) {
-      throw new AppError('This action has already been applied to this report', 409, 'ACTION_ALREADY_APPLIED');
+    if (report.status !== REPORT_STATUS.REVIEWING) {
+      throw new AppError('Start reviewing the report before applying an action', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
+    }
+    if (!REPORT_SANCTION_TYPES.includes(type)) {
+      throw new AppError('This action cannot be applied as a sanction', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
+    }
+    if ((report.actions || []).some((action) => action.type === type)) {
+      throw new AppError('This action has already been applied to this report', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
     }
 
     const reportedParent = await parentService.getParentById(report.reportedUserId);
     if (!reportedParent) {
-      throw new AppError('Reported parent not found', 404, 'REPORTED_USER_NOT_FOUND');
+      throw new AppError('Reported parent not found', 404, ADMIN_REPORT_ERRORS.REPORTED_USER_NOT_FOUND);
     }
-    const targetUserId = reportedParent.userId;
-    const targetUser = await userService.getUserById(targetUserId);
+    const targetUser = await userService.liftExpiredSuspension(await userService.getUserById(reportedParent.userId));
 
-    if (type === REPORT_ACTION_TYPES.WARN) {
-      await User.findByIdAndUpdate(targetUserId, { $inc: { strikeCount: 1 } });
-      await notificationService.createNotification({
-        recipientId: targetUserId,
-        type: 'system',
-        title: 'Cảnh cáo vi phạm an toàn',
-        body: `Bạn nhận được 1 cảnh cáo do vi phạm quy chuẩn cộng đồng liên quan đến: ${report.category}. Vui lòng tuân thủ quy tắc để giữ an toàn cho cộng đồng.`,
-        data: { reportId: report._id.toString() },
-      });
-    } else if (type === REPORT_ACTION_TYPES.DELETE_MESSAGE) {
-      if (report.targetType !== 'message' || !report.targetMessageId) {
-        throw new AppError('Report is not targeting a message', 400, 'INVALID_ACTION_TYPE');
-      }
-      const delResult = await chatService.adminDeleteMessage(report.targetMessageId);
-      if (delResult.alreadyDeleted) {
-        throw new AppError('Message is already deleted', 409, 'ACTION_ALREADY_APPLIED');
-      }
-      await notificationService.createNotification({
-        recipientId: targetUserId,
-        type: 'system',
-        title: 'Tin nhắn đã bị gỡ bỏ',
-        body: 'Một tin nhắn của bạn đã bị Quản trị viên xóa do vi phạm quy chuẩn nội dung an toàn.',
-        data: { reportId: report._id.toString() },
-      });
-    } else if (type === REPORT_ACTION_TYPES.CANCEL_PLAYDATE) {
-      if (report.targetType !== 'playdate' || !report.targetPlaydateId) {
-        throw new AppError('Report is not targeting a playdate', 400, 'INVALID_ACTION_TYPE');
-      }
-      await playdateService.cancelPlaydateByAdmin(
-        report.targetPlaydateId,
-        note || 'Hủy bởi Quản trị viên do vi phạm an toàn'
-      );
-    } else if (type === REPORT_ACTION_TYPES.SUSPEND) {
-      const days = parseInt(durationDays, 10);
-      if (!days || days < 1) {
-        throw new AppError('durationDays must be at least 1', 400, 'DURATION_DAYS_REQUIRED');
-      }
-      const suspensionUntil = new Date(Date.now() + days * 24 * 3600 * 1000);
-      await User.findByIdAndUpdate(targetUserId, { $set: { isActive: false, suspensionUntil } });
-      await authService.revokeAllUserRefreshTokens(targetUserId);
+    const sanctions = {
+      [REPORT_ACTION_TYPES.WARN]: () => this._warnReportedUser(report, targetUser),
+      [REPORT_ACTION_TYPES.DELETE_MESSAGE]: () => this._deleteReportedMessage(report, targetUser),
+      [REPORT_ACTION_TYPES.CANCEL_PLAYDATE]: () => this._cancelReportedPlaydate(report, note),
+      [REPORT_ACTION_TYPES.SUSPEND]: () => this._suspendReportedUser(report, targetUser, durationDays),
+      [REPORT_ACTION_TYPES.BAN]: () => this._banReportedUser(report, targetUser, note),
+    };
+    await sanctions[type]();
 
-      try {
-        const io = getIO();
-        if (io) {
-          io.to(`user:${targetUserId.toString()}`).emit('account:locked', {
-            reason: `Tài khoản tạm thời bị đình chỉ trong ${days} ngày vì vi phạm quy chuẩn an toàn.`,
-          });
-          io.in(`user:${targetUserId.toString()}`).disconnectSockets(true);
-        }
-      } catch (_err) {}
-
-      await notificationService.createNotification({
-        recipientId: targetUserId,
-        type: 'system',
-        title: 'Tài khoản bị tạm đình chỉ',
-        body: `Tài khoản của bạn đã bị tạm đình chỉ trong ${days} ngày cho đến ${suspensionUntil.toLocaleString('vi-VN')} do vi phạm quy chuẩn an toàn.`,
-        data: { reportId: report._id.toString() },
-      });
-    } else if (type === REPORT_ACTION_TYPES.BAN) {
-      if (!targetUser.isActive && !targetUser.suspensionUntil) {
-        throw new AppError('User is already permanently banned', 409, 'ACTION_ALREADY_APPLIED');
-      }
-      await User.findByIdAndUpdate(targetUserId, {
-        $set: { isActive: false, suspensionUntil: null, banReason: note || 'Khóa tài khoản vĩnh viễn' },
-      });
-      await authService.revokeAllUserRefreshTokens(targetUserId);
-
-      try {
-        const io = getIO();
-        if (io) {
-          io.to(`user:${targetUserId.toString()}`).emit('account:locked', {
-            reason: 'Tài khoản của bạn đã bị khóa vĩnh viễn do vi phạm nghiêm trọng an toàn cộng đồng.',
-          });
-          io.in(`user:${targetUserId.toString()}`).disconnectSockets(true);
-        }
-      } catch (_err) {}
-    }
-
+    const durationValue = type === REPORT_ACTION_TYPES.SUSPEND ? parseInt(durationDays, 10) : null;
     report.actions.push({
       type,
-      params: { durationDays: durationDays ? parseInt(durationDays, 10) : null, reason: note || '' },
+      params: { durationDays: durationValue, reason: note || '' },
       performedBy: adminUserId,
       performedAt: new Date(),
       note: note || '',
     });
-
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
       fromStatus: report.status,
@@ -1218,108 +999,77 @@ class AdminService {
       by: adminUserId,
       at: new Date(),
       note: note || `Đã thi hành chế tài: ${type}`,
-      metadata: { actionType: type, durationDays },
+      metadata: { actionType: type, durationDays: durationValue },
     });
 
-    await report.save();
+    await safetyService.saveReport(report);
     return this.getReportDetail(id);
   }
 
   /**
-   * Resolve or dismiss a report
+   * Resolve or dismiss a report. A pending one can only be dismissed (clear spam or duplicate).
    * @param {string} adminUserId
    * @param {string} id
    * @param {{ status: string, resolution: string, adminNotes: string, applyToRelatedReportIds?: string[] }} param2
    */
   async resolveReport(adminUserId, id, { status, resolution, adminNotes, applyToRelatedReportIds = [] }) {
-    const report = await Report.findById(id);
-    if (!report) {
-      throw new AppError('Report not found', 404, 'REPORT_NOT_FOUND');
+    const report = await this._getReportDocOrFail(id);
+
+    if (REPORT_CLOSED_STATUSES.includes(report.status)) {
+      throw new AppError('Report is already closed', 409, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
+    }
+    if (status === REPORT_STATUS.RESOLVED && report.status !== REPORT_STATUS.REVIEWING) {
+      throw new AppError('A report must be reviewed before it is resolved', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
+    }
+    if ((status === REPORT_STATUS.DISMISSED) !== (resolution === REPORT_RESOLUTION_TYPES.DISMISSED)) {
+      throw new AppError('The resolution does not match the status', 400, ADMIN_REPORT_ERRORS.INVALID_RESOLUTION);
+    }
+    if (resolution === REPORT_RESOLUTION_TYPES.ACTION_TAKEN && report.actions.length === 0) {
+      throw new AppError('Resolved report with action_taken requires at least one action', 400, ADMIN_REPORT_ERRORS.ACTIONS_REQUIRED_FOR_RESOLVE);
     }
 
-    if ([REPORT_STATUS.RESOLVED, REPORT_STATUS.DISMISSED].includes(report.status)) {
-      throw new AppError('Report is already closed', 409, 'REPORT_ALREADY_CLOSED');
+    const accountSanctions = report.actions.filter((action) => REPORT_ACCOUNT_SANCTION_TYPES.includes(action.type));
+    const closesRelatedReports = applyToRelatedReportIds.length > 0;
+    if (closesRelatedReports && (status !== REPORT_STATUS.RESOLVED || accountSanctions.length === 0)) {
+      throw new AppError('Related reports can only be resolved with a suspension or a ban', 400, ADMIN_REPORT_ERRORS.RELATED_REPORTS_REQUIRE_SANCTION);
     }
 
-    if (status === REPORT_STATUS.RESOLVED && resolution === REPORT_RESOLUTION_TYPES.ACTION_TAKEN) {
-      if (!report.actions || report.actions.length === 0) {
-        throw new AppError('Resolved report with action_taken requires at least one action', 400, 'ACTIONS_REQUIRED_FOR_RESOLVE');
-      }
-    }
+    const note = adminNotes.trim();
+    this._closeReport(report, { adminUserId, status, resolution, adminNotes: note, historyNote: note });
+    await safetyService.saveReport(report);
+    await this._notifyReporter(report, status);
 
-    const fromStatus = report.status;
-    report.status = status;
-    report.resolution = resolution;
-    report.adminNotes = adminNotes;
-    report.resolvedBy = adminUserId;
-    report.resolvedAt = new Date();
-
-    report.history.push({
-      eventType: REPORT_HISTORY_EVENT_TYPES.STATUS_CHANGE,
-      fromStatus,
-      toStatus: status,
-      by: adminUserId,
-      at: new Date(),
-      note: adminNotes,
-      metadata: { resolution },
-    });
-
-    await report.save();
-
-    // Reporter notification (BR-12: no sanction disclosure)
-    const reporterParent = await parentService.getParentById(report.reporterId);
-    if (reporterParent?.userId) {
-      await notificationService.createNotification({
-        recipientId: reporterParent.userId,
-        type: 'system',
-        title: 'Cập nhật báo cáo vi phạm',
-        body:
-          status === REPORT_STATUS.RESOLVED
-            ? 'Báo cáo của bạn về tài khoản đã được xử lý theo Quy chuẩn Cộng đồng BuddyLink. Cảm ơn bạn đã chung tay bảo vệ an toàn cho các bé.'
-            : 'Báo cáo của bạn đã được ban quản trị xem xét và lưu hồ sơ theo dõi.',
-        data: { reportId: report._id.toString() },
-      });
-    }
-
-    // Bulk resolve related open reports
-    if (Array.isArray(applyToRelatedReportIds) && applyToRelatedReportIds.length > 0) {
-      const relatedReports = await Report.find({
-        _id: { $in: applyToRelatedReportIds },
-        reportedUserId: report.reportedUserId,
-        status: { $in: [REPORT_STATUS.PENDING, REPORT_STATUS.REVIEWING] },
-      });
-
-      for (const rel of relatedReports) {
-        const prevStatus = rel.status;
-        rel.status = status;
-        rel.resolution = resolution;
-        rel.adminNotes = adminNotes;
-        rel.resolvedBy = adminUserId;
-        rel.resolvedAt = new Date();
-        rel.history.push({
-          eventType: REPORT_HISTORY_EVENT_TYPES.STATUS_CHANGE,
-          fromStatus: prevStatus,
-          toStatus: status,
-          by: adminUserId,
-          at: new Date(),
-          note: `Đóng đồng loạt theo báo cáo ${report._id}: ${adminNotes}`,
-          metadata: { resolution, parentReportId: report._id },
-        });
-        await rel.save();
-
-        const relReporter = await parentService.getParentById(rel.reporterId);
-        if (relReporter?.userId) {
-          await notificationService.createNotification({
-            recipientId: relReporter.userId,
-            type: 'system',
-            title: 'Cập nhật báo cáo vi phạm',
-            body:
-              status === REPORT_STATUS.RESOLVED
-                ? 'Báo cáo của bạn về tài khoản đã được xử lý theo Quy chuẩn Cộng đồng BuddyLink. Cảm ơn bạn đã chung tay bảo vệ an toàn cho các bé.'
-                : 'Báo cáo của bạn đã được ban quản trị xem xét và lưu hồ sơ theo dõi.',
-            data: { reportId: rel._id.toString() },
+    if (closesRelatedReports) {
+      const relatedReports = await safetyService.getOpenReportDocsAgainst(report.reportedUserId, applyToRelatedReportIds);
+      for (const related of relatedReports) {
+        accountSanctions.forEach((action) => {
+          related.actions.push({
+            type: action.type,
+            params: action.params,
+            performedBy: adminUserId,
+            performedAt: new Date(),
+            note: action.note,
           });
-        }
+          related.history.push({
+            eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
+            fromStatus: related.status,
+            toStatus: related.status,
+            by: adminUserId,
+            at: new Date(),
+            note: `Áp dụng chế tài ${action.type} theo báo cáo ${report._id}`,
+            metadata: { actionType: action.type, sourceReportId: report._id },
+          });
+        });
+        this._closeReport(related, {
+          adminUserId,
+          status,
+          resolution,
+          adminNotes: note,
+          historyNote: `Đóng đồng loạt theo báo cáo ${report._id}: ${note}`,
+          historyMetadata: { sourceReportId: report._id },
+        });
+        await safetyService.saveReport(related);
+        await this._notifyReporter(related, status);
       }
     }
 
@@ -1327,37 +1077,249 @@ class AdminService {
   }
 
   /**
-   * Reopen a closed report
+   * Reopen a closed report: the sanctions already applied stay in effect
    * @param {string} adminUserId
    * @param {string} id
    * @param {{ note: string }} param2
    */
   async reopenReport(adminUserId, id, { note }) {
-    const report = await Report.findById(id);
-    if (!report) {
-      throw new AppError('Report not found', 404, 'REPORT_NOT_FOUND');
-    }
+    const report = await this._getReportDocOrFail(id);
 
-    if (![REPORT_STATUS.RESOLVED, REPORT_STATUS.DISMISSED].includes(report.status)) {
-      throw new AppError('Only closed reports can be reopened', 400, 'INVALID_STATUS_TRANSITION');
+    if (!REPORT_CLOSED_STATUSES.includes(report.status)) {
+      throw new AppError('Only closed reports can be reopened', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
     }
 
     const fromStatus = report.status;
     report.status = REPORT_STATUS.REVIEWING;
+    report.resolution = null;
+    report.adminNotes = '';
     report.resolvedBy = null;
     report.resolvedAt = null;
-
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.REOPEN,
       fromStatus,
       toStatus: REPORT_STATUS.REVIEWING,
       by: adminUserId,
       at: new Date(),
-      note,
+      note: note.trim(),
     });
 
-    await report.save();
+    await safetyService.saveReport(report);
     return this.getReportDetail(id);
+  }
+
+  /**
+   * @private
+   */
+  async _getReportDocOrFail(id) {
+    const report = await safetyService.getReportDocById(id);
+    if (!report) {
+      throw new AppError('Report not found', 404, ADMIN_REPORT_ERRORS.REPORT_NOT_FOUND);
+    }
+    return report;
+  }
+
+  /**
+   * Admin accounts that appear on the reports (assignee, closer, actions and history)
+   * @private
+   * @returns {Promise<Map<string, Object>>} By user id
+   */
+  async _getReportActors(reports) {
+    const ids = reports.flatMap((report) => [
+      report.assignedTo,
+      report.resolvedBy,
+      ...(report.actions || []).map((action) => action.performedBy),
+      ...(report.history || []).map((entry) => entry.by),
+    ]);
+    const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
+    const users = uniqueIds.length > 0 ? await userService.getUsersByIds(uniqueIds) : [];
+    return new Map(users.map((user) => [String(user._id), user]));
+  }
+
+  /**
+   * What was reported; null when it no longer exists
+   * @private
+   */
+  async _getReportTargetContext(report) {
+    if (report.targetType === REPORT_TARGET_TYPES.MESSAGE && report.targetMessageId) {
+      return chatService.getMessageContext(report.targetMessageId);
+    }
+    if (report.targetType === REPORT_TARGET_TYPES.PLAYDATE && report.targetPlaydateId) {
+      try {
+        return { type: 'playdate', playdate: await this.getPlaydateDetail(report.targetPlaydateId) };
+      } catch (error) {
+        if (error.code === 'PLAYDATE_NOT_FOUND') return null;
+        throw error;
+      }
+    }
+    if (report.targetType === REPORT_TARGET_TYPES.USER) {
+      const childrenCounts = await childService.countActiveChildrenByParentIds([report.reportedUserId]);
+      return { type: 'user', childrenCount: childrenCounts.get(String(report.reportedUserId)) || 0 };
+    }
+    return null;
+  }
+
+  /**
+   * @private
+   */
+  _closeReport(report, { adminUserId, status, resolution, adminNotes, historyNote, historyMetadata = {} }) {
+    const fromStatus = report.status;
+    report.status = status;
+    report.resolution = resolution;
+    report.adminNotes = adminNotes;
+    report.resolvedBy = adminUserId;
+    report.resolvedAt = new Date();
+    report.history.push({
+      eventType: REPORT_HISTORY_EVENT_TYPES.STATUS_CHANGE,
+      fromStatus,
+      toStatus: status,
+      by: adminUserId,
+      at: new Date(),
+      note: historyNote,
+      metadata: { resolution, ...historyMetadata },
+    });
+  }
+
+  /**
+   * In-app notification that must not undo a moderation step already saved when it fails
+   * @private
+   */
+  async _sendReportNotification(notification) {
+    try {
+      await notificationService.createNotification({ type: NOTIFICATION_TYPES.SYSTEM, ...notification });
+    } catch (error) {
+      logger.error(`[AdminReports] Notification failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * The reporter learns the outcome, never the sanction
+   * @private
+   */
+  async _notifyReporter(report, status) {
+    const reporterParent = await parentService.getParentById(report.reporterId);
+    if (!reporterParent?.userId) return;
+    await this._sendReportNotification({
+      recipientId: reporterParent.userId,
+      title: 'Cập nhật báo cáo vi phạm',
+      body:
+        status === REPORT_STATUS.RESOLVED
+          ? 'Báo cáo của bạn đã được xử lý theo Quy chuẩn Cộng đồng BuddyLink. Cảm ơn bạn đã chung tay bảo vệ an toàn cho các bé.'
+          : 'Báo cáo của bạn đã được xem xét và lưu hồ sơ theo dõi.',
+      data: { reportId: report._id },
+    });
+  }
+
+  /**
+   * @private
+   */
+  async _warnReportedUser(report, targetUser) {
+    await userService.addStrike(targetUser._id);
+    await this._sendReportNotification({
+      recipientId: targetUser._id,
+      title: 'Cảnh cáo vi phạm an toàn',
+      body: `Bạn nhận được 1 cảnh cáo do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}. Vui lòng tuân thủ quy tắc để giữ an toàn cho cộng đồng.`,
+      data: { reportId: report._id },
+    });
+  }
+
+  /**
+   * @private
+   */
+  async _deleteReportedMessage(report, targetUser) {
+    if (report.targetType !== REPORT_TARGET_TYPES.MESSAGE || !report.targetMessageId) {
+      throw new AppError('Report is not targeting a message', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
+    }
+    const { message, alreadyDeleted } = await chatService.adminDeleteMessage(report.targetMessageId);
+    if (!message) {
+      throw new AppError('The reported message no longer exists', 404, ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND);
+    }
+    if (alreadyDeleted) {
+      throw new AppError('Message is already deleted', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+    }
+    await moderationRealtimeService.notifyMessageDeleted(message);
+    await this._sendReportNotification({
+      recipientId: targetUser._id,
+      title: 'Tin nhắn đã bị gỡ bỏ',
+      body: `Một tin nhắn của bạn đã bị Quản trị viên gỡ do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}.`,
+      data: { reportId: report._id },
+    });
+  }
+
+  /**
+   * Participants are notified by the playdate cancellation itself
+   * @private
+   */
+  async _cancelReportedPlaydate(report, note) {
+    if (report.targetType !== REPORT_TARGET_TYPES.PLAYDATE || !report.targetPlaydateId) {
+      throw new AppError('Report is not targeting a playdate', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
+    }
+    try {
+      await playdateService.cancelPlaydateByAdmin(report.targetPlaydateId, note || 'Hủy bởi Quản trị viên do vi phạm an toàn');
+    } catch (error) {
+      if (error.code === 'PLAYDATE_NOT_FOUND') {
+        throw new AppError('The reported playdate no longer exists', 404, ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND);
+      }
+      if (error.code === 'ALREADY_CANCELLED') {
+        throw new AppError('Playdate is already cancelled', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * A locked account stays as it is: a suspension would shorten a ban, or restart a suspension in progress
+   * @private
+   */
+  async _suspendReportedUser(report, targetUser, durationDays) {
+    const days = parseInt(durationDays, 10);
+    if (!days || days < 1) {
+      throw new AppError('durationDays must be at least 1', 400, ADMIN_REPORT_ERRORS.DURATION_DAYS_REQUIRED);
+    }
+    if (!targetUser.isActive) {
+      throw new AppError('This account is already locked', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+    }
+
+    const suspensionUntil = new Date(Date.now() + days * DAY_MS);
+    const updated = await userService.suspendAccount(targetUser._id, suspensionUntil);
+    await this._afterAccountLocked(updated || { _id: targetUser._id, suspensionUntil }, targetUser);
+    await this._sendReportNotification({
+      recipientId: targetUser._id,
+      title: 'Tài khoản bị tạm đình chỉ',
+      body: `Tài khoản của bạn bị tạm đình chỉ ${days} ngày, đến ${formatNoticeDate(suspensionUntil)}, do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}.`,
+      data: { reportId: report._id },
+    });
+  }
+
+  /**
+   * @private
+   */
+  async _banReportedUser(report, targetUser, note) {
+    if (targetUser.banReason) {
+      throw new AppError('User is already permanently banned', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+    }
+    const banReason = note || REPORT_CATEGORY_NOTICES[report.category];
+    const updated = await userService.banAccount(targetUser._id, banReason);
+    await this._afterAccountLocked(updated || { _id: targetUser._id, banReason }, targetUser);
+    await this._sendReportNotification({
+      recipientId: targetUser._id,
+      title: 'Tài khoản bị khóa vĩnh viễn',
+      body: `Tài khoản của bạn đã bị khóa vĩnh viễn do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}.`,
+      data: { reportId: report._id },
+    });
+  }
+
+  /**
+   * @private
+   */
+  async _afterAccountLocked(lockedUser, targetUser) {
+    await authService.revokeAllUserRefreshTokens(targetUser._id);
+    moderationRealtimeService.notifyAccountLocked(lockedUser);
+    void emitUserEvent(USER_EVENTS.USER_STATUS_CHANGED, {
+      userId: targetUser._id,
+      email: targetUser.email,
+      isActive: false,
+    });
   }
 
   /**

@@ -3,6 +3,7 @@ import request from 'supertest';
 import app from '../../src/app.js';
 import notificationService from '../../src/modules/notification/notification.service.js';
 import { NOTIFICATION_TYPES } from '../../src/modules/notification/notification.constants.js';
+import { NOTIFICATION_EVENTS, onNotificationEvent } from '../../src/modules/notification/notification.events.js';
 
 const register = async (label) => {
   const res = await request(app).post('/api/v1/auth/register').send({
@@ -51,6 +52,23 @@ describe('Notifications module API (/api/v1/notifications)', () => {
     expect(res.body.data.items).toEqual([]);
     expect(res.body.data.unreadCount).toBe(0);
     expect(res.body.data.pagination.total).toBe(0);
+  });
+
+  it('sends a new notification directly only when no change stream delivers it', async () => {
+    const delivered = [];
+    onNotificationEvent(NOTIFICATION_EVENTS.CREATED, ({ notification }) => delivered.push(notification.title));
+    const create = (title) =>
+      notificationService.createNotification({ recipientId: userB.userId, type: NOTIFICATION_TYPES.SYSTEM, title, body: 'x' });
+
+    await create('Không có stream');
+    notificationService.stream = {};
+    try {
+      await create('Có stream');
+    } finally {
+      notificationService.stream = null;
+    }
+
+    expect(delivered).toEqual(['Không có stream']);
   });
 
   it('creates and lists notifications for a user', async () => {

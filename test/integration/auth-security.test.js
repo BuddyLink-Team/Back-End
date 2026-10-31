@@ -164,18 +164,36 @@ describe('Auth security hardening', () => {
 });
 
 describe('Profile phone & preferences rules', () => {
-  it('should let several users clear their phone number (no duplicate null)', async () => {
-    const first = await register({ phone: `09${Math.floor(10000000 + Math.random() * 89999999)}` });
-    const second = await register({ phone: `09${Math.floor(10000000 + Math.random() * 89999999)}` });
+  it('should not let a user clear their phone number', async () => {
+    const phone = `09${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { token, email } = await register({ phone });
+    const savedPhone = (await User.findOne({ email })).phone;
 
-    for (const account of [first, second]) {
-      const res = await request(app)
-        .put('/api/v1/user/me')
-        .set('Authorization', `Bearer ${account.token}`)
-        .send({ phone: '' });
-      expect(res.status).toBe(200);
-      expect(res.body.data.phone).toBeNull();
+    for (const path of ['/api/v1/user/me', '/api/v1/parent/me']) {
+      for (const emptyPhone of ['', '   ', null]) {
+        const res = await request(app)
+          .put(path)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ phone: emptyPhone });
+        expect(res.status).toBe(400);
+      }
     }
+
+    expect((await User.findOne({ email })).phone).toBe(savedPhone);
+  });
+
+  it('should keep the phone number when an update leaves it out', async () => {
+    const phone = `09${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { token, email } = await register({ phone });
+    const savedPhone = (await User.findOne({ email })).phone;
+
+    const res = await request(app)
+      .put('/api/v1/parent/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ bio: 'Gia dinh yeu the thao' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.phone).toBe(savedPhone);
   });
 
   it('should reset phone verification when the phone number changes', async () => {
