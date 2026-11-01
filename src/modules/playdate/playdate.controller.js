@@ -166,6 +166,23 @@ class PlaydateController {
   }
 
   /**
+   * PATCH /api/v1/playdates/:id/reschedule/cancel
+   * Withdraw a pending reschedule request
+   */
+  async cancelRescheduleRequest(req, res, next) {
+    try {
+      const result = await playdateService.cancelRescheduleRequest(
+        req.userId,
+        req.params.id,
+        req.body
+      );
+      return successResponse(res, result, 'Reschedule request cancelled successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
    * GET /api/v1/playdates/:id/reschedule
    * Get latest reschedule request for a playdate
    */

@@ -232,6 +232,19 @@ export const voteRescheduleValidation = [
 ];
 
 /**
+ * Validation rules for PATCH /playdates/:id/reschedule/cancel
+ */
+export const cancelRescheduleValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid playdate ID'),
+  body('requestId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid reschedule request ID'),
+];
+
+/**
  * Validation rules for the invitable friends list
  */
 export const getInvitableFriendsValidation = [

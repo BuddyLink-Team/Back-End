@@ -56,6 +56,20 @@ class RescheduleRepository {
   }
 
   /**
+   * Atomically decide a request that is still pending
+   * @param {Object} filter
+   * @param {string} status - The final status
+   * @returns {Promise<RescheduleRequest|null>} The updated request, or null when it was no longer pending
+   */
+  async resolvePending(filter, status) {
+    return RescheduleRequest.findOneAndUpdate(
+      { ...filter, status: RESCHEDULE_STATUS.PENDING },
+      { $set: { status, resolvedAt: new Date() } },
+      { new: true },
+    );
+  }
+
+  /**
    * Cancel every pending reschedule request of a playdate
    * @param {string|ObjectId} playdateId
    */

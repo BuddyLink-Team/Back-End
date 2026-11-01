@@ -962,10 +962,7 @@ class PlaydateService {
     const pendingReq = await rescheduleRepository.removeVoterFromPending(playdateId, parentId);
     if (!pendingReq || !pendingReq.responses.every((r) => r.status === PARTICIPANT_STATUS.ACCEPTED)) return;
 
-    await this._applySchedule(playdateId, pendingReq);
-    pendingReq.status = RESCHEDULE_STATUS.ACCEPTED;
-    pendingReq.resolvedAt = new Date();
-    await pendingReq.save();
+    await this._acceptReschedule(pendingReq);
   }
 
   // ---------------------------------------------------------------------------
@@ -990,6 +987,29 @@ class PlaydateService {
       updateFields.location = newLocation;
     }
     return playdateRepository.updateById(playdateId, updateFields);
+  }
+
+  /**
+   * Accept a request and apply its schedule. The request is claimed first, so a request the host
+   * has just withdrawn never changes the playdate.
+   * @private
+   * @returns {Promise<boolean>} false when the request was no longer pending
+   */
+  async _acceptReschedule(request) {
+    const accepted = await rescheduleRepository.resolvePending({ _id: request._id }, RESCHEDULE_STATUS.ACCEPTED);
+    if (!accepted) return false;
+
+    try {
+      await this._applySchedule(accepted.playdateId, accepted);
+    } catch (error) {
+      // An accepted request must always match the playdate schedule
+      await rescheduleRepository.findOneAndUpdate(
+        { _id: accepted._id, status: RESCHEDULE_STATUS.ACCEPTED },
+        { $set: { status: RESCHEDULE_STATUS.PENDING, resolvedAt: null } },
+      );
+      throw error;
+    }
+    return true;
   }
 
   /**
@@ -1122,16 +1142,15 @@ class PlaydateService {
       throw new AppError('You have already voted or this request is already resolved', 400, 'ALREADY_VOTED');
     }
 
+    // The request may have been withdrawn or decided since the vote was recorded
+    let isStillValid = true;
     if (status === PARTICIPANT_STATUS.DECLINED) {
-      updatedReq.status = RESCHEDULE_STATUS.DECLINED;
-      updatedReq.resolvedAt = new Date();
-      await updatedReq.save();
+      isStillValid = Boolean(await rescheduleRepository.resolvePending({ _id: updatedReq._id }, RESCHEDULE_STATUS.DECLINED));
     } else if (updatedReq.responses.every((r) => r.status === PARTICIPANT_STATUS.ACCEPTED)) {
-      // Update the playdate first so an accepted request always matches the playdate schedule
-      await this._applySchedule(id, updatedReq);
-      updatedReq.status = RESCHEDULE_STATUS.ACCEPTED;
-      updatedReq.resolvedAt = new Date();
-      await updatedReq.save();
+      isStillValid = await this._acceptReschedule(updatedReq);
+    }
+    if (!isStillValid) {
+      throw new AppError('No pending reschedule request found to vote on', 404, 'RESCHEDULE_NOT_FOUND');
     }
 
     const populatedReq = await rescheduleRepository.findById(updatedReq._id);
@@ -1140,6 +1159,38 @@ class PlaydateService {
     return {
       rescheduleRequest: RescheduleResponseDTO.toResponse(populatedReq, parentId),
       playdate: await this._toViewerResponse(updatedPlaydate, parentId),
+    };
+  }
+
+  /**
+   * Withdraw a pending reschedule request (Host only): the votes are dropped and the schedule stays.
+   */
+  async cancelRescheduleRequest(userId, id, { requestId } = {}) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Can only withdraw a reschedule of upcoming playdates', 400, 'INVALID_PLAYDATE_STATUS_FOR_RESCHEDULE');
+    }
+    if (!this._isHost(playdate, parentId)) {
+      throw new AppError('Only the host can withdraw a reschedule', 403, 'FORBIDDEN_CANCEL_RESCHEDULE');
+    }
+
+    const query = { playdateId: id };
+    if (requestId) {
+      query._id = requestId;
+    }
+
+    const cancelledReq = await rescheduleRepository.resolvePending(query, RESCHEDULE_STATUS.CANCELLED);
+    if (!cancelledReq) {
+      throw new AppError('No pending reschedule request found to withdraw', 404, 'RESCHEDULE_NOT_FOUND');
+    }
+
+    const populatedReq = await rescheduleRepository.findById(cancelledReq._id);
+
+    return {
+      rescheduleRequest: RescheduleResponseDTO.toResponse(populatedReq, parentId),
+      playdate: await this._toViewerResponse(playdate, parentId),
     };
   }
 

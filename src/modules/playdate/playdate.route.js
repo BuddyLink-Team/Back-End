@@ -14,6 +14,7 @@ import {
   respondPlaydateValidation,
   createRescheduleValidation,
   voteRescheduleValidation,
+  cancelRescheduleValidation,
   timeSlotSuggestionsValidation,
   placeSuggestionsValidation,
   activitySuggestionsValidation,
@@ -61,6 +62,9 @@ router.post('/:id/reschedule', validate(createRescheduleValidation), playdateCon
 // PUT & PATCH /api/v1/playdates/:id/reschedule/vote (Vote on reschedule)
 router.put('/:id/reschedule/vote', validate(voteRescheduleValidation), playdateController.voteRescheduleRequest);
 router.patch('/:id/reschedule/vote', validate(voteRescheduleValidation), playdateController.voteRescheduleRequest);
+
+// PATCH /api/v1/playdates/:id/reschedule/cancel (Host withdraws a pending reschedule)
+router.patch('/:id/reschedule/cancel', validate(cancelRescheduleValidation), playdateController.cancelRescheduleRequest);
 
 // GET /api/v1/playdates/:id/reschedule (Get active reschedule request)
 router.get('/:id/reschedule', validate(playdateIdParamValidation), playdateController.getRescheduleRequest);

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, beforeEach, jest } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
 import Parent from '../../src/modules/parent/parent.model.js';
@@ -10,6 +10,7 @@ import RescheduleRequest from '../../src/modules/playdate/reschedule-request.mod
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import playdateService from '../../src/modules/playdate/playdate.service.js';
+import rescheduleRepository from '../../src/modules/playdate/reschedule.repository.js';
 import { QUOTA_PERIOD_TYPES } from '../../src/modules/subscription/subscription.constants.js';
 import { getScheduledStart, getStartOfZonedDay } from '../../src/shared/helpers/date.helper.js';
 
@@ -53,6 +54,9 @@ const reschedule = (host, playdateId, body) =>
 
 const vote = (parent, playdateId, body) =>
   request(app).put(`/api/v1/playdates/${playdateId}/reschedule/vote`).set('Authorization', `Bearer ${parent.token}`).send(body);
+
+const cancelReschedule = (parent, playdateId, body = {}) =>
+  request(app).patch(`/api/v1/playdates/${playdateId}/reschedule/cancel`).set('Authorization', `Bearer ${parent.token}`).send(body);
 
 describe('date helper (business time zone)', () => {
   it('builds the start instant from the calendar date and HH:mm in Asia/Ho_Chi_Minh', () => {
@@ -202,6 +206,60 @@ describe('Playdate rules', () => {
       expect(res.body.data.playdate.time).toBe('15:30');
     });
 
+    it('lets only the host withdraw a pending proposal, keeping the schedule', async () => {
+      const proposal = await reschedule(host, playdateId, { newDate: isoDay(8), newStartTime: '08:00' });
+      const requestId = proposal.body.data.rescheduleRequest.id;
+
+      const byGuest = await cancelReschedule(guestA, playdateId, { requestId });
+      expect(byGuest.status).toBe(403);
+      expect(byGuest.body.error.code).toBe('FORBIDDEN_CANCEL_RESCHEDULE');
+
+      const res = await cancelReschedule(host, playdateId, { requestId });
+      expect(res.status).toBe(200);
+      expect(res.body.data.rescheduleRequest.status).toBe('cancelled');
+      expect(res.body.data.playdate.time).toBe('15:30');
+
+      // Already withdrawn: nothing left to withdraw or to vote on
+      const again = await cancelReschedule(host, playdateId, { requestId });
+      expect(again.status).toBe(404);
+      expect(again.body.error.code).toBe('RESCHEDULE_NOT_FOUND');
+      const lateVote = await vote(guestA, playdateId, { requestId, status: 'accepted' });
+      expect(lateVote.status).toBe(404);
+    });
+
+    it('does not withdraw a newer proposal than the one on screen', async () => {
+      const old = await reschedule(host, playdateId, { newDate: isoDay(8), newStartTime: '08:00' });
+      const newer = await reschedule(host, playdateId, { newDate: isoDay(8), newStartTime: '09:00' });
+
+      const res = await cancelReschedule(host, playdateId, { requestId: old.body.data.rescheduleRequest.id });
+      expect(res.status).toBe(404);
+      const stored = await RescheduleRequest.findById(newer.body.data.rescheduleRequest.id).lean();
+      expect(stored.status).toBe('pending');
+    });
+
+    it('keeps the schedule when the host withdraws while the last vote is being recorded', async () => {
+      const proposal = await reschedule(host, playdateId, { newDate: isoDay(8), newStartTime: '08:00' });
+      const requestId = proposal.body.data.rescheduleRequest.id;
+      await vote(guestA, playdateId, { requestId, status: 'accepted' });
+
+      // The host withdraws right after the vote of B is stored, before the request is resolved
+      const recordVote = rescheduleRepository.findOneAndUpdate.bind(rescheduleRepository);
+      const spy = jest.spyOn(rescheduleRepository, 'findOneAndUpdate').mockImplementationOnce(async (...args) => {
+        const stored = await recordVote(...args);
+        await cancelReschedule(host, playdateId, { requestId });
+        return stored;
+      });
+
+      const res = await vote(guestB, playdateId, { requestId, status: 'accepted' });
+      spy.mockRestore();
+
+      expect(res.status).toBe(404);
+      const stored = await RescheduleRequest.findById(requestId).lean();
+      expect(stored.status).toBe('cancelled');
+      const playdate = await Playdate.findById(playdateId).lean();
+      expect(playdate.time).toBe('15:30');
+    });
+
     it('cancels a pending reschedule when the host completes the playdate', async () => {
       const proposal = await reschedule(host, playdateId, { newDate: isoDay(9), newStartTime: '08:00' });
       await Playdate.updateOne({ _id: playdateId }, { $set: { scheduledDate: new Date(Date.now() - 2 * DAY) } });
@@ -210,6 +268,11 @@ describe('Playdate rules', () => {
       expect(done.status).toBe(200);
       const stored = await RescheduleRequest.findById(proposal.body.data.rescheduleRequest.id).lean();
       expect(stored.status).toBe('cancelled');
+
+      // A closed playdate has no proposal to withdraw
+      const withdraw = await cancelReschedule(host, playdateId);
+      expect(withdraw.status).toBe(400);
+      expect(withdraw.body.error.code).toBe('INVALID_PLAYDATE_STATUS_FOR_RESCHEDULE');
     });
   });
 
