@@ -443,6 +443,40 @@ class PlaydateService {
    * @param {Date} [now]
    * @returns {Promise<{ completed: number, cancelled: number }>}
    */
+  async toggleChaperone(userId, id, action = 'confirm') {
+    const parentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Cannot update chaperone on a completed or cancelled playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    const isHost = this._isHost(playdate, parentId);
+    const isAccepted = (playdate.participants || []).some(
+      (p) => toId(p.parentId) === parentId.toString() && p.status === PARTICIPANT_STATUS.ACCEPTED
+    );
+
+    if (!isHost && !isAccepted) {
+      throw new AppError('Only confirmed participants or host can sign up as chaperones', 403, 'NOT_PARTICIPANT');
+    }
+
+    if (!Array.isArray(playdate.chaperones)) {
+      playdate.chaperones = [];
+    }
+
+    if (action === 'confirm') {
+      const already = playdate.chaperones.some((c) => toId(c.parentId) === parentId.toString());
+      if (!already) {
+        playdate.chaperones.push({ parentId, confirmedAt: new Date() });
+      }
+    } else if (action === 'cancel') {
+      playdate.chaperones = playdate.chaperones.filter((c) => toId(c.parentId) !== parentId.toString());
+    }
+
+    await playdateRepository.updateById(id, { chaperones: playdate.chaperones });
+    return this.getPlaydateById(userId, id);
+  }
+
   async closeExpiredPlaydates(now = new Date()) {
     const cutoff = getStartOfZonedDay(now);
     const expired = await playdateRepository.findUpcomingBefore(cutoff);
@@ -513,6 +547,8 @@ class PlaydateService {
         date: `${String(day.day).padStart(2, '0')}/${String(day.month).padStart(2, '0')}`,
         placeName: playdate.location?.name || '',
         recipientParentIds: this.getAcceptedParentIds(playdate),
+        note: playdate.note || '',
+        chatConversationId: playdate.chatConversationId || null,
       });
       result[kind] += 1;
     }

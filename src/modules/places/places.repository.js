@@ -186,6 +186,14 @@ class PlacesRepository {
   async updateById(id, update) {
     return PlacesCache.findByIdAndUpdate(id, { $set: update }, { new: true }).lean();
   }
+
+  async updateAttractions(id, attractions) {
+    return PlacesCache.findByIdAndUpdate(
+      id,
+      { $set: { attractions, attractionsFetchedAt: new Date() } },
+      { new: true }
+    ).lean();
+  }
 }
 
 export default new PlacesRepository();

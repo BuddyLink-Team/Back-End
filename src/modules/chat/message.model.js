@@ -28,6 +28,20 @@ const messageSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    poll: {
+      question: { type: String, default: null },
+      options: [
+        {
+          id: { type: String, required: true },
+          date: { type: String, default: null },
+          time: { type: String, default: null },
+          label: { type: String, required: true },
+          voterParentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Parent' }],
+        },
+      ],
+      deadline: { type: Date, default: null },
+      isClosed: { type: Boolean, default: false },
+    },
     readBy: [
       {
         parentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Parent', required: true },

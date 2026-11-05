@@ -51,7 +51,25 @@ export const broadcastReadStatus = (io, conversationId, readResult) => {
   }
 };
 
+/**
+ * Broadcast poll vote update to conversation room
+ */
+export const broadcastPollVoted = (io, conversationId, message) => {
+  if (!io || !conversationId || !message) return;
+
+  try {
+    io.to(conversationId.toString()).emit(SOCKET_EVENTS.POLL_VOTED, {
+      conversationId: conversationId.toString(),
+      messageId: message._id?.toString() || message.id,
+      poll: message.poll,
+    });
+  } catch (err) {
+    logger.error(`[ChatBroadcast] broadcastPollVoted error: ${err.message}`);
+  }
+};
+
 export default {
   broadcastNewMessage,
   broadcastReadStatus,
+  broadcastPollVoted,
 };

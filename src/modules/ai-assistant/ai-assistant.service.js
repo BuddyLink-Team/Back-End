@@ -27,6 +27,22 @@ import { stripSensitive } from './tools/tool-sanitizer.js';
 const QUOTA_ACTION = 'aiAssistant';
 const EMPTY_USAGE = Object.freeze({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
 
+const TOOL_PROGRESS_MESSAGES = Object.freeze({
+  getMyChildren: 'Đang kiểm tra thông tin hồ sơ của các bé...',
+  findMatches: 'Đang tìm kiếm các bạn chơi phù hợp...',
+  findNearbyPlaces: 'Đang tìm các địa điểm vui chơi gần khu vực...',
+  suggestTimeSlots: 'Đang kiểm tra lịch trống và giờ mở cửa...',
+  findAvailablePlaymates: 'Đang kiểm tra các bạn chơi rảnh vào khung giờ này...',
+  suggestActivities: 'Đang tìm trò chơi phù hợp với sở thích của các bé...',
+  suggestPlaces: 'Đang gợi ý các địa điểm thuận tiện cho các gia đình...',
+  proposePlaydate: 'Đang cập nhật lịch trình và kiểm tra các lưu ý an toàn...',
+  sendConnectionRequests: 'Đang gửi lời mời kết bạn...',
+  listMyPlaydates: 'Đang tra cứu danh sách lịch hẹn của bé...',
+  reschedulePlaydate: 'Đang gửi yêu cầu dời lịch hẹn...',
+  cancelPlaydate: 'Đang xử lý hủy lịch hẹn...',
+  respondInvitation: 'Đang cập nhật trạng thái tham gia...',
+});
+
 const addUsage = (total, usage = EMPTY_USAGE) => ({
   promptTokens: total.promptTokens + usage.promptTokens,
   completionTokens: total.completionTokens + usage.completionTokens,
@@ -120,7 +136,7 @@ class AIAssistantService {
    * @param {string} sessionId
    * @param {{ content: string, choice?: { messageId: string, stepId: string, optionIds?: string[], custom?: Object } }} input
    */
-  async sendMessage(userId, sessionId, { content, choice }) {
+  async sendMessage(userId, sessionId, { content, choice, onProgress }) {
     const parent = await this._getParent(userId);
     const session = await aiAssistantRepository.acquireLock(sessionId, parent._id);
     if (!session) {
@@ -130,7 +146,7 @@ class AIAssistantService {
     }
 
     try {
-      return await this._runTurn(userId, parent, session, { content: content.trim(), choice });
+      return await this._runTurn(userId, parent, session, { content: content.trim(), choice, onProgress });
     } catch (error) {
       await aiAssistantRepository.releaseLock(session._id);
       throw error;
@@ -138,7 +154,7 @@ class AIAssistantService {
   }
 
   /** @private */
-  async _runTurn(userId, parent, session, { content, choice }) {
+  async _runTurn(userId, parent, session, { content, choice, onProgress }) {
     const startedAt = Date.now();
     const { usage, messageCap } = await this._getLimits(parent._id);
     if ((session.messageCount || 0) >= messageCap) {
@@ -155,7 +171,7 @@ class AIAssistantService {
     }
 
     try {
-      return await this._completeTurn(userId, parent, session, { content, choice, startedAt, messageCap, quota, isFirstBilled });
+      return await this._completeTurn(userId, parent, session, { content, choice, startedAt, messageCap, quota, isFirstBilled, onProgress });
     } catch (error) {
       if (isFirstBilled) {
         await subscriptionService
@@ -167,7 +183,7 @@ class AIAssistantService {
   }
 
   /** @private */
-  async _completeTurn(userId, parent, session, { content, choice, startedAt, messageCap, quota, isFirstBilled }) {
+  async _completeTurn(userId, parent, session, { content, choice, startedAt, messageCap, quota, isFirstBilled, onProgress }) {
     const deadline = startedAt + AI_LIMITS.TURN_TIMEOUT_MS;
     const draft = session.planDraft ? structuredClone(session.planDraft) : null;
     const ctx = createToolContext({ userId, parent, draft, lastMatchCard: lastMatchCardOf(session.messages) });
@@ -182,7 +198,7 @@ class AIAssistantService {
 
     let generated;
     try {
-      generated = await this._generateReply(ctx, session, content, systemNote, { allowTools, deadline });
+      generated = await this._generateReply(ctx, session, content, systemNote, { allowTools, deadline, onProgress });
     } catch (error) {
       // The tapped option already took effect (playdate created, requests sent, plan updated): the turn is
       // stored with a plain reply, so a retry cannot repeat it
@@ -244,7 +260,7 @@ class AIAssistantService {
    * and the tool rounds stop early when only the time for a last answer is left.
    * @private
    */
-  async _generateReply(ctx, session, content, systemNote, { allowTools: toolsAllowed = true, deadline = Infinity } = {}) {
+  async _generateReply(ctx, session, content, systemNote, { allowTools: toolsAllowed = true, deadline = Infinity, onProgress } = {}) {
     // A failed lookup leaves the children unknown: the model can still call getMyChildren
     const children = await ctx.getChildren().catch(() => null);
     const systemInstruction = buildSystemPrompt({
@@ -303,6 +319,10 @@ class AIAssistantService {
       // One after another: the planning tools share the draft
       const responseParts = [];
       for (const call of calls) {
+        if (typeof onProgress === 'function') {
+          const progressMsg = TOOL_PROGRESS_MESSAGES[call.name] || 'Đang xử lý thông tin...';
+          onProgress({ tool: call.name, message: progressMsg });
+        }
         const result = await executeTool(call.name, call.args, ctx);
         responseParts.push({ functionResponse: { id: call.id, name: call.name, response: result } });
         toolMessages.push({

@@ -246,6 +246,21 @@ class PlaydateController {
       return next(error);
     }
   }
+
+  /**
+   * POST /api/v1/playdates/:id/chaperone
+   * Register or unregister as a chaperone for this playdate
+   */
+  async toggleChaperone(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { action = 'confirm' } = req.body;
+      const result = await playdateService.toggleChaperone(req.userId, id, action);
+      return successResponse(res, result, 'Chaperone status updated successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
 
 export default new PlaydateController();

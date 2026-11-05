@@ -378,6 +378,14 @@ class PlacesService {
     const center = await this._resolveCenter(userId);
     return toPlaceResponse(place, center);
   }
+
+  async saveAttractions(placeId, attractions) {
+    return placesRepository.updateAttractions(placeId, attractions);
+  }
+
+  async getPlaceDocById(placeId) {
+    return placesRepository.findById(placeId);
+  }
 }
 
 export default new PlacesService();

@@ -1,4 +1,4 @@
-import { GoogleGenAI, FunctionCallingConfigMode, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/app-error.js';
@@ -16,7 +16,7 @@ const GENERATION_DEFAULTS = Object.freeze({
   temperature: 0.4,
   maxOutputTokens: 1024,
   // Picking a tool and writing 2-4 sentences needs little reasoning; the default level adds seconds per call
-  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+  thinkingConfig: { thinkingBudget: 0 },
 });
 
 const isConfigured = () => Boolean(env.AI.GEMINI_API_KEY && !env.AI.GEMINI_API_KEY.startsWith('<'));
@@ -169,6 +169,68 @@ class GeminiAdapter {
       if ((model.supportedActions || []).includes('generateContent')) names.push(model.name);
     }
     return names;
+  }
+
+  /**
+   * Search real place attractions using Google Search Grounding (BUD-49 A4).
+   * @param {{ placeName: string, address?: string }} params
+   * @returns {Promise<{ attractions: Array<Object>, hasGrounding: boolean, sourceUrl: string|null }>}
+   */
+  async searchPlaceAttractions({ placeName, address = '' }) {
+    if (!isConfigured()) return { attractions: [], hasGrounding: false, sourceUrl: null };
+    const client = this._getClient();
+    const prompt = `Bạn là trợ lý tra cứu khu vui chơi trẻ em. Hãy tìm thông tin trên mạng về địa điểm "${placeName}" tại "${address}".
+Liệt kê các trò chơi, tiện ích, hoặc hoạt động vui chơi nổi bật dành cho trẻ em tại đây.
+Trả lời dạng JSON array hợp lệ:
+[
+  { "title": "Tên trò chơi", "description": "Mô tả ngắn" }
+]
+Chỉ trả về JSON array, không viết thêm text nào khác.`;
+
+    try {
+      const response = await client.models.generateContent({
+        model: env.AI.GEMINI_MODEL,
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          temperature: 0.2,
+        },
+      });
+
+      const candidate = response.candidates?.[0];
+      const grounding = candidate?.groundingMetadata;
+      const chunks = grounding?.groundingChunks || [];
+      const primaryUrl = chunks[0]?.web?.uri || null;
+
+      let text = (candidate?.content?.parts || []).map((p) => p.text || '').join('');
+      text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+      let attractions = [];
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          attractions = parsed
+            .slice(0, 5)
+            .map((a) => ({
+              title: String(a.title || '').trim(),
+              description: String(a.description || '').trim(),
+              sourceUrl: primaryUrl,
+            }))
+            .filter((a) => a.title);
+        }
+      } catch (_jsonErr) {
+        // Fallback or empty
+      }
+
+      return {
+        attractions,
+        hasGrounding: Boolean(chunks.length),
+        sourceUrl: primaryUrl,
+      };
+    } catch (err) {
+      logger.warn(`[GeminiAdapter] searchPlaceAttractions failed: ${err.message}`);
+      return { attractions: [], hasGrounding: false, sourceUrl: null };
+    }
   }
 }
 

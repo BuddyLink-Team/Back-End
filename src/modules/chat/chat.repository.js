@@ -171,6 +171,14 @@ class ChatRepository {
   }
 
   /**
+   * Find a full message document by ID
+   * @param {string|ObjectId} messageId
+   */
+  async findMessageDocById(messageId) {
+    return Message.findById(messageId).populate('senderId', 'fullName avatarUrl verification');
+  }
+
+  /**
    * Create a new message
    * @param {Object} messageData
    * @returns {Promise<Object>}
@@ -305,6 +313,13 @@ class ChatRepository {
       { _id: conversationId, 'lastMessage.messageId': messageId },
       { $set: { 'lastMessage.content': content, 'lastMessage.type': MESSAGE_TYPES.TEXT } }
     );
+  }
+
+  /**
+   * Update message fields by ID
+   */
+  async updateMessage(messageId, updateData) {
+    return Message.findByIdAndUpdate(messageId, { $set: updateData }, { new: true });
   }
 
   /**

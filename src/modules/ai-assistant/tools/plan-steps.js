@@ -1,6 +1,8 @@
 import playdateService from '../../playdate/playdate.service.js';
 import playdateSuggestionService from '../../playdate/playdate-suggestion.service.js';
 import { PLAYDATE_ACTIVITIES } from '../../playdate/playdate.activities.js';
+import { shouldSearchAttractions } from '../../playdate/playdate-suggestion.rules.js';
+import openMeteoAdapter from '../../../integrations/weather/open-meteo.adapter.js';
 import { distanceKmBetween } from '../../discovery/matching.rules.js';
 import { getScheduledStart, intervalsOverlap } from '../../../shared/helpers/date.helper.js';
 import AppError from '../../../shared/exceptions/app-error.js';
@@ -247,14 +249,17 @@ const buildPlaceStep = async (ctx, { type } = {}) => {
 };
 
 // The main activities written by the model, for the parent to edit before the summary
-const buildAgendaStep = async (ctx) => ({
-  card: makeChoiceCard({
+const buildAgendaStep = async (ctx) => {
+  const searchStatus = ctx.draft.location ? shouldSearchAttractions(ctx.draft.location) : 'no';
+  const card = makeChoiceCard({
     stepId: AI_STEPS.AGENDA,
     title: 'Hoạt động chính của buổi hẹn',
     options: ctx.draft.agenda.map((item, index) => ({ id: `agenda:${index}`, label: item, description: '', data: {}, links: [] })),
     allowCustom: true,
-  }),
-});
+  });
+  card.canSearchAttractions = searchStatus === 'uncertain';
+  return { card };
+};
 
 const buildExtraStep = async () => ({
   card: makeChoiceCard({
@@ -351,6 +356,19 @@ export const advancePlan = async (ctx) => {
     draft.hostChild = { childId: children[0].childId, displayName: children[0].displayName };
   }
 
+  // If date & location coordinates are known and weather not fetched yet, get weather
+  if (draft.date && draft.location?.coordinates && draft.location.coordinates.length === 2 && !draft.weather) {
+    try {
+      const [lng, lat] = draft.location.coordinates;
+      const weather = await openMeteoAdapter.getDailyWeather(lat, lng, draft.date);
+      if (weather) {
+        draft.weather = weather;
+      }
+    } catch (_e) {
+      // Weather information is optional, ignore query failure
+    }
+  }
+
   refreshDraft(draft);
   // Warned as soon as the time or the place is known, so the model can tell the parent at that step
   await addScheduleConflicts(draft);
@@ -370,13 +388,28 @@ export const advancePlan = async (ctx) => {
     };
   }
   if (step === AI_STEPS.AGENDA && !draft.agenda.length) {
+    const allKids = [
+      draft.hostChild
+        ? `${draft.hostChild.displayName} (${draft.hostChild.age != null ? `${draft.hostChild.age} tuổi` : ''}${draft.hostChild.interests?.length ? `, thích ${draft.hostChild.interests.join(', ')}` : ''})`
+        : null,
+      ...draft.participants.map(
+        (p) => `${p.childName} (${p.age != null ? `${p.age} tuổi` : ''}${p.interests?.length ? `, thích ${p.interests.join(', ')}` : ''})`
+      ),
+    ].filter(Boolean);
+
+    const attractionsHint = draft.location?.attractions?.length
+      ? ` Real attractions found for ${draft.location.name}: ${draft.location.attractions.map((a) => a.title).join(', ')}. Format them as "Theo thông tin trên mạng về ${draft.location.name}: [Tên trò]" kèm URL nếu có.`
+      : '';
+
     return {
       status: draft.status,
       draft: summarizeDraft(draft),
       nextStep: step,
       next:
-        'Call proposePlaydate now with an agenda of 3-5 concrete games or activities for these children at this place ' +
-        '(what they play, e.g. "Thi xếp Lego theo chủ đề"), no warm-up, getting to know each other or goodbye items. ' +
+        `Call proposePlaydate now with an agenda of 3-5 concrete games or activities suited for all children: ${allKids.join('; ')}. ` +
+        'Pick from the catalog (playdate.activities.js) or attractions at this place' +
+        attractionsHint +
+        ' (what they play, e.g. "Thi xếp Lego theo chủ đề"), no warm-up, getting to know each other or goodbye items. ' +
         'The parent then reviews and edits it on the card.',
     };
   }

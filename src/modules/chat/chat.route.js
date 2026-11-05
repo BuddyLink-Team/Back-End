@@ -63,6 +63,18 @@ router.post(
   chatController.markAsRead
 );
 
+// Polls
+router.post(
+  '/conversations/:conversationId/poll',
+  validate(conversationIdParamValidation),
+  chatController.createPoll
+);
+
+router.post(
+  '/messages/:messageId/poll/vote',
+  chatController.votePoll
+);
+
 // Upload attachment
 router.post(
   '/upload',

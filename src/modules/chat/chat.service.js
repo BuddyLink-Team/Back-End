@@ -489,6 +489,142 @@ class ChatService {
     const messages = await chatRepository.findMessageContents(messageIds);
     return new Map(messages.map((message) => [message._id.toString(), message.content]));
   }
+
+  /**
+   * Create a poll message in a conversation (group playdate chat or direct chat)
+   */
+  async createPollMessage(parentOrUserId, conversationId, { question, options, deadline }) {
+    const parent = await this._resolveParent(parentOrUserId);
+    const conversation = await chatRepository.findConversationDocById(conversationId);
+    if (!conversation) {
+      throw new AppError('Conversation not found', 404, 'CONVERSATION_NOT_FOUND');
+    }
+    await this._assertConversationAccess(conversation, parent._id);
+
+    if (!Array.isArray(options) || options.length < 2) {
+      throw new AppError('Poll must have at least 2 options', 400, 'INVALID_POLL_OPTIONS');
+    }
+
+    const formattedOptions = options.map((opt, idx) => ({
+      id: opt.id || `opt_${idx + 1}`,
+      date: opt.date || null,
+      time: opt.time || null,
+      label: (opt.label || `${opt.date || ''} ${opt.time || ''}`).trim(),
+      voterParentIds: [],
+    }));
+
+    const message = await chatRepository.createMessage({
+      conversationId,
+      senderId: parent._id,
+      type: MESSAGE_TYPES.POLL,
+      content: question || 'Bình chọn thời gian hẹn chơi',
+      poll: {
+        question: question || 'Bình chọn thời gian hẹn chơi',
+        options: formattedOptions,
+        deadline: deadline ? new Date(deadline) : null,
+        isClosed: false,
+      },
+    });
+
+    const recipientIds = conversation.participants
+      .filter((p) => p.toString() !== parent._id.toString())
+      .map((p) => p.toString());
+
+    const updatedConversation = await chatRepository.updateLastMessage(
+      conversationId,
+      {
+        _id: message._id,
+        senderId: parent._id,
+        content: `[Khảo sát] ${question || 'Bình chọn thời gian'}`,
+        type: MESSAGE_TYPES.POLL,
+        createdAt: message.createdAt,
+      },
+      recipientIds
+    );
+
+    return { message, conversation: updatedConversation };
+  }
+
+  /**
+   * Vote on a poll message
+   */
+  async votePoll(parentOrUserId, messageId, optionId) {
+    const parent = await this._resolveParent(parentOrUserId);
+    const message = await chatRepository.findMessageDocById(messageId);
+    if (!message || message.isDeleted) {
+      throw new AppError('Message not found', 404, 'MESSAGE_NOT_FOUND');
+    }
+    if (message.type !== MESSAGE_TYPES.POLL || !message.poll) {
+      throw new AppError('Message is not a poll', 400, 'NOT_A_POLL');
+    }
+
+    const conversation = await chatRepository.findConversationDocById(message.conversationId);
+    if (!conversation) {
+      throw new AppError('Conversation not found', 404, 'CONVERSATION_NOT_FOUND');
+    }
+    await this._assertConversationAccess(conversation, parent._id);
+
+    if (message.poll.isClosed) {
+      throw new AppError('Poll is already closed', 400, 'POLL_CLOSED');
+    }
+    if (message.poll.deadline && new Date() > new Date(message.poll.deadline)) {
+      message.poll.isClosed = true;
+      await chatRepository.updateMessage(message._id, { poll: message.poll });
+      throw new AppError('Poll deadline has expired', 400, 'POLL_EXPIRED');
+    }
+
+    const targetOpt = message.poll.options.find((opt) => opt.id === optionId);
+    if (!targetOpt) {
+      throw new AppError('Invalid option id', 400, 'INVALID_OPTION');
+    }
+
+    const parentIdStr = parent._id.toString();
+    message.poll.options.forEach((opt) => {
+      opt.voterParentIds = (opt.voterParentIds || []).filter((id) => (id?._id || id)?.toString() !== parentIdStr);
+    });
+
+    targetOpt.voterParentIds.push(parent._id);
+
+    const totalParticipants = (conversation.participants || []).length;
+    const totalVotes = message.poll.options.reduce((sum, opt) => sum + (opt.voterParentIds || []).length, 0);
+    if (totalParticipants > 0 && totalVotes >= totalParticipants) {
+      message.poll.isClosed = true;
+    }
+
+    await chatRepository.updateMessage(message._id, { poll: message.poll });
+    return { message, conversation };
+  }
+
+  /**
+   * Post a system announcement / reminder message into a conversation
+   */
+  async postSystemMessage(conversationId, content) {
+    const conversation = await chatRepository.findConversationDocById(conversationId);
+    if (!conversation) return null;
+
+    const messageDoc = await chatRepository.createMessage({
+      conversationId,
+      senderId: null,
+      type: MESSAGE_TYPES.SYSTEM,
+      content,
+    });
+
+    const recipientIds = (conversation.participants || []).map((p) => (p._id || p).toString());
+    await chatRepository.updateLastMessage(conversationId, messageDoc, recipientIds);
+
+    try {
+      const { getIO } = await import('../../sockets/index.js');
+      const { broadcastNewMessage } = await import('../../sockets/chat.broadcast.js');
+      const io = getIO();
+      if (io) {
+        broadcastNewMessage(io, conversationId, messageDoc);
+      }
+    } catch (_e) {
+      // Ignore broadcast error when running in headless test context
+    }
+
+    return messageDoc;
+  }
 }
 
 export const chatService = new ChatService();

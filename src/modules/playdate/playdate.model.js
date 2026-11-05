@@ -50,6 +50,12 @@ const playdateSchema = new mongoose.Schema(
       required: true,
     },
     participants: [playdateParticipantSchema],
+    chaperones: [
+      {
+        parentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Parent', required: true },
+        confirmedAt: { type: Date, default: Date.now },
+      },
+    ],
     scheduledDate: {
       type: Date,
       required: true,

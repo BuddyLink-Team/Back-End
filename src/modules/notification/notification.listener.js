@@ -4,8 +4,10 @@ import { NOTIFICATION_TYPES } from './notification.constants.js';
 import parentService from '../parent/parent.service.js';
 import childService from '../child/child.service.js';
 import playdateService from '../playdate/playdate.service.js';
+import chatService from '../chat/chat.service.js';
 import { onConnectionEvent, CONNECTION_EVENTS } from '../connection/connection.events.js';
 import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
+import { onRatingEvent, RATING_EVENTS } from '../rating-feedback/rating-feedback.events.js';
 
 const DEFAULT_PARENT_NAME = 'Một phụ huynh';
 
@@ -106,13 +108,36 @@ const notifyPlaydateInvited = async ({ playdateId, hostParentId, participantPare
 };
 
 // Playdate starts in 24h / 1h -> notify the host and every accepted participant
-const notifyPlaydateReminder = async ({ playdateId, kind, activity, time, date, placeName, recipientParentIds = [] }) => {
+const notifyPlaydateReminder = async ({ playdateId, kind, activity, time, date, placeName, recipientParentIds = [], note = '', chatConversationId = null }) => {
   const isSoon = kind === 'h1';
   const where = placeName ? ` tại ${placeName}` : '';
   const title = isSoon ? 'Playdate sắp bắt đầu' : 'Nhắc lịch Playdate';
+
+  let safetyNotePart = '';
+  if (kind === 'h24' && note) {
+    if (note.includes('Lưu ý an toàn:')) {
+      const match = note.match(/Lưu ý an toàn:\s*([\s\S]*?)(?=\n\nLưu ý thêm:|$)/);
+      if (match && match[1]) {
+        safetyNotePart += `\nLưu ý an toàn:\n${match[1].trim()}`;
+      }
+    }
+    if (note.includes('Lưu ý thêm:')) {
+      const matchExtra = note.match(/Lưu ý thêm:\s*([\s\S]*?)$/);
+      if (matchExtra && matchExtra[1]) {
+        safetyNotePart += `\nLưu ý thêm / Đồ mang theo:\n${matchExtra[1].trim()}`;
+      }
+    }
+  }
+
   const body = isSoon
     ? `"${activity}" sẽ bắt đầu lúc ${time}${where}. Chuẩn bị lên đường nhé!`
-    : `"${activity}" diễn ra lúc ${time} ngày ${date}${where}.`;
+    : `"${activity}" diễn ra lúc ${time} ngày ${date}${where}.${safetyNotePart}`;
+
+  if (chatConversationId && kind === 'h24') {
+    runInBackground('Playdate chat reminder message', async () => {
+      await chatService.postSystemMessage(chatConversationId, `⏰ Nhắc lịch hẹn: "${activity}" diễn ra lúc ${time} ngày ${date}${where}.${safetyNotePart}`);
+    });
+  }
 
   const results = await Promise.allSettled(
     recipientParentIds.map(async (parentId) => {
@@ -132,6 +157,20 @@ const notifyPlaydateReminder = async ({ playdateId, kind, activity, time, date, 
     .forEach((result) =>
       logger.error(`[NotificationListeners] Playdate reminder failed for playdate ${playdateId}: ${result.reason?.message}`)
     );
+};
+
+const notifyRebookingSuggestion = async ({ playdateId, raterParentId, rating }) => {
+  if (!rating || rating < 4) return;
+  const parent = await parentService.getParentById(raterParentId);
+  if (!parent?.userId) return;
+
+  await notificationService.createNotification({
+    recipientId: parent.userId,
+    type: NOTIFICATION_TYPES.STREAK_REMINDER,
+    title: 'Gặp lại bạn cũ thôi nào! 🎉',
+    body: 'Buổi hẹn chơi vừa qua thật tuyệt vời! Bạn có muốn AI Assistant gợi ý lên lịch buổi hẹn tiếp theo để duy trì kết nối cho các bé không?',
+    data: { playdateId },
+  });
 };
 
 let isRegistered = false;
@@ -155,6 +194,12 @@ export const registerNotificationListeners = () => {
   );
   onPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, (payload) =>
     runInBackground('Playdate reminder notification', () => notifyPlaydateReminder(payload))
+  );
+  onPlaydateEvent(PLAYDATE_EVENTS.RATED, (payload) =>
+    runInBackground('Playdate rated rebooking notification', () => notifyRebookingSuggestion(payload))
+  );
+  onRatingEvent(RATING_EVENTS.CREATED, (payload) =>
+    runInBackground('Playdate rating created rebooking notification', () => notifyRebookingSuggestion(payload))
   );
 };
 

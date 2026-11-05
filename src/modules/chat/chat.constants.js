@@ -8,6 +8,7 @@ export const MESSAGE_TYPES = Object.freeze({
   IMAGE: 'image',
   EMOJI: 'emoji',
   SYSTEM: 'system',
+  POLL: 'poll',
 });
 
 // Shown instead of a message removed by a moderator (history, realtime and conversation preview)
@@ -24,6 +25,7 @@ export const SOCKET_EVENTS = Object.freeze({
   MESSAGE_READ: 'message_read',
   CONVERSATION_UPDATED: 'conversation_updated',
   MESSAGE_DELETED: 'message_deleted',
+  POLL_VOTED: 'poll_voted',
   ACCOUNT_LOCKED: 'account_locked',
   ERROR: 'chat_error',
 });

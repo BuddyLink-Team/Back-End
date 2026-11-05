@@ -1,3 +1,4 @@
+import opening_hours from 'opening_hours';
 import { getZonedParts, getScheduledStart, intervalsOverlap } from '../../shared/helpers/date.helper.js';
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { distanceKmBetween } from '../discovery/matching.rules.js';
@@ -18,6 +19,38 @@ import { PLAYDATE_ACTIVITIES } from './playdate.activities.js';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const pad = (value) => String(value).padStart(2, '0');
+
+/**
+ * Check if a place is open at a given interval or date using opening_hours npm package (BUD-49).
+ * @param {string} openingHoursStr
+ * @param {Date} startTime
+ * @param {Date} [endTime]
+ * @param {[number, number]} [coordinates] - [lng, lat]
+ * @returns {{ isOpen: boolean, isKnown: boolean, closesSoon?: boolean }}
+ */
+export const checkPlaceOpeningHours = (openingHoursStr, startTime, endTime, coordinates) => {
+  if (!openingHoursStr || typeof openingHoursStr !== 'string' || !openingHoursStr.trim()) {
+    return { isOpen: true, isKnown: false };
+  }
+  try {
+    const lat = Array.isArray(coordinates) && coordinates.length === 2 ? coordinates[1] : 10.7769;
+    const lon = Array.isArray(coordinates) && coordinates.length === 2 ? coordinates[0] : 106.7009;
+    const OH = opening_hours.default || opening_hours;
+    const oh = new OH(openingHoursStr, { lat, lon, address: { country_code: 'vn' } });
+
+    const openAtStart = oh.getState(startTime);
+    const end = endTime || new Date(startTime.getTime() + 60 * 60 * 1000);
+    const openAtEnd = oh.getState(new Date(end.getTime() - 60 * 1000));
+    const openWholeTime = Boolean(openAtStart && openAtEnd);
+
+    const after30m = new Date(end.getTime() + 30 * 60 * 1000);
+    const closesSoon = openWholeTime && !oh.getState(after30m);
+
+    return { isOpen: openWholeTime, isKnown: true, closesSoon };
+  } catch (_e) {
+    return { isOpen: true, isKnown: false };
+  }
+};
 
 /**
  * Calendar days from `from` to `to` (inclusive), as seen in the business time zone
@@ -67,6 +100,8 @@ export const suggestTimeSlots = ({
   busy = [],
   now = new Date(),
   limit = SUGGESTION_LIMITS.TIME_SLOTS,
+  placeOpeningHours = null,
+  placeCoordinates = null,
 }) => {
   const candidates = [];
   for (const day of listCalendarDays(from, to)) {
@@ -75,6 +110,11 @@ export const suggestTimeSlots = ({
       const end = new Date(start.getTime() + durationMinutes * MINUTE_MS);
       if (start <= now) continue;
       if (busy.some((interval) => intervalsOverlap(start, end, interval.start, interval.end))) continue;
+
+      if (placeOpeningHours) {
+        const ohCheck = checkPlaceOpeningHours(placeOpeningHours, start, end, placeCoordinates);
+        if (ohCheck.isKnown && !ohCheck.isOpen) continue;
+      }
 
       const matchedParents = parents.filter(
         (parent) =>
@@ -221,11 +261,22 @@ const roundKm = (km) => Math.round(km * 10) / 10;
  * @param {number} [options.limit]
  * @returns {Array<Object>}
  */
-export const rankPlaces = (places, { preferredTypes, youngestAge, families, limit = SUGGESTION_LIMITS.PLACES }) =>
+export const rankPlaces = (places, { preferredTypes, youngestAge, families, targetStart, targetEnd, limit = SUGGESTION_LIMITS.PLACES }) =>
   places
     .filter((place) => youngestAge === null || youngestAge >= (PLACE_TYPE_MIN_AGE[place.placeType] || 0))
-    .map((place) => ({ place, isPreferredType: preferredTypes.has(place.placeType) }))
-    .sort((a, b) => Number(b.isPreferredType) - Number(a.isPreferredType) || (a.place.distanceMeters ?? Infinity) - (b.place.distanceMeters ?? Infinity))
+    .map((place) => {
+      const isPreferredType = preferredTypes.has(place.placeType);
+      const oh = targetStart
+        ? checkPlaceOpeningHours(place.openingHours, targetStart, targetEnd, place.coordinates)
+        : { isOpen: true };
+      return { place, isPreferredType, isOpen: oh.isOpen };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.isOpen) - Number(a.isOpen) ||
+        Number(b.isPreferredType) - Number(a.isPreferredType) ||
+        (a.place.distanceMeters ?? Infinity) - (b.place.distanceMeters ?? Infinity)
+    )
     .slice(0, limit)
     .map(({ place, isPreferredType }) => ({
       id: place.id,
@@ -248,3 +299,41 @@ export const rankPlaces = (places, { preferredTypes, youngestAge, families, limi
           }))
         : [],
     }));
+
+/**
+ * Whether a place likely has structured attractions to search via Google (BUD-49 A3)
+ * @param {{ placeType?: string, type?: string, name?: string, osmTags?: Object, tags?: Object }} place
+ * @returns {'yes'|'no'|'uncertain'}
+ */
+export const shouldSearchAttractions = (place = {}) => {
+  const type = place.placeType || place.type || '';
+  const name = String(place.name || '').toLowerCase();
+  const rawTags = place.osmTags || place.tags || {};
+  const tagString = typeof rawTags === 'object'
+    ? Object.entries(rawTags).map(([k, v]) => `${k}=${v}`).join(' ').toLowerCase()
+    : String(rawTags).toLowerCase();
+
+  // Certain indoor play venues always have specific attractions
+  if (type === 'kids_cafe') return 'yes';
+
+  // Specific sports/amusement venues or matching OSM tags
+  const hasPlayKeywords =
+    /bạt nhún|trampoline|leo núi|bowling|trượt băng|khu vui chơi|công viên nước|jump|roller/i.test(name) ||
+    /water_park|climbing|bowling|ice_skating|trampoline|indoor_play|amusement_arcade|water_slide/i.test(tagString);
+  if (type === 'sports_center' && hasPlayKeywords) return 'yes';
+
+  // Free self-directed or generic places
+  if (type === 'park' || type === 'library' || type === 'home') return 'no';
+
+  // Ambiguous: cultural centers, general sports centers, community centers
+  if (
+    type === 'sports_center' ||
+    type === 'workshop' ||
+    /trung tâm|câu lạc bộ|khu giải trí/i.test(name) ||
+    /community_centre|sports_centre|youth_centre/i.test(tagString)
+  ) {
+    return 'uncertain';
+  }
+
+  return 'no';
+};

@@ -1,4 +1,5 @@
 import { addMinutesToTime } from '../../shared/helpers/date.helper.js';
+import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { PLAYDATE_RULES, PLAYDATE_STATUS, PARTICIPANT_STATUS, PLAYDATE_DISPLAY_STATUS } from './playdate.constants.js';
 
 // Old playdates / requests were stored without a duration
@@ -113,6 +114,43 @@ export class PlaydateResponseDTO {
       respondedAt: p.respondedAt,
     }));
 
+    // Chaperones and chaperone requirement calculation (BUD-49 Part B5)
+    const confirmedChaperones = (playdate.chaperones || []).length;
+    let under5Count = 0;
+    let over5Count = 0;
+
+    if (playdate.hostChildId && typeof playdate.hostChildId === 'object' && playdate.hostChildId.dateOfBirth) {
+      const age = calculateAgeYears(playdate.hostChildId.dateOfBirth);
+      if (age < 5) under5Count++;
+      else over5Count++;
+    } else {
+      over5Count++;
+    }
+
+    (playdate.participants || []).forEach((p) => {
+      if (p.status === PARTICIPANT_STATUS.ACCEPTED && p.childId && typeof p.childId === 'object' && p.childId.dateOfBirth) {
+        const age = calculateAgeYears(p.childId.dateOfBirth);
+        if (age < 5) under5Count++;
+        else over5Count++;
+      }
+    });
+
+    const allText = `${playdate.activity || ''} ${playdate.note || ''}`;
+    const hasHighRisk = /(?<!màu\s|uống\s)(bơi|tắm|hồ bơi|chơi nước|công viên nước|suối|biển)/i.test(allText);
+    const totalKids = under5Count + over5Count;
+    const requiredChaperones = hasHighRisk
+      ? Math.max(1, totalKids)
+      : Math.max(1, Math.ceil(under5Count / 2) + Math.ceil(over5Count / 3));
+    const isChaperoneSufficient = confirmedChaperones >= requiredChaperones;
+    const isChaperoneConfirmedByMe = (playdate.chaperones || []).some(
+      (c) => (c.parentId?._id || c.parentId)?.toString() === parentIdStr
+    );
+
+    const chaperones = (playdate.chaperones || []).map((c) => ({
+      parentId: (c.parentId?._id || c.parentId)?.toString(),
+      confirmedAt: c.confirmedAt,
+    }));
+
     return {
       id: playdate._id?.toString() || playdate.id,
       hostParentId: hostParentIdStr,
@@ -120,6 +158,15 @@ export class PlaydateResponseDTO {
       hostChildId: playdate.hostChildId?._id?.toString() || playdate.hostChildId?.toString(),
       hostChild,
       participants,
+      chaperones,
+      chaperoneSummary: {
+        requiredChaperones,
+        confirmedChaperones,
+        isChaperoneSufficient,
+        isChaperoneConfirmedByMe,
+        under5Count,
+        over5Count,
+      },
       // Families still to answer that the viewer does not see (always 0 for the host)
       otherPendingCount,
       scheduledDate: playdate.scheduledDate,

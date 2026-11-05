@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import playdateService from '../../playdate/playdate.service.js';
 import placesService from '../../places/places.service.js';
+import placeAttractionsService from '../../places/place-attractions.service.js';
+import { shouldSearchAttractions } from '../../playdate/playdate-suggestion.rules.js';
 import subscriptionService from '../../subscription/subscription.service.js';
 import { QUOTA_FEATURES } from '../../subscription/subscription.constants.js';
 import AppError from '../../../shared/exceptions/app-error.js';
@@ -8,6 +10,7 @@ import { AI_TOOL_NAMES, AI_CARD_TYPES, AI_LIMITS, AI_DRAFT_WARNING_CODES } from 
 import { emptyDraft, clampDuration, normalizeAgenda, isValidDate, isValidTime } from '../plan-draft.rules.js';
 import { advancePlan, resolveActivity } from './plan-steps.js';
 import { toPlaceItem, toPlaymateItem } from './tool-sanitizer.js';
+import { PLAYDATE_ACTIVITIES, GENERIC_GAMES, pickAttractions } from '../../playdate/playdate.activities.js';
 
 // Accent and case insensitive, so "bin" matches "Bin" and "an" matches "Ân"
 export const normalizeName = (value) =>
@@ -48,7 +51,12 @@ const setHostChild = async (ctx, childId) => {
     ctx.draft.participants = [];
     ctx.draft.playmatesSkipped = false;
   }
-  ctx.draft.hostChild = { childId: child.childId, displayName: child.displayName };
+  ctx.draft.hostChild = {
+    childId: child.childId,
+    displayName: child.displayName,
+    age: child.age ?? null,
+    interests: child.interests || [],
+  };
 };
 
 /**
@@ -83,6 +91,8 @@ const setParticipants = async (ctx, { childIds = [], names = [] }) => {
       childId: friend.childId,
       childName: friend.displayName,
       parentName: friend.parent.fullName,
+      age: friend.age ?? null,
+      interests: friend.interests || [],
       warnings: friend.warnings,
     }));
     draft.playmatesSkipped = false;
@@ -106,15 +116,16 @@ const resolvePlace = async (ctx, placeId) => {
 
 export const setLocation = (draft, place) => {
   draft.location = {
-    id: place.id || null,
+    id: place.id || place.placeId || null,
     name: String(place.name || '').trim().slice(0, 200),
     address: String(place.address || '').trim().slice(0, 300),
-    placeId: place.placeId || null,
+    placeId: place.placeId || place.id || null,
     coordinates: Array.isArray(place.coordinates) && place.coordinates.length === 2 ? place.coordinates.map(Number) : null,
     // Shown on the summary as on the place step (not part of the POST /playdates body)
     placeType: place.placeType || place.type || null,
     openingHours: String(place.openingHours || '').slice(0, 200),
     osmUrl: place.osmUrl || null,
+    attractions: place.attractions || [],
     familyDistances: (place.familyDistances || [])
       .filter((family) => Number.isFinite(family.distanceKm))
       .map((family) => ({ label: String(family.label || ''), distanceKm: family.distanceKm })),
@@ -179,12 +190,64 @@ export const applyPlanFields = async (ctx, fields) => {
   }
 
   if (fields.placeId) {
-    setLocation(draft, await resolvePlace(ctx, fields.placeId));
+    const place = await resolvePlace(ctx, fields.placeId);
+    setLocation(draft, place);
+    if (shouldSearchAttractions(draft.location) === 'yes' && (place.id || place.placeId)) {
+      try {
+        const attractions = await placeAttractionsService.getOrFetchAttractions(place.id || place.placeId, draft.location);
+        if (attractions && attractions.length) {
+          draft.location.attractions = attractions;
+        }
+      } catch (_e) {
+        // Attractions are optional, ignore query failure
+      }
+    }
   } else if (fields.locationName) {
     setLocation(draft, { name: fields.locationName, address: fields.locationAddress || '' });
   }
 
-  if (fields.agenda) draft.agenda = normalizeAgenda(fields.agenda);
+  if (fields.agenda) {
+    let agenda = normalizeAgenda(fields.agenda);
+    if (agenda.length) {
+      const validGames = [
+        ...PLAYDATE_ACTIVITIES.map((a) => a.title.toLowerCase()),
+        ...GENERIC_GAMES.map((g) => g.title.toLowerCase()),
+      ];
+      const placeAttractions = (draft.location?.attractions || []).map((a) => (a.title || a.name || '').toLowerCase());
+      const knownItems = [...validGames, ...placeAttractions];
+
+      const fallbackList = pickAttractions({
+        children: [
+          ...(draft.hostChild ? [{ age: draft.hostChild.age, displayName: draft.hostChild.displayName }] : []),
+          ...draft.participants.map((p) => ({ age: p.age, displayName: p.childName })),
+        ],
+        durationMinutes: draft.durationMinutes,
+        availableAttractions: draft.location?.attractions || [],
+      });
+
+      let fallbackIndex = 0;
+      const seen = new Set();
+      agenda = agenda.map((item) => {
+        const itemLower = item.toLowerCase();
+        const matches =
+          knownItems.some((k) => k.includes(itemLower) || itemLower.includes(k.slice(0, 8))) ||
+          (draft.activity && itemLower.includes(draft.activity.title.toLowerCase().slice(0, 5)));
+        if (!matches && knownItems.length > 0) {
+          while (fallbackIndex < fallbackList.length && seen.has(fallbackList[fallbackIndex])) {
+            fallbackIndex++;
+          }
+          const replacement = fallbackList[fallbackIndex] || item;
+          fallbackIndex++;
+          seen.add(replacement);
+          return replacement;
+        }
+        seen.add(item);
+        return item;
+      });
+      agenda = [...new Set(agenda)];
+    }
+    draft.agenda = agenda;
+  }
   if (typeof fields.note === 'string') draft.note = fields.note.trim().slice(0, AI_LIMITS.NOTE_MAX_LENGTH);
 
   return { ambiguousNames };

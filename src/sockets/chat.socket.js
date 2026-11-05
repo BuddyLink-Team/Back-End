@@ -2,7 +2,7 @@ import chatService from '../modules/chat/chat.service.js';
 import userService from '../modules/user/user.service.js';
 import ChatDTO from '../modules/chat/chat.dto.js';
 import { SOCKET_EVENTS } from '../modules/chat/chat.constants.js';
-import { broadcastNewMessage, broadcastReadStatus } from './chat.broadcast.js';
+import { broadcastNewMessage, broadcastReadStatus, broadcastPollVoted } from './chat.broadcast.js';
 import logger from '../shared/logger/index.js';
 import AppError from '../shared/exceptions/app-error.js';
 
@@ -174,6 +174,30 @@ export const registerChatSocket = (io, socket) => {
       broadcastReadStatus(io, conversationId, result);
     } catch (error) {
       logger.error(`[Socket Error] read_status failed: ${error.message}`);
+    }
+  });
+
+  // 6. Poll Vote
+  socket.on('poll_vote', async (payload, callback) => {
+    try {
+      const { messageId, optionId } = payload || {};
+      const parent = getCallerParent();
+      if (!messageId || !optionId) {
+        throw new AppError('Message ID and option ID are required', 400, 'INVALID_PAYLOAD');
+      }
+      await assertCallerActive();
+      const result = await chatService.votePoll(parent, messageId, optionId);
+      broadcastPollVoted(io, result.conversation._id, result.message);
+      if (typeof callback === 'function') {
+        callback({ success: true, poll: result.message.poll });
+      }
+    } catch (error) {
+      logger.warn(`Socket [${socket.id}] poll_vote rejected: ${error.message}`);
+      const clientMessage = sanitizeErrorMessage(error, 'Unable to submit vote');
+      if (typeof callback === 'function') {
+        callback({ success: false, error: clientMessage, code: error.code || 'VOTE_REJECTED' });
+      }
+      disconnectIfDisabled(error);
     }
   });
 };

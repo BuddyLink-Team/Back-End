@@ -53,6 +53,39 @@ class AIAssistantController {
   }
 
   /**
+   * POST /api/v1/ai-assistant/sessions/:id/messages/stream
+   * Body: { content, choice? }
+   * Returns Server-Sent Events (SSE) with live tool progress (BUD-49 D3)
+   */
+  async streamMessage(req, res, _next) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+    const sendEvent = (event, data) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const { content, choice } = req.body;
+      const data = await aiAssistantService.sendMessage(req.userId, req.params.id, {
+        content,
+        choice,
+        onProgress: (progress) => sendEvent('progress', progress),
+      });
+      sendEvent('complete', data);
+      res.end();
+    } catch (error) {
+      sendEvent('error', {
+        code: error.code || 'AI_ERROR',
+        message: error.message || 'An error occurred',
+      });
+      res.end();
+    }
+  }
+
+  /**
    * DELETE /api/v1/ai-assistant/sessions/:id
    */
   async deleteSession(req, res, next) {

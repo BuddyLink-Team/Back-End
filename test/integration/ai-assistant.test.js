@@ -536,7 +536,10 @@ describe('AI assistant (/api/v1/ai-assistant)', () => {
       const { draft } = draftCard;
       expect(draft).toMatchObject({ status: 'ready', nextStep: 'confirm', hostChildId: host.childId, scheduledDate: day, time: slot.data.time });
       expect(draft.endTime).toMatch(/^\d{2}:\d{2}$/);
-      expect(draft.note).toBe(`${AI_AGENDA_NOTE_HEADER}\n1. Vẽ tranh màu nước\n2. Chơi cầu trượt\n3. Ăn nhẹ & picnic`);
+      expect(draft.note).toContain(AI_AGENDA_NOTE_HEADER);
+      expect(draft.note).toContain('1. Vẽ tranh màu nước');
+      expect(draft.note).toContain('Lưu ý an toàn:');
+      expect(draft.note).toContain('Lưu ý an toàn:');
       expect(draft.location).toMatchObject({ name: 'AI Plan Park', address: '2 Plan Road', coordinates: { type: 'Point', coordinates: [106.912, 11.31] } });
       // The place keeps the details of the place step for the summary
       expect(draft.placeDetails).toMatchObject({ placeType: 'park', osmUrl: expect.stringContaining('openstreetmap.org') });

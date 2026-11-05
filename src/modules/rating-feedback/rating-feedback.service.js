@@ -1,6 +1,7 @@
 import ratingFeedbackRepository from './rating-feedback.repository.js';
 import parentService from '../parent/parent.service.js';
 import playdateService from '../playdate/playdate.service.js';
+import { emitRatingEvent, RATING_EVENTS } from './rating-feedback.events.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { ensureRatingEligibility } from './rating-feedback.rules.js';
 
@@ -17,6 +18,12 @@ export async function createRating(userId, playdateId, { rating, feedback = '' }
   let result;
   try {
     result = await ratingFeedbackRepository.create({ playdateId, parentId: parent._id, rating, feedback });
+    await emitRatingEvent(RATING_EVENTS.CREATED, {
+      playdateId,
+      raterParentId: parent._id.toString(),
+      rating,
+      feedback,
+    });
   } catch (error) {
     if (error.code === 11000) throw new AppError('You have already rated this playdate', 409, 'RATING_ALREADY_EXISTS');
     throw error;

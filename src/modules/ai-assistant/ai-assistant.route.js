@@ -21,5 +21,6 @@ router.delete('/sessions/:id', validate(sessionIdValidation), aiAssistantControl
 
 // Send a message (typed, or a tapped choice) and get the AI reply with its cards
 router.post('/sessions/:id/messages', aiMessageLimiter, validate(sendMessageValidation), aiAssistantController.sendMessage);
+router.post('/sessions/:id/messages/stream', aiMessageLimiter, validate(sendMessageValidation), aiAssistantController.streamMessage);
 
 export default router;

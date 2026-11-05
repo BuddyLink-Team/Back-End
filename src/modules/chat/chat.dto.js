@@ -153,6 +153,23 @@ export class ChatDTO {
       isMine,
       isRead,
       readBy: message.readBy || [],
+      poll: message.poll
+        ? {
+            question: message.poll.question,
+            options: (message.poll.options || []).map((opt) => ({
+              id: opt.id,
+              date: opt.date,
+              time: opt.time,
+              label: opt.label,
+              voterParentIds: (opt.voterParentIds || []).map((id) => (id?._id || id)?.toString()),
+              voteCount: (opt.voterParentIds || []).length,
+              hasVoted: (opt.voterParentIds || []).some((id) => (id?._id || id)?.toString() === currentParentIdStr),
+            })),
+            deadline: message.poll.deadline,
+            isClosed: Boolean(message.poll.isClosed),
+            totalVotes: (message.poll.options || []).reduce((acc, opt) => acc + (opt.voterParentIds || []).length, 0),
+          }
+        : null,
       createdAt: message.createdAt,
     };
   }

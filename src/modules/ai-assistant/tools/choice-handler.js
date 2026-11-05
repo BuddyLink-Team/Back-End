@@ -1,4 +1,7 @@
 import playdateService from '../../playdate/playdate.service.js';
+import placeAttractionsService from '../../places/place-attractions.service.js';
+import { shouldSearchAttractions } from '../../playdate/playdate-suggestion.rules.js';
+import { pickAttractions } from '../../playdate/playdate.activities.js';
 import AppError from '../../../shared/exceptions/app-error.js';
 import {
   AI_CARD_TYPES,
@@ -79,6 +82,13 @@ const customText = (custom, key = 'text') => String(custom?.[key] || '').trim().
 const createFromPlan = async (ctx) => {
   const draft = requirePlan(ctx);
   if (nextMissingStep(draft) !== AI_CONFIRM_STEP) throw invalidChoice('The plan is not complete yet');
+  if (draft.hasHighRisk && !draft.safetyAcknowledged) {
+    throw new AppError(
+      'Please acknowledge safety precautions before creating this playdate',
+      400,
+      'SAFETY_ACKNOWLEDGE_REQUIRED'
+    );
+  }
   const body = toDraftResponse(draft);
   try {
     const playdate = await playdateService.createPlaydate(ctx.userId, {
@@ -232,11 +242,51 @@ export const applyChoice = async (ctx, session, choice) => {
       const place = custom || options[0].data;
       if (!String(place.name || '').trim()) throw invalidChoice();
       setLocation(draft, place);
+      const placeId = place.id || place.placeId;
+      if (shouldSearchAttractions(draft.location) === 'yes' && placeId) {
+        try {
+          const attractions = await placeAttractionsService.getOrFetchAttractions(placeId, draft.location);
+          if (attractions && attractions.length) {
+            draft.location.attractions = attractions;
+          }
+        } catch (_e) {
+          // Ignore attraction lookup error
+        }
+      }
       result = await advancePlan(ctx);
       break;
     }
     case AI_STEPS.AGENDA: {
       const draft = requirePlan(ctx);
+      if (custom?.searchAttractions) {
+        const placeId = draft.location?.id || draft.location?.placeId;
+        if (placeId) {
+          try {
+            const attractions = await placeAttractionsService.getOrFetchAttractions(placeId, draft.location);
+            if (attractions && attractions.length) {
+              draft.location.attractions = attractions;
+              const picked = pickAttractions({
+                children: [
+                  ...(draft.hostChild ? [{ age: draft.hostChild.age, displayName: draft.hostChild.displayName }] : []),
+                  ...draft.participants.map((p) => ({ age: p.age, displayName: p.childName })),
+                ],
+                durationMinutes: draft.durationMinutes,
+                availableAttractions: attractions,
+              });
+              draft.agenda = picked.map((title) => {
+                const match = attractions.find((a) => (a.title || a.name) === title);
+                const prefix = `Theo thông tin trên mạng về ${draft.location.name}: ${title}`;
+                return match?.sourceUrl ? `${prefix} (${match.sourceUrl})` : prefix;
+              });
+            }
+          } catch (_e) {
+            // Ignore attraction search error
+          }
+        }
+        draft.agendaConfirmed = false;
+        result = await advancePlan(ctx);
+        break;
+      }
       // The card always sends the list as the parent left it (edited or not)
       const agenda = normalizeAgenda(custom?.agenda);
       if (!agenda.length) throw invalidChoice('Add at least one main activity');
@@ -265,6 +315,9 @@ export const applyChoice = async (ctx, session, choice) => {
       break;
     }
     case AI_CONFIRM_STEP: {
+      if (custom?.safetyAcknowledged != null) {
+        ctx.draft.safetyAcknowledged = Boolean(custom.safetyAcknowledged);
+      }
       const { result: outcome, playdateId } = await createFromPlan(ctx);
       result = outcome;
       if (!playdateId) {
@@ -278,6 +331,16 @@ export const applyChoice = async (ctx, session, choice) => {
       answered = { playdateId };
       instruction = NOTES.created;
       allowTools = false;
+      break;
+    }
+    case 'cancel_confirm': {
+      const opt = options[0];
+      if (opt?.data?.confirm && opt.data.playdateId) {
+        await playdateService.cancelPlaydate(ctx.userId, opt.data.playdateId, 'Hủy theo yêu cầu của phụ huynh');
+        result = { success: true, message: 'Buổi hẹn chơi đã được hủy thành công.' };
+      } else {
+        result = { success: true, message: 'Đã giữ lại lịch hẹn chơi.' };
+      }
       break;
     }
     default:

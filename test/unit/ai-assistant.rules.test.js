@@ -15,9 +15,14 @@ import {
   normalizeAgenda,
   buildNote,
   toDraftResponse,
+  evaluateDraftWarnings,
+  highestSeverityWarning,
 } from '../../src/modules/ai-assistant/plan-draft.rules.js';
+import { evaluateSafetyRules } from '../../src/modules/ai-assistant/safety-rules.js';
+import { pickAttractions } from '../../src/modules/playdate/playdate.activities.js';
+import { shouldSearchAttractions } from '../../src/modules/playdate/playdate-suggestion.rules.js';
 import { stripSensitive, toMatchItem } from '../../src/modules/ai-assistant/tools/tool-sanitizer.js';
-import { AI_AGENDA_NOTE_HEADER, AI_EXTRA_NOTE_HEADER, AI_DEFAULT_SESSION_TITLE } from '../../src/modules/ai-assistant/ai-assistant.constants.js';
+import { AI_AGENDA_NOTE_HEADER, AI_EXTRA_NOTE_HEADER, AI_DEFAULT_SESSION_TITLE, AI_WARNING_SEVERITY } from '../../src/modules/ai-assistant/ai-assistant.constants.js';
 
 const choiceCard = (stepId) => ({ type: 'choices', stepId, options: [{ id: `${stepId}-1`, label: `${stepId} option` }] });
 
@@ -193,5 +198,150 @@ describe('tool-sanitizer', () => {
     expect(item).toMatchObject({ childId: 'c9', sharedInterests: ['Vẽ', 'Lego'], distanceKm: 2.5, parent: { area: 'Phường 1, TP.HCM' } });
     expect(item.parent).not.toHaveProperty('bio');
     expect(item.parent).not.toHaveProperty('preferences');
+  });
+});
+
+describe('safety-rules', () => {
+  it('flags high risk and 1-on-1 adult ratio for swimming pool', () => {
+    const safety = evaluateSafetyRules({
+      activityTitle: 'Bơi lội vui vẻ',
+      placeType: 'indoor',
+      youngestAge: 4,
+      totalChildren: 2,
+    });
+    expect(safety.riskLevel).toBe('high');
+    expect(safety.hasHighRisk).toBe(true);
+    expect(safety.supervisionLevel).toBe(3);
+    expect(safety.requiredAdults).toBe(2);
+    expect(safety.itemsToBring).toContain('Áo phao');
+  });
+
+  it('suggests sun protection items for outdoor park', () => {
+    const safety = evaluateSafetyRules({
+      activityTitle: 'Chơi dã ngoại',
+      placeType: 'park',
+      youngestAge: 5,
+    });
+    expect(safety.riskLevel).toBe('low');
+    expect(safety.itemsToBring).toEqual(expect.arrayContaining(['Mũ nón', 'Bình nước cá nhân', 'Kem chống nắng']));
+  });
+});
+
+describe('evaluateDraftWarnings', () => {
+  it('flags NAP_TIME warning for toddler at 13:00', () => {
+    const warnings = evaluateDraftWarnings({
+      scheduledDate: '2026-12-01',
+      time: '13:00',
+      hostChild: { age: 2 },
+      participants: [],
+      agenda: ['Chơi xếp hình'],
+      placeDetails: { openingStatus: 'open' },
+    });
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'NAP_TIME', severity: AI_WARNING_SEVERITY.WARN })]));
+  });
+
+  it('flags SAFETY_HIGH_RISK with BLOCK severity if not acknowledged', () => {
+    const warnings = evaluateDraftWarnings({
+      scheduledDate: '2026-12-01',
+      time: '09:00',
+      hasHighRisk: true,
+      safetyAcknowledged: false,
+      agenda: ['Bơi lội'],
+    });
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'SAFETY_HIGH_RISK', severity: AI_WARNING_SEVERITY.BLOCK })]));
+    expect(highestSeverityWarning(warnings).severity).toBe(AI_WARNING_SEVERITY.BLOCK);
+  });
+
+  it('flags PLACE_CLOSED with BLOCK severity when venue is closed', () => {
+    const warnings = evaluateDraftWarnings({
+      scheduledDate: '2026-12-01',
+      time: '23:00',
+      location: { openingHours: 'Mo-Fr 08:00-17:00' },
+      agenda: ['Chơi'],
+    });
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'PLACE_CLOSED', severity: AI_WARNING_SEVERITY.BLOCK })]));
+  });
+
+  it('flags SCHOOL_HOURS for kids >= 6 on weekdays during class time', () => {
+    // 2026-12-02 is Wednesday (weekday)
+    const warnings = evaluateDraftWarnings({
+      scheduledDate: '2026-12-02',
+      time: '09:00',
+      durationMinutes: 60,
+      hostChild: { age: 7 },
+      participants: [],
+      agenda: ['Vẽ tranh'],
+    });
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'SCHOOL_HOURS', severity: AI_WARNING_SEVERITY.WARN })]));
+  });
+
+  it('flags OUTDOOR_AFTER_DARK when playing in a park after 18:00', () => {
+    const warnings = evaluateDraftWarnings({
+      scheduledDate: '2026-12-05',
+      time: '18:30',
+      durationMinutes: 60,
+      location: { placeType: 'park', name: 'Công viên Gia Định' },
+      agenda: ['Chạy nhảy'],
+    });
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'OUTDOOR_AFTER_DARK', severity: AI_WARNING_SEVERITY.WARN })]));
+  });
+
+  it('flags BAD_WEATHER when rainfall probability is high or it is raining', () => {
+    const warnings = evaluateDraftWarnings(
+      {
+        scheduledDate: '2026-12-05',
+        time: '10:00',
+        durationMinutes: 60,
+        agenda: ['Dã ngoại ngoài trời'],
+      },
+      { weather: { isRaining: true, precipitationProbability: 75 } }
+    );
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'BAD_WEATHER', severity: AI_WARNING_SEVERITY.WARN })]));
+  });
+
+  it('flags FAR_PLACE when distance to any participant family exceeds 15 km', () => {
+    const warnings = evaluateDraftWarnings(
+      {
+        scheduledDate: '2026-12-05',
+        time: '10:00',
+        durationMinutes: 60,
+        location: { name: 'Thảo Cầm Viên' },
+        agenda: ['Tham quan'],
+      },
+      {
+        familyDistances: [
+          { familyId: 'f1', distanceKm: 5 },
+          { familyId: 'f2', distanceKm: 18.5 },
+        ],
+      }
+    );
+    expect(warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'FAR_PLACE', severity: AI_WARNING_SEVERITY.WARN })]));
+  });
+});
+
+describe('pickAttractions', () => {
+  it('picks attractions within duration budget', () => {
+    const picked = pickAttractions({
+      attractions: [
+        { title: 'Trượt ống', durationMinutes: 30, minAge: 3, maxAge: 10 },
+        { title: 'Nhà banh', durationMinutes: 20, minAge: 1, maxAge: 6 },
+        { title: 'Leo núi', durationMinutes: 60, minAge: 7, maxAge: 15 },
+      ],
+      durationMinutes: 60,
+      childAges: [4],
+    });
+    expect(picked.length).toBeGreaterThan(0);
+    expect(picked.includes('Leo núi')).toBe(false); // age 4 not in 7-15
+  });
+});
+
+describe('shouldSearchAttractions', () => {
+  it('identifies places that require search, are uncertain, or do not need search', () => {
+    expect(shouldSearchAttractions({ placeType: 'kids_cafe', name: 'TiNiWorld' })).toBe('yes');
+    expect(shouldSearchAttractions({ placeType: 'sports_center', name: 'Jump Arena Bạt Nhún' })).toBe('yes');
+    expect(shouldSearchAttractions({ placeType: 'park', name: 'Công viên 23/9' })).toBe('no');
+    expect(shouldSearchAttractions({ placeType: 'library', name: 'Thư viện Khoa học' })).toBe('no');
+    expect(shouldSearchAttractions({ placeType: 'home' })).toBe('no');
+    expect(shouldSearchAttractions({ placeType: 'workshop', name: 'Nhà Thiếu Nhi Quận 1' })).toBe('uncertain');
   });
 });

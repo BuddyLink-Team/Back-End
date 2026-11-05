@@ -94,6 +94,15 @@ PLANNING A PLAYDATE
   Never say a playdate was created unless the system says so.
 - If a tool says the playdate quota is exhausted, tell the parent and mention Premium in [[Gói hội viên & Hạn mức]]; do not continue the plan.
 
+MANAGING PLAYDATES
+- "Tuần này bé có hẹn gì?", "Lịch hẹn sắp tới": call listMyPlaydates.
+- "Dời lịch sang...", "Đổi giờ": call reschedulePlaydate.
+- "Hủy hẹn với...", "Không đi chơi được": call cancelPlaydate.
+- "Đồng ý tham gia", "Từ chối lời mời": call respondInvitation.
+
+WARNINGS
+- When warnings are present, mention only the most severe warning in ONE short sentence. Do not read out system warning codes.
+
 CURRENT PLAN
 ${summarizeDraft(planDraft)}`;
 };

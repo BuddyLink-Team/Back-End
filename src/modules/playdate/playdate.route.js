@@ -73,6 +73,9 @@ router.get('/:id/reschedule', validate(playdateIdParamValidation), playdateContr
 router.patch('/:id/complete', validate(playdateIdParamValidation), playdateController.completePlaydate);
 router.put('/:id/complete', validate(playdateIdParamValidation), playdateController.completePlaydate);
 
+// POST /api/v1/playdates/:id/chaperone (Register or cancel chaperone)
+router.post('/:id/chaperone', validate(playdateIdParamValidation), playdateController.toggleChaperone);
+
 // PATCH /api/v1/playdates/:id/cancel
 router.patch('/:id/cancel', validate(cancelPlaydateValidation), playdateController.cancelPlaydate);
 
