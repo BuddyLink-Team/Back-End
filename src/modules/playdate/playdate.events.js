@@ -20,9 +20,6 @@ export const PLAYDATE_EVENTS = Object.freeze({
   // A reminder (24h or 1h before the start) is due
   // Payload: { playdateId, kind: 'h24'|'h1', activity, time, date: 'dd/MM', placeName, recipientParentIds }
   REMINDER_DUE: 'playdate.reminderDue',
-  // Playdate was rated by a participant (BUD-49 D4)
-  // Payload: { playdateId, parentId, rating, feedback }
-  RATED: 'playdate.rated',
 });
 
 const emitter = new EventEmitter();

@@ -144,8 +144,8 @@ export class ChatDTO {
       conversationId: message.conversationId?.toString(),
       sender: message.senderId && typeof message.senderId === 'object'
         ? this.formatParticipant(message.senderId)
-        : { id: senderId },
-      senderId,
+        : senderId ? { id: senderId } : null,
+      senderId: senderId || null,
       type: message.type || 'text',
       content: message.isDeleted ? DELETED_MESSAGE_PLACEHOLDER : message.content || '',
       mediaUrl: message.isDeleted ? null : message.mediaUrl || null,

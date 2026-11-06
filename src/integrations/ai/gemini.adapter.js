@@ -1,4 +1,4 @@
-import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai';
+import { GoogleGenAI, FunctionCallingConfigMode, ThinkingLevel } from '@google/genai';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/app-error.js';
@@ -16,7 +16,7 @@ const GENERATION_DEFAULTS = Object.freeze({
   temperature: 0.4,
   maxOutputTokens: 1024,
   // Picking a tool and writing 2-4 sentences needs little reasoning; the default level adds seconds per call
-  thinkingConfig: { thinkingBudget: 0 },
+  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
 });
 
 const isConfigured = () => Boolean(env.AI.GEMINI_API_KEY && !env.AI.GEMINI_API_KEY.startsWith('<'));
@@ -201,6 +201,10 @@ Chỉ trả về JSON array, không viết thêm text nào khác.`;
       const grounding = candidate?.groundingMetadata;
       const chunks = grounding?.groundingChunks || [];
       const primaryUrl = chunks[0]?.web?.uri || null;
+
+      if (!chunks.length) {
+        return { attractions: [], hasGrounding: false, sourceUrl: null };
+      }
 
       let text = (candidate?.content?.parts || []).map((p) => p.text || '').join('');
       text = text.replace(/```json/gi, '').replace(/```/g, '').trim();

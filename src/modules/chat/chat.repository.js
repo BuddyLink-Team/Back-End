@@ -323,6 +323,47 @@ class ChatRepository {
   }
 
   /**
+   * Atomically vote on a poll option (pulls previous votes by this parent and adds to target option).
+   * @param {string|ObjectId} messageId
+   * @param {string} optionId
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Document|null>}
+   */
+  async votePollOption(messageId, optionId, parentId) {
+    await Message.updateOne(
+      { _id: messageId, 'poll.isClosed': false },
+      {
+        $pull: {
+          'poll.options.$[].voterParentIds': parentId,
+        },
+      }
+    );
+
+    return Message.findOneAndUpdate(
+      { _id: messageId, 'poll.options.id': optionId, 'poll.isClosed': false },
+      {
+        $addToSet: {
+          'poll.options.$.voterParentIds': parentId,
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /**
+   * Close a poll
+   * @param {string|ObjectId} messageId
+   * @returns {Promise<Document|null>}
+   */
+  async closePoll(messageId) {
+    return Message.findByIdAndUpdate(
+      messageId,
+      { $set: { 'poll.isClosed': true } },
+      { new: true }
+    );
+  }
+
+  /**
    * Messages deleted from now on, whichever process deletes them
    * @returns {import('mongodb').ChangeStream}
    */

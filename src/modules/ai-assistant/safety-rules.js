@@ -3,9 +3,11 @@
  * Evaluates risk levels, supervision requirements, safety notes, and gear suggestions.
  */
 
+export const HIGH_RISK_WATER_REGEX = /(?<!màu\s|uống\s)(bơi|tắm|hồ bơi|chơi nước|công viên nước|suối|biển)/i;
+
 const SAFETY_PRESETS = Object.freeze([
   {
-    regex: /(?<!màu\s|uống\s)(bơi|tắm|hồ bơi|chơi nước|công viên nước|suối|biển)/i,
+    regex: HIGH_RISK_WATER_REGEX,
     riskLevel: 'high',
     supervisionLevel: 3,
     note: 'Luôn giám sát trực tiếp 1-1 khi trẻ gần khu vực nước, mặc áo phao đạt chuẩn.',
@@ -41,6 +43,11 @@ const SAFETY_PRESETS = Object.freeze([
   },
 ]);
 
+export const calculateChaperoneRequirement = ({ totalKids = 1, under5Count = 0, over5Count = 0, hasHighRisk = false } = {}) => {
+  if (hasHighRisk) return Math.max(1, totalKids);
+  return Math.max(1, Math.ceil(under5Count / 2) + Math.ceil(over5Count / 3));
+};
+
 /**
  * Evaluate safety precautions, risk level, required supervision and items to bring.
  * @param {Object} input
@@ -49,6 +56,7 @@ const SAFETY_PRESETS = Object.freeze([
  * @param {string} [input.placeType]
  * @param {number|null} [input.youngestAge]
  * @param {number} [input.totalChildren=1]
+ * @param {Object} [input.weather]
  * @returns {{
  *   riskLevel: 'low'|'medium'|'high',
  *   supervisionLevel: 1|2|3,
@@ -64,6 +72,7 @@ export const evaluateSafetyRules = ({
   placeType = '',
   youngestAge = null,
   totalChildren = 1,
+  weather = null,
 } = {}) => {
   const allTexts = [activityTitle, ...(Array.isArray(agenda) ? agenda : [])].join(' ');
   const safetyNotes = new Set();
@@ -85,6 +94,15 @@ export const evaluateSafetyRules = ({
   if (placeType === 'park' || placeType === 'playground') {
     itemsToBring.add('Mũ nón');
     itemsToBring.add('Bình nước cá nhân');
+  }
+
+  // Weather impact: bad weather elevates outdoor risks
+  const isBadWeather = Boolean(weather && (weather.isRaining || (weather.precipitationProbability && weather.precipitationProbability > 50)));
+  const isOutdoor = placeType === 'park' || placeType === 'playground' || /ngoài trời|công viên|dã ngoại|picnic/i.test(allTexts);
+  if (isBadWeather && isOutdoor) {
+    if (maxRisk === 'low') maxRisk = 'medium';
+    safetyNotes.add('Thời tiết có mưa/xấu, hoạt động ngoài trời dễ trơn trượt; cân nhắc chuẩn bị ô/áo mưa hoặc chuyển vào nhà.');
+    itemsToBring.add('Ô/áo mưa');
   }
 
   // Toddlers need direct supervision

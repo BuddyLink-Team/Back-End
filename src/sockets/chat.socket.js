@@ -2,6 +2,7 @@ import chatService from '../modules/chat/chat.service.js';
 import userService from '../modules/user/user.service.js';
 import ChatDTO from '../modules/chat/chat.dto.js';
 import { SOCKET_EVENTS } from '../modules/chat/chat.constants.js';
+import { onChatEvent, CHAT_EVENTS } from '../modules/chat/chat.events.js';
 import { broadcastNewMessage, broadcastReadStatus, broadcastPollVoted } from './chat.broadcast.js';
 import logger from '../shared/logger/index.js';
 import AppError from '../shared/exceptions/app-error.js';
@@ -201,6 +202,18 @@ export const registerChatSocket = (io, socket) => {
     }
   });
 };
+
+onChatEvent(CHAT_EVENTS.MESSAGE_CREATED, async (payload) => {
+  try {
+    const { getIO } = await import('../config/socket.js');
+    const io = getIO();
+    if (io && payload) {
+      broadcastNewMessage(io, payload);
+    }
+  } catch (err) {
+    logger.error(`[ChatSocket] CHAT_EVENTS.MESSAGE_CREATED handler error: ${err.message}`);
+  }
+});
 
 export default registerChatSocket;
 

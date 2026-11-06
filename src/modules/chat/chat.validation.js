@@ -80,3 +80,44 @@ export const getConversationsValidation = [
     .isIn(Object.values(CONVERSATION_TYPES))
     .withMessage(`type must be one of: ${Object.values(CONVERSATION_TYPES).join(', ')}`),
 ];
+
+export const createPollValidation = [
+  param('conversationId')
+    .notEmpty()
+    .withMessage('conversationId is required')
+    .isMongoId()
+    .withMessage('conversationId must be a valid MongoDB ObjectId'),
+  body('question')
+    .optional()
+    .isString()
+    .withMessage('question must be a string')
+    .trim()
+    .isLength({ max: 200 })
+    .withMessage('question cannot exceed 200 characters'),
+  body('options')
+    .isArray({ min: 2, max: 10 })
+    .withMessage('options must be an array of 2 to 10 items'),
+  body('options.*.label')
+    .optional()
+    .isString()
+    .withMessage('option label must be a string')
+    .trim(),
+  body('deadline')
+    .optional({ nullable: true })
+    .isISO8601()
+    .withMessage('deadline must be a valid ISO 8601 date'),
+];
+
+export const votePollValidation = [
+  param('messageId')
+    .notEmpty()
+    .withMessage('messageId is required')
+    .isMongoId()
+    .withMessage('messageId must be a valid MongoDB ObjectId'),
+  body('optionId')
+    .notEmpty()
+    .withMessage('optionId is required')
+    .isString()
+    .withMessage('optionId must be a string')
+    .trim(),
+];

@@ -23,9 +23,9 @@ class PlaceAttractionsService {
         }
       }
 
-      // Stale or not fetched yet: call Gemini search
+      // Stale or not fetched yet: call Gemini search with search grounding
       const result = await geminiAdapter.searchPlaceAttractions({ placeName: name, address });
-      const attractions = result.attractions || [];
+      const attractions = (result && result.hasGrounding) ? (result.attractions || []) : [];
 
       // Always save to cache (even if empty, to respect the 30-day TTL and avoid redundant requests)
       await placesService.saveAttractions(placeId, attractions);

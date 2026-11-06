@@ -27,7 +27,12 @@ export const AI_CARD_TYPES = Object.freeze({
   MATCH_SUGGESTIONS: 'match_suggestions',
   PLAYDATE_DRAFT: 'playdate_draft', // confirm step of a plan
   QUOTA_NOTICE: 'quota_notice', // another quota (e.g. playdate creation) blocks what the parent asked
-  CONFIRMATION: 'confirmation', // confirm sensitive action (e.g. cancel/reschedule)
+});
+
+export const AI_CONFIRM_STEPS = Object.freeze({
+  CANCEL: 'cancel_confirm',
+  RESCHEDULE: 'reschedule_confirm',
+  RESPOND: 'respond_confirm',
 });
 
 export const AI_CHOICE_STATUS = Object.freeze({
@@ -103,7 +108,6 @@ export const AI_DRAFT_WARNING_CODES = Object.freeze({
   ITEM_AGE: 'ITEM_AGE',
   ITEM_NOT_AT_PLACE: 'ITEM_NOT_AT_PLACE',
   SAFETY_HIGH_RISK: 'SAFETY_HIGH_RISK',
-  SAFETY_SUPERVISION: 'SAFETY_SUPERVISION',
   AGENDA_TOO_THIN: 'AGENDA_TOO_THIN',
   // Participants
   SCHEDULE_CONFLICT: 'SCHEDULE_CONFLICT',

@@ -8,6 +8,7 @@ import {
   AI_CHOICE_STATUS,
   AI_STEPS,
   AI_CONFIRM_STEP,
+  AI_CONFIRM_STEPS,
   AI_OPTION_IDS,
   AI_MESSAGE_ROLES,
   AI_LIMITS,
@@ -333,14 +334,49 @@ export const applyChoice = async (ctx, session, choice) => {
       allowTools = false;
       break;
     }
-    case 'cancel_confirm': {
+    case AI_CONFIRM_STEPS.CANCEL: {
       const opt = options[0];
       if (opt?.data?.confirm && opt.data.playdateId) {
-        await playdateService.cancelPlaydate(ctx.userId, opt.data.playdateId, 'Hủy theo yêu cầu của phụ huynh');
+        await playdateService.cancelPlaydate(ctx.userId, opt.data.playdateId, opt.data.reason || 'Hủy theo yêu cầu của phụ huynh');
         result = { success: true, message: 'Buổi hẹn chơi đã được hủy thành công.' };
       } else {
         result = { success: true, message: 'Đã giữ lại lịch hẹn chơi.' };
       }
+      instruction = 'Tell the parent in 1 short sentence about the cancellation status. Do not call tools.';
+      allowTools = false;
+      break;
+    }
+    case AI_CONFIRM_STEPS.RESCHEDULE: {
+      const opt = options[0];
+      if (opt?.data?.confirm && opt.data.playdateId) {
+        await playdateService.createRescheduleRequest(ctx.userId, opt.data.playdateId, {
+          newDate: opt.data.newDate,
+          newStartTime: opt.data.newStartTime,
+          reason: opt.data.reason || '',
+        });
+        result = { success: true, message: 'Đã gửi yêu cầu dời lịch hẹn chơi.' };
+      } else {
+        result = { success: true, message: 'Đã hủy yêu cầu dời lịch hẹn.' };
+      }
+      instruction = 'Tell the parent in 1 short sentence about the reschedule request status. Do not call tools.';
+      allowTools = false;
+      break;
+    }
+    case AI_CONFIRM_STEPS.RESPOND: {
+      const opt = options[0];
+      if (opt?.data?.confirm && opt.data.playdateId) {
+        await playdateService.respondToPlaydate(ctx.userId, opt.data.playdateId, opt.data.status);
+        result = {
+          success: true,
+          message: opt.data.status === 'accepted'
+            ? 'Đã đồng ý tham gia buổi hẹn chơi.'
+            : 'Đã từ chối lời mời tham gia buổi hẹn chơi.',
+        };
+      } else {
+        result = { success: true, message: 'Chưa phản hồi lời mời hẹn chơi.' };
+      }
+      instruction = 'Tell the parent in 1 short sentence about the response status. Do not call tools.';
+      allowTools = false;
       break;
     }
     default:

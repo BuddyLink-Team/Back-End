@@ -7,6 +7,7 @@ import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { MESSAGE_PRIVACY } from '../parent/parent.constants.js';
 import { CONVERSATION_TYPES, DELETED_MESSAGE_PLACEHOLDER, MESSAGE_TYPES } from './chat.constants.js';
+import { emitChatEvent, CHAT_EVENTS } from './chat.events.js';
 
 // Messages shown on each side of a reported one
 const MESSAGE_CONTEXT_RADIUS = 5;
@@ -501,6 +502,10 @@ class ChatService {
     }
     await this._assertConversationAccess(conversation, parent._id);
 
+    if (conversation.type === CONVERSATION_TYPES.DIRECT) {
+      throw new AppError('Polls are only supported in group playdate conversations', 400, 'INVALID_CONVERSATION_TYPE');
+    }
+
     if (!Array.isArray(options) || options.length < 2) {
       throw new AppError('Poll must have at least 2 options', 400, 'INVALID_POLL_OPTIONS');
     }
@@ -568,31 +573,31 @@ class ChatService {
       throw new AppError('Poll is already closed', 400, 'POLL_CLOSED');
     }
     if (message.poll.deadline && new Date() > new Date(message.poll.deadline)) {
-      message.poll.isClosed = true;
-      await chatRepository.updateMessage(message._id, { poll: message.poll });
+      await chatRepository.closePoll(message._id);
       throw new AppError('Poll deadline has expired', 400, 'POLL_EXPIRED');
     }
 
-    const targetOpt = message.poll.options.find((opt) => opt.id === optionId);
+    const targetOpt = (message.poll.options || []).find((opt) => opt.id === optionId);
     if (!targetOpt) {
       throw new AppError('Invalid option id', 400, 'INVALID_OPTION');
     }
 
-    const parentIdStr = parent._id.toString();
-    message.poll.options.forEach((opt) => {
-      opt.voterParentIds = (opt.voterParentIds || []).filter((id) => (id?._id || id)?.toString() !== parentIdStr);
-    });
-
-    targetOpt.voterParentIds.push(parent._id);
-
-    const totalParticipants = (conversation.participants || []).length;
-    const totalVotes = message.poll.options.reduce((sum, opt) => sum + (opt.voterParentIds || []).length, 0);
-    if (totalParticipants > 0 && totalVotes >= totalParticipants) {
-      message.poll.isClosed = true;
+    const updatedMessage = await chatRepository.votePollOption(message._id, optionId, parent._id);
+    if (!updatedMessage) {
+      throw new AppError('Poll is already closed', 400, 'POLL_CLOSED');
     }
 
-    await chatRepository.updateMessage(message._id, { poll: message.poll });
-    return { message, conversation };
+    const totalParticipants = (conversation.participants || []).length;
+    const totalVotes = (updatedMessage.poll?.options || []).reduce(
+      (sum, opt) => sum + (opt.voterParentIds || []).length,
+      0
+    );
+    if (totalParticipants > 0 && totalVotes >= totalParticipants) {
+      updatedMessage.poll.isClosed = true;
+      await chatRepository.closePoll(message._id);
+    }
+
+    return { message: updatedMessage, conversation };
   }
 
   /**
@@ -610,18 +615,12 @@ class ChatService {
     });
 
     const recipientIds = (conversation.participants || []).map((p) => (p._id || p).toString());
-    await chatRepository.updateLastMessage(conversationId, messageDoc, recipientIds);
+    const updatedConversation = await chatRepository.updateLastMessage(conversationId, messageDoc, recipientIds);
 
-    try {
-      const { getIO } = await import('../../sockets/index.js');
-      const { broadcastNewMessage } = await import('../../sockets/chat.broadcast.js');
-      const io = getIO();
-      if (io) {
-        broadcastNewMessage(io, conversationId, messageDoc);
-      }
-    } catch (_e) {
-      // Ignore broadcast error when running in headless test context
-    }
+    await emitChatEvent(CHAT_EVENTS.MESSAGE_CREATED, {
+      message: messageDoc,
+      conversation: updatedConversation || conversation,
+    });
 
     return messageDoc;
   }

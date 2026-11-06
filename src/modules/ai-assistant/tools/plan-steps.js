@@ -134,6 +134,9 @@ const buildTimeStep = async (ctx) => {
     from: day || undefined,
     to: day || undefined,
     durationMinutes: draft.durationMinutes,
+    placeOpeningHours: draft.location?.openingHours || undefined,
+    placeCoordinates: draft.location?.coordinates || undefined,
+    placeId: draft.location?.id || draft.location?.placeId || undefined,
   });
   const options = slots.slice(0, AI_LIMITS.MAX_OPTIONS).map((slot) => ({
     id: `slot:${slot.date}T${slot.time}`,
@@ -216,7 +219,14 @@ const buildActivityStep = async (ctx) => {
 const buildPlaceStep = async (ctx, { type } = {}) => {
   const { draft } = ctx;
   const childId = requireHostChild(draft);
-  const query = { childId, participantChildIds: participantIdsOf(draft), limit: AI_LIMITS.MAX_PLACES };
+  const query = {
+    childId,
+    participantChildIds: participantIdsOf(draft),
+    limit: AI_LIMITS.MAX_PLACES,
+    date: draft.date || undefined,
+    time: draft.time || undefined,
+    durationMinutes: draft.durationMinutes,
+  };
   const types = type ? [type] : (draft.activity?.placeTypes || []).slice(0, AI_LIMITS.MAX_PLACE_TYPES);
 
   const lists = await Promise.all(
@@ -353,16 +363,26 @@ export const advancePlan = async (ctx) => {
   const { draft } = ctx;
   const children = await ctx.getChildren();
   if (!draft.hostChild && children.length === 1) {
-    draft.hostChild = { childId: children[0].childId, displayName: children[0].displayName };
+    draft.hostChild = {
+      childId: children[0].childId,
+      displayName: children[0].displayName,
+      age: children[0].age ?? null,
+      interests: children[0].interests || [],
+    };
   }
 
-  // If date & location coordinates are known and weather not fetched yet, get weather
-  if (draft.date && draft.location?.coordinates && draft.location.coordinates.length === 2 && !draft.weather) {
+  // If date & location coordinates are known and weather not fetched yet for this date, get weather
+  if (
+    draft.date &&
+    draft.location?.coordinates &&
+    draft.location.coordinates.length === 2 &&
+    (!draft.weather || draft.weather.date !== draft.date)
+  ) {
     try {
       const [lng, lat] = draft.location.coordinates;
       const weather = await openMeteoAdapter.getDailyWeather(lat, lng, draft.date);
       if (weather) {
-        draft.weather = weather;
+        draft.weather = { ...weather, date: draft.date };
       }
     } catch (_e) {
       // Weather information is optional, ignore query failure

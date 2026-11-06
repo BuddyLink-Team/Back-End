@@ -436,12 +436,11 @@ class PlaydateService {
   }
 
   /**
-   * Close upcoming playdates of past days (run every day at 00:00 business time).
-   * The host can still complete a playdate manually; this only closes what is left:
-   * - at least one accepted participant -> completed
-   * - nobody accepted                   -> cancelled
-   * @param {Date} [now]
-   * @returns {Promise<{ completed: number, cancelled: number }>}
+   * Confirm or withdraw chaperone attendance for an upcoming playdate (BUD-49 B5).
+   * @param {string} userId
+   * @param {string} id
+   * @param {'confirm'|'cancel'} action
+   * @returns {Promise<Object>}
    */
   async toggleChaperone(userId, id, action = 'confirm') {
     const parentId = await this._getParentId(userId);
@@ -477,6 +476,14 @@ class PlaydateService {
     return this.getPlaydateById(userId, id);
   }
 
+  /**
+   * Close upcoming playdates of past days (run every day at 00:00 business time).
+   * The host can still complete a playdate manually; this only closes what is left:
+   * - at least one accepted participant -> completed
+   * - nobody accepted                   -> cancelled
+   * @param {Date} [now]
+   * @returns {Promise<{ completed: number, cancelled: number }>}
+   */
   async closeExpiredPlaydates(now = new Date()) {
     const cutoff = getStartOfZonedDay(now);
     const expired = await playdateRepository.findUpcomingBefore(cutoff);

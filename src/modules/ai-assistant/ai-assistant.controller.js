@@ -78,8 +78,13 @@ class AIAssistantController {
       res.end();
     } catch (error) {
       sendEvent('error', {
-        code: error.code || 'AI_ERROR',
-        message: error.message || 'An error occurred',
+        success: false,
+        message: error.message || 'Đã có lỗi xảy ra khi xử lý tin nhắn.',
+        data: null,
+        error: {
+          code: error.code || 'AI_ERROR',
+          details: error.details !== undefined && error.details !== null ? error.details : [],
+        },
       });
       res.end();
     }

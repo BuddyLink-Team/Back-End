@@ -12,41 +12,41 @@
  * isGeneric:  offered when nothing matches the children's interests
  */
 export const PLAYDATE_ACTIVITIES = Object.freeze([
-  { key: 'Dã ngoại ngoài trời', title: 'Dã ngoại & vận động tại công viên', tags: ['dã ngoại', 'ngoài trời', 'picnic'], minAge: 2, maxAge: 14, durationMinutes: 180, placeTypes: ['park'], isGeneric: true },
-  { key: 'Chơi cát & Tắm biển', title: 'Xây lâu đài cát & tắm biển', tags: ['biển', 'chơi cát'], minAge: 3, maxAge: 14, durationMinutes: 150, placeTypes: [] },
-  { key: 'Thả diều', title: 'Thả diều trên bãi cỏ rộng', tags: ['thả diều', 'diều'], minAge: 4, maxAge: 14, durationMinutes: 90, placeTypes: ['park'] },
-  { key: 'Tham quan vườn thú', title: 'Tham quan vườn thú & thế giới động vật', tags: ['vườn thú', 'động vật', 'khủng long'], minAge: 2, maxAge: 12, durationMinutes: 180, placeTypes: ['park'] },
-  { key: 'Làm vườn & Trồng cây', title: 'Trồng cây & chăm sóc vườn mini', tags: ['làm vườn', 'trồng cây'], minAge: 3, maxAge: 14, durationMinutes: 90, placeTypes: ['park', 'workshop'] },
-  { key: 'Đạp xe công viên', title: 'Đạp xe cùng nhau ở công viên', tags: ['đạp xe', 'xe đạp', 'xe cộ'], minAge: 4, maxAge: 16, durationMinutes: 90, placeTypes: ['park'] },
-  { key: 'Bơi lội', title: 'Bơi lội & chơi nước cho các bé', tags: ['bơi'], minAge: 4, maxAge: 16, durationMinutes: 90, placeTypes: ['sports_center'] },
-  { key: 'Bóng đá / Thể thao', title: 'Đá bóng & trò chơi rèn luyện thể chất', tags: ['bóng đá', 'thể thao', 'vận động', 'siêu anh hùng'], minAge: 4, maxAge: 16, durationMinutes: 90, placeTypes: ['sports_center', 'park'] },
-  { key: 'Trượt patin', title: 'Trượt patin cùng bạn', tags: ['patin'], minAge: 5, maxAge: 16, durationMinutes: 90, placeTypes: ['park', 'sports_center'] },
-  { key: 'Xếp hình Lego', title: 'Buổi chơi xếp hình Lego & giao lưu', tags: ['lego', 'lắp ráp', 'xếp hình'], minAge: 3, maxAge: 12, durationMinutes: 120, placeTypes: ['kids_cafe', 'library'] },
-  { key: 'Vẽ tranh', title: 'Buổi vẽ tranh sáng tạo ngoài trời', tags: ['vẽ', 'hội họa'], minAge: 2, maxAge: 14, durationMinutes: 90, placeTypes: ['park', 'workshop'] },
-  { key: 'Thủ công sáng tạo', title: 'Làm đồ thủ công & đất nặn', tags: ['thủ công', 'đất nặn', 'búp bê'], minAge: 3, maxAge: 12, durationMinutes: 90, placeTypes: ['workshop', 'kids_cafe'] },
-  { key: 'Làm bánh & Nấu ăn', title: 'Lớp học làm bánh mini cho các bé', tags: ['làm bánh', 'nấu ăn'], minAge: 4, maxAge: 14, durationMinutes: 120, placeTypes: ['workshop'] },
-  { key: 'Âm nhạc & Ca hát', title: 'Hát & chơi nhạc cụ cùng nhau', tags: ['âm nhạc', 'ca hát', 'đàn', 'hát'], minAge: 2, maxAge: 14, durationMinutes: 60, placeTypes: ['kids_cafe', 'workshop'] },
-  { key: 'Thư viện / Đọc sách', title: 'Giao lưu đọc sách & kể chuyện cho bé', tags: ['đọc sách', 'thư viện', 'truyện'], minAge: 3, maxAge: 14, durationMinutes: 60, placeTypes: ['library'] },
-  { key: 'Ghé thăm viện bảo tàng', title: 'Tham quan bảo tàng cùng các bé', tags: ['bảo tàng', 'khủng long'], minAge: 5, maxAge: 16, durationMinutes: 120, placeTypes: [] },
-  { key: 'Khám phá khoa học', title: 'Thí nghiệm khoa học vui cho bé', tags: ['khoa học', 'không gian', 'thí nghiệm'], minAge: 5, maxAge: 14, durationMinutes: 90, placeTypes: ['workshop', 'library'] },
-  { key: 'Khu vui chơi trong nhà (Kids Cafe)', title: 'Vui chơi tại khu vui chơi trong nhà', tags: ['kids cafe', 'khu vui chơi'], minAge: 1, maxAge: 10, durationMinutes: 120, placeTypes: ['kids_cafe', 'playground'], isGeneric: true },
-  { key: 'Trò chơi tương tác / Board games', title: 'Chơi board game & trò chơi tương tác', tags: ['board game', 'cờ vua', 'trò chơi tương tác'], minAge: 5, maxAge: 16, durationMinutes: 90, placeTypes: ['kids_cafe', 'library'] },
-  { key: 'Xem phim hoạt hình', title: 'Xem phim hoạt hình cùng nhau', tags: ['phim', 'hoạt hình', 'siêu anh hùng'], minAge: 3, maxAge: 12, durationMinutes: 120, placeTypes: [] },
-  { key: 'Chơi cầu trượt & xích đu', title: 'Chơi cầu trượt & xích đu ở sân chơi', tags: ['sân chơi', 'cầu trượt', 'xích đu'], minAge: 1, maxAge: 8, durationMinutes: 60, placeTypes: ['playground', 'park'], isGeneric: true },
+  { key: 'Dã ngoại ngoài trời', title: 'Dã ngoại & vận động tại công viên', tags: ['dã ngoại', 'ngoài trời', 'picnic'], minAge: 2, maxAge: 14, durationMinutes: 180, placeTypes: ['park'], isGeneric: true, riskLevel: 'low', supervisionLevel: 'normal' },
+  { key: 'Chơi cát & Tắm biển', title: 'Xây lâu đài cát & tắm biển', tags: ['biển', 'chơi cát'], minAge: 3, maxAge: 14, durationMinutes: 150, placeTypes: [], riskLevel: 'high', supervisionLevel: 'high_vigilance' },
+  { key: 'Thả diều', title: 'Thả diều trên bãi cỏ rộng', tags: ['thả diều', 'diều'], minAge: 4, maxAge: 14, durationMinutes: 90, placeTypes: ['park'], riskLevel: 'low', supervisionLevel: 'normal' },
+  { key: 'Tham quan vườn thú', title: 'Tham quan vườn thú & thế giới động vật', tags: ['vườn thú', 'động vật', 'khủng long'], minAge: 2, maxAge: 12, durationMinutes: 180, placeTypes: ['park'], riskLevel: 'low', supervisionLevel: 'normal' },
+  { key: 'Làm vườn & Trồng cây', title: 'Trồng cây & chăm sóc vườn mini', tags: ['làm vườn', 'trồng cây'], minAge: 3, maxAge: 14, durationMinutes: 90, placeTypes: ['park', 'workshop'], riskLevel: 'low', supervisionLevel: 'normal' },
+  { key: 'Đạp xe công viên', title: 'Đạp xe cùng nhau ở công viên', tags: ['đạp xe', 'xe đạp', 'xe cộ'], minAge: 4, maxAge: 16, durationMinutes: 90, placeTypes: ['park'], riskLevel: 'medium', supervisionLevel: 'normal' },
+  { key: 'Bơi lội', title: 'Bơi lội & chơi nước cho các bé', tags: ['bơi'], minAge: 4, maxAge: 16, durationMinutes: 90, placeTypes: ['sports_center'], riskLevel: 'high', supervisionLevel: 'dedicated_1to1' },
+  { key: 'Bóng đá / Thể thao', title: 'Đá bóng & trò chơi rèn luyện thể chất', tags: ['bóng đá', 'thể thao', 'vận động', 'siêu anh hùng'], minAge: 4, maxAge: 16, durationMinutes: 90, placeTypes: ['sports_center', 'park'], riskLevel: 'medium', supervisionLevel: 'normal' },
+  { key: 'Trượt patin', title: 'Trượt patin cùng bạn', tags: ['patin'], minAge: 5, maxAge: 16, durationMinutes: 90, placeTypes: ['park', 'sports_center'], riskLevel: 'medium', supervisionLevel: 'normal' },
+  { key: 'Xếp hình Lego', title: 'Buổi chơi xếp hình Lego & giao lưu', tags: ['lego', 'lắp ráp', 'xếp hình'], minAge: 3, maxAge: 12, durationMinutes: 120, placeTypes: ['kids_cafe', 'library'], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Vẽ tranh', title: 'Buổi vẽ tranh sáng tạo ngoài trời', tags: ['vẽ', 'hội họa'], minAge: 2, maxAge: 14, durationMinutes: 90, placeTypes: ['park', 'workshop'], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Thủ công sáng tạo', title: 'Làm đồ thủ công & đất nặn', tags: ['thủ công', 'đất nặn', 'búp bê'], minAge: 3, maxAge: 12, durationMinutes: 90, placeTypes: ['workshop', 'kids_cafe'], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Làm bánh & Nấu ăn', title: 'Lớp học làm bánh mini cho các bé', tags: ['làm bánh', 'nấu ăn'], minAge: 4, maxAge: 14, durationMinutes: 120, placeTypes: ['workshop'], riskLevel: 'medium', supervisionLevel: 'high_vigilance' },
+  { key: 'Âm nhạc & Ca hát', title: 'Hát & chơi nhạc cụ cùng nhau', tags: ['âm nhạc', 'ca hát', 'đàn', 'hát'], minAge: 2, maxAge: 14, durationMinutes: 60, placeTypes: ['kids_cafe', 'workshop'], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Thư viện / Đọc sách', title: 'Giao lưu đọc sách & kể chuyện cho bé', tags: ['đọc sách', 'thư viện', 'truyện'], minAge: 3, maxAge: 14, durationMinutes: 60, placeTypes: ['library'], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Ghé thăm viện bảo tàng', title: 'Tham quan bảo tàng cùng các bé', tags: ['bảo tàng', 'khủng long'], minAge: 5, maxAge: 16, durationMinutes: 120, placeTypes: [], riskLevel: 'low', supervisionLevel: 'normal' },
+  { key: 'Khám phá khoa học', title: 'Thí nghiệm khoa học vui cho bé', tags: ['khoa học', 'không gian', 'thí nghiệm'], minAge: 5, maxAge: 14, durationMinutes: 90, placeTypes: ['workshop', 'library'], riskLevel: 'low', supervisionLevel: 'normal' },
+  { key: 'Khu vui chơi trong nhà (Kids Cafe)', title: 'Vui chơi tại khu vui chơi trong nhà', tags: ['kids cafe', 'khu vui chơi'], minAge: 1, maxAge: 10, durationMinutes: 120, placeTypes: ['kids_cafe', 'playground'], isGeneric: true, riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Trò chơi tương tác / Board games', title: 'Chơi board game & trò chơi tương tác', tags: ['board game', 'cờ vua', 'trò chơi tương tác'], minAge: 5, maxAge: 16, durationMinutes: 90, placeTypes: ['kids_cafe', 'library'], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Xem phim hoạt hình', title: 'Xem phim hoạt hình cùng nhau', tags: ['phim', 'hoạt hình', 'siêu anh hùng'], minAge: 3, maxAge: 12, durationMinutes: 120, placeTypes: [], riskLevel: 'low', supervisionLevel: 'minimal' },
+  { key: 'Chơi cầu trượt & xích đu', title: 'Chơi cầu trượt & xích đu ở sân chơi', tags: ['sân chơi', 'cầu trượt', 'xích đu'], minAge: 1, maxAge: 8, durationMinutes: 60, placeTypes: ['playground', 'park'], isGeneric: true, riskLevel: 'medium', supervisionLevel: 'normal' },
 ]);
 
 /**
  * Concrete game templates for places without known attractions
  */
 export const GENERIC_GAMES = Object.freeze([
-  { title: 'Trò chơi chuyền bóng và vận động nhẹ', minAge: 2, maxAge: 12, tags: ['thể thao', 'vận động', 'bóng đá'], defaultMinutes: 20 },
-  { title: 'Thi xếp hình sáng tạo', minAge: 3, maxAge: 12, tags: ['lego', 'xếp hình', 'lắp ráp'], defaultMinutes: 25 },
-  { title: 'Vẽ tranh sắc màu theo chủ đề', minAge: 2, maxAge: 14, tags: ['vẽ', 'hội họa', 'thủ công'], defaultMinutes: 25 },
-  { title: 'Đố vui tương tác và kể chuyện cùng bạn', minAge: 3, maxAge: 14, tags: ['đọc sách', 'truyện', 'thư viện'], defaultMinutes: 20 },
-  { title: 'Chơi cầu trượt và nhà bóng', minAge: 1, maxAge: 8, tags: ['sân chơi', 'cầu trượt', 'kids cafe'], defaultMinutes: 25 },
-  { title: 'Thử thách Board game đồng đội', minAge: 5, maxAge: 16, tags: ['board game', 'cờ vua'], defaultMinutes: 30 },
-  { title: 'Đua xe đạp mini / patin tự do', minAge: 4, maxAge: 16, tags: ['đạp xe', 'patin'], defaultMinutes: 25 },
-  { title: 'Khám phá thiên nhiên và tìm đồ vật', minAge: 3, maxAge: 14, tags: ['dã ngoại', 'ngoài trời'], defaultMinutes: 25 },
+  { title: 'Trò chơi chuyền bóng và vận động nhẹ', minAge: 2, maxAge: 12, tags: ['thể thao', 'vận động', 'bóng đá'], defaultMinutes: 20, riskLevel: 'low', supervisionLevel: 'normal' },
+  { title: 'Thi xếp hình sáng tạo', minAge: 3, maxAge: 12, tags: ['lego', 'xếp hình', 'lắp ráp'], defaultMinutes: 25, riskLevel: 'low', supervisionLevel: 'minimal' },
+  { title: 'Vẽ tranh sắc màu theo chủ đề', minAge: 2, maxAge: 14, tags: ['vẽ', 'hội họa', 'thủ công'], defaultMinutes: 25, riskLevel: 'low', supervisionLevel: 'minimal' },
+  { title: 'Đố vui tương tác và kể chuyện cùng bạn', minAge: 3, maxAge: 14, tags: ['đọc sách', 'truyện', 'thư viện'], defaultMinutes: 20, riskLevel: 'low', supervisionLevel: 'minimal' },
+  { title: 'Chơi cầu trượt và nhà bóng', minAge: 1, maxAge: 8, tags: ['sân chơi', 'cầu trượt', 'kids cafe'], defaultMinutes: 25, riskLevel: 'medium', supervisionLevel: 'normal' },
+  { title: 'Thử thách Board game đồng đội', minAge: 5, maxAge: 16, tags: ['board game', 'cờ vua'], defaultMinutes: 30, riskLevel: 'low', supervisionLevel: 'minimal' },
+  { title: 'Đua xe đạp mini / patin tự do', minAge: 4, maxAge: 16, tags: ['đạp xe', 'patin'], defaultMinutes: 25, riskLevel: 'medium', supervisionLevel: 'normal' },
+  { title: 'Khám phá thiên nhiên và tìm đồ vật', minAge: 3, maxAge: 14, tags: ['dã ngoại', 'ngoài trời'], defaultMinutes: 25, riskLevel: 'low', supervisionLevel: 'normal' },
 ]);
 
 /**
@@ -77,8 +77,9 @@ export const pickAttractions = ({
   // 85% of total playdate time budget
   const targetMinutes = Math.max(30, Math.round(durationMinutes * 0.85));
 
-  // Determine game duration per item based on child age: shorter for toddlers (15m), 15-20m for kids
-  const itemDuration = youngestAge !== null && youngestAge < 4 ? 15 : youngestAge !== null && youngestAge < 8 ? 15 : 20;
+  // Cap per-activity duration for younger children (youngestAge < 4 max 20m, youngestAge < 8 max 30m, else 45m)
+  const maxPerActivity = youngestAge !== null && youngestAge < 4 ? 20 : youngestAge !== null && youngestAge < 8 ? 30 : 45;
+  const itemDuration = youngestAge !== null && youngestAge < 4 ? 15 : youngestAge !== null && youngestAge < 8 ? 20 : 25;
 
   // Collect all interest/activity tags of the children
   const allTags = effectiveChildren.flatMap((c) => [...(c.interests || []), ...(c.favoriteActivities || [])].map((t) => String(t).toLowerCase()));
@@ -88,11 +89,11 @@ export const pickAttractions = ({
         title: a.title || a.name,
         minAge: a.minAge ?? 0,
         maxAge: a.maxAge ?? 18,
-        durationMinutes: a.durationMinutes || itemDuration,
+        durationMinutes: Math.min(a.durationMinutes || itemDuration, maxPerActivity),
       }))
     : GENERIC_GAMES.map((g) => ({
         ...g,
-        durationMinutes: itemDuration,
+        durationMinutes: Math.min(g.defaultMinutes || itemDuration, maxPerActivity),
       }));
 
   // Filter age

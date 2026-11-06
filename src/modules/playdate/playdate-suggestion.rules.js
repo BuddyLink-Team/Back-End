@@ -20,8 +20,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const pad = (value) => String(value).padStart(2, '0');
 
+const toVnLocalDate = (date) => {
+  const parts = getZonedParts(date, 'Asia/Ho_Chi_Minh');
+  return new Date(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+};
+
 /**
  * Check if a place is open at a given interval or date using opening_hours npm package (BUD-49).
+ * Checks the entire interval [startTime, endTime] with timezone awareness.
  * @param {string} openingHoursStr
  * @param {Date} startTime
  * @param {Date} [endTime]
@@ -38,12 +44,14 @@ export const checkPlaceOpeningHours = (openingHoursStr, startTime, endTime, coor
     const OH = opening_hours.default || opening_hours;
     const oh = new OH(openingHoursStr, { lat, lon, address: { country_code: 'vn' } });
 
-    const openAtStart = oh.getState(startTime);
+    const localStart = toVnLocalDate(startTime);
     const end = endTime || new Date(startTime.getTime() + 60 * 60 * 1000);
-    const openAtEnd = oh.getState(new Date(end.getTime() - 60 * 1000));
-    const openWholeTime = Boolean(openAtStart && openAtEnd);
+    const localEnd = toVnLocalDate(end);
 
-    const after30m = new Date(end.getTime() + 30 * 60 * 1000);
+    const intervals = oh.getOpenIntervals(localStart, localEnd);
+    const openWholeTime = intervals.some(([s, e]) => s <= localStart && e >= localEnd);
+
+    const after30m = new Date(localEnd.getTime() + 30 * 60 * 1000);
     const closesSoon = openWholeTime && !oh.getState(after30m);
 
     return { isOpen: openWholeTime, isKnown: true, closesSoon };

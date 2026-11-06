@@ -125,6 +125,8 @@ export const setLocation = (draft, place) => {
     placeType: place.placeType || place.type || null,
     openingHours: String(place.openingHours || '').slice(0, 200),
     osmUrl: place.osmUrl || null,
+    tags: place.tags || place.osmTags || {},
+    osmTags: place.osmTags || place.tags || {},
     attractions: place.attractions || [],
     familyDistances: (place.familyDistances || [])
       .filter((family) => Number.isFinite(family.distanceKm))
@@ -148,6 +150,7 @@ export const applyPlanFields = async (ctx, fields) => {
   }
 
   if (fields.durationMinutes) draft.durationMinutes = clampDuration(fields.durationMinutes);
+  const previousDate = draft.date;
   if (isValidDate(fields.date) && isValidTime(fields.time)) {
     draft.date = fields.date;
     draft.time = fields.time;
@@ -161,6 +164,9 @@ export const applyPlanFields = async (ctx, fields) => {
     draft.date = draft.preferredDate || draft.date;
     draft.time = fields.time;
     draft.preferredDate = null;
+  }
+  if (draft.date && previousDate && draft.date !== previousDate) {
+    draft.weather = null;
   }
 
   let ambiguousNames = [];
@@ -229,9 +235,19 @@ export const applyPlanFields = async (ctx, fields) => {
       const seen = new Set();
       agenda = agenda.map((item) => {
         const itemLower = item.toLowerCase();
-        const matches =
-          knownItems.some((k) => k.includes(itemLower) || itemLower.includes(k.slice(0, 8))) ||
-          (draft.activity && itemLower.includes(draft.activity.title.toLowerCase().slice(0, 5)));
+        const activityTitle = draft.activity?.title ? String(draft.activity.title).toLowerCase() : '';
+        const activityKey = draft.activity?.key ? String(draft.activity.key).toLowerCase() : '';
+        const activityTags = (draft.activity?.tags || []).map((t) => String(t).toLowerCase());
+        const matchesActivity = Boolean(
+          (activityTitle && (itemLower.includes(activityTitle) || activityTitle.includes(itemLower))) ||
+          (activityKey && (itemLower.includes(activityKey) || activityKey.includes(itemLower))) ||
+          activityTags.some((tag) => tag.length >= 2 && itemLower.includes(tag))
+        );
+        const matchesKnown = knownItems.some((k) => {
+          if (!k) return false;
+          return itemLower.includes(k) || (itemLower.length >= 4 && k.includes(itemLower));
+        });
+        const matches = matchesKnown || matchesActivity;
         if (!matches && knownItems.length > 0) {
           while (fallbackIndex < fallbackList.length && seen.has(fallbackList[fallbackIndex])) {
             fallbackIndex++;

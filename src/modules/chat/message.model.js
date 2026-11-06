@@ -12,7 +12,10 @@ const messageSchema = new mongoose.Schema(
     senderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Parent',
-      required: true,
+      required: function () {
+        return this.type !== MESSAGE_TYPES.SYSTEM;
+      },
+      default: null,
     },
     type: {
       type: String,

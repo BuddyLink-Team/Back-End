@@ -167,7 +167,7 @@ export const nextMissingStep = (draft) => {
   return AI_CONFIRM_STEP;
 };
 
-const VN_HOLIDAYS = new Set(['01-01', '30-04', '01-05', '02-09']);
+const VN_HOLIDAYS = new Set(['01-01', '04-30', '05-01', '09-02']);
 
 /**
  * Consolidated pure rule validator for playdate drafts (BUD-49 Part C).
@@ -392,9 +392,10 @@ export const evaluateDraftWarnings = (
       placeType: draft.location?.placeType || draft.location?.type,
       youngestAge,
       totalChildren: totalKids,
+      weather,
     });
 
-    if (safety.hasHighRisk || draft.hasHighRisk) {
+    if (safety.hasHighRisk) {
       const severity = draft.safetyAcknowledged ? AI_WARNING_SEVERITY.WARN : AI_WARNING_SEVERITY.BLOCK;
       warnings.push({ code: AI_DRAFT_WARNING_CODES.SAFETY_HIGH_RISK, severity });
     }
@@ -461,6 +462,31 @@ export const refreshDraft = (draft, now = new Date()) => {
   const step = nextMissingStep(draft);
   draft.status = step === AI_CONFIRM_STEP ? AI_PLAN_STATUS.READY : AI_PLAN_STATUS.COLLECTING;
 
+  const allChildrenAges = [
+    draft.hostChild?.age,
+    ...(draft.participants || []).map((p) => p.age ?? p.child?.age),
+  ].filter((a) => typeof a === 'number' && !Number.isNaN(a));
+  const youngestAge = allChildrenAges.length ? Math.min(...allChildrenAges) : null;
+
+  // Reset safety acknowledgement if agenda or activity changed
+  const currentSafetyKey = `${draft.activity?.title || ''}||${(draft.agenda || []).join('||')}`;
+  if (draft._lastSafetyKey !== undefined && draft._lastSafetyKey !== currentSafetyKey) {
+    draft.safetyAcknowledged = false;
+  }
+  draft._lastSafetyKey = currentSafetyKey;
+
+  const safety = evaluateSafetyRules({
+    activityTitle: draft.activity?.title || '',
+    agenda: draft.agenda,
+    placeType: draft.location?.placeType || draft.location?.type,
+    youngestAge,
+    totalChildren: 1 + (draft.participants?.length || 0),
+    weather: draft.weather,
+  });
+  draft.safetyNotes = safety.safetyNotes;
+  draft.itemsToBring = safety.itemsToBring;
+  draft.hasHighRisk = safety.hasHighRisk;
+
   const kept = (draft.warnings || []).filter(
     (warning) =>
       [AI_DRAFT_WARNING_CODES.SCHEDULE_CONFLICT, AI_DRAFT_WARNING_CODES.INVITEE_NOT_FRIEND].includes(warning.code)
@@ -472,7 +498,11 @@ export const refreshDraft = (draft, now = new Date()) => {
       .map((warning) => ({ ...warning, childId: participant.childId }))
   );
 
-  const evaluated = evaluateDraftWarnings(draft, { now, weather: draft.weather });
+  const evaluated = evaluateDraftWarnings(draft, {
+    now,
+    weather: draft.weather,
+    preferredTimes: draft.preferredTimes || [],
+  });
 
   const seen = new Set(ageGaps.map((w) => w.code));
   draft.warnings = [
@@ -485,23 +515,6 @@ export const refreshDraft = (draft, now = new Date()) => {
     }),
   ];
 
-  const allChildrenAges = [
-    draft.hostChild?.age,
-    ...(draft.participants || []).map((p) => p.age ?? p.child?.age),
-  ].filter((a) => typeof a === 'number' && !Number.isNaN(a));
-  const youngestAge = allChildrenAges.length ? Math.min(...allChildrenAges) : null;
-
-  const safety = evaluateSafetyRules({
-    activityTitle: draft.activity?.title || '',
-    agenda: draft.agenda,
-    placeType: draft.location?.placeType || draft.location?.type,
-    youngestAge,
-    totalChildren: 1 + (draft.participants?.length || 0),
-  });
-  draft.safetyNotes = safety.safetyNotes;
-  draft.itemsToBring = safety.itemsToBring;
-  draft.hasHighRisk = safety.hasHighRisk;
-
   return draft;
 };
 
@@ -512,6 +525,7 @@ export const refreshDraft = (draft, now = new Date()) => {
  */
 export const summarizeDraft = (draft) => {
   if (!draft) return 'No playdate is being planned.';
+  const highest = highestSeverityWarning(draft.warnings || []);
   const lines = [
     `Child: ${draft.hostChild ? draft.hostChild.displayName : '(missing)'}`,
     `Time: ${draft.date && draft.time ? `${draft.date} ${draft.time}, ${draft.durationMinutes} min` : draft.preferredDate ? `(day ${draft.preferredDate}, time missing)` : '(missing)'}`,
@@ -521,6 +535,7 @@ export const summarizeDraft = (draft) => {
     `Agenda: ${draft.agenda.length ? draft.agenda.join(' | ') : '(none yet)'}${draft.agendaConfirmed ? ' (reviewed by the parent)' : ''}`,
     `Note: ${draft.note || '(none)'}`,
     `Warnings: ${(draft.warnings || []).map((warning) => warning.code).join(', ') || '(none)'}`,
+    `Highest Warning: ${highest ? `${highest.code} (${highest.severity})` : 'none'}`,
     `Status: ${draft.status}, next step: ${nextMissingStep(draft)}`,
   ];
   return lines.join('\n');

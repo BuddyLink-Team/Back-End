@@ -164,12 +164,15 @@ const notifyRebookingSuggestion = async ({ playdateId, raterParentId, rating }) 
   const parent = await parentService.getParentById(raterParentId);
   if (!parent?.userId) return;
 
+  const streak = parent.streak?.currentWeeklyStreak || 0;
+  const streakText = streak > 1 ? ` (Bạn đang có chuỗi ${streak} tuần hẹn chơi liên tiếp!)` : '';
+
   await notificationService.createNotification({
     recipientId: parent.userId,
-    type: NOTIFICATION_TYPES.STREAK_REMINDER,
+    type: NOTIFICATION_TYPES.PLAYDATE_REMINDER,
     title: 'Gặp lại bạn cũ thôi nào! 🎉',
-    body: 'Buổi hẹn chơi vừa qua thật tuyệt vời! Bạn có muốn AI Assistant gợi ý lên lịch buổi hẹn tiếp theo để duy trì kết nối cho các bé không?',
-    data: { playdateId },
+    body: `Buổi hẹn chơi vừa qua thật tuyệt vời! Bạn có muốn AI Assistant gợi ý lên lịch buổi hẹn tiếp theo để duy trì kết nối cho các bé không?${streakText}`,
+    data: { playdateId, isRebooking: true },
   });
 };
 
@@ -194,9 +197,6 @@ export const registerNotificationListeners = () => {
   );
   onPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, (payload) =>
     runInBackground('Playdate reminder notification', () => notifyPlaydateReminder(payload))
-  );
-  onPlaydateEvent(PLAYDATE_EVENTS.RATED, (payload) =>
-    runInBackground('Playdate rated rebooking notification', () => notifyRebookingSuggestion(payload))
   );
   onRatingEvent(RATING_EVENTS.CREATED, (payload) =>
     runInBackground('Playdate rating created rebooking notification', () => notifyRebookingSuggestion(payload))

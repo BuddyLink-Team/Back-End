@@ -110,11 +110,11 @@ class PlaydateSuggestionService {
   /**
    * GET /playdates/suggestions/time-slots
    * Up to 3 start times fitting the families' preferred days/time slots, never in the past and never
-   * overlapping another playdate of one of the children.
+   * overlapping another playdate of one of the children. Filters out slots where the venue is closed (BUD-49 C).
    * @param {string} userId
-   * @param {{ childId: string, participantChildIds?: string, from?: string, to?: string, durationMinutes?: number }} query
+   * @param {{ childId: string, participantChildIds?: string, from?: string, to?: string, durationMinutes?: number, placeOpeningHours?: string, placeCoordinates?: number[], placeId?: string }} query
    */
-  async getTimeSlotSuggestions(userId, { childId, participantChildIds, from, to, durationMinutes } = {}) {
+  async getTimeSlotSuggestions(userId, { childId, participantChildIds, from, to, durationMinutes, placeOpeningHours, placeCoordinates, placeId } = {}) {
     const tomorrow = new Date(getStartOfZonedDay().getTime() + DAY_MS);
     const rangeFrom = from ? new Date(from) : tomorrow;
     const rangeTo = to ? new Date(to) : new Date(rangeFrom.getTime() + (SUGGESTION_LIMITS.DEFAULT_RANGE_DAYS - 1) * DAY_MS);
@@ -126,6 +126,20 @@ class PlaydateSuggestionService {
       );
     }
 
+    let oh = placeOpeningHours || null;
+    let coords = placeCoordinates || null;
+    if (!oh && placeId) {
+      try {
+        const placeDoc = await placesService.getPlaceDocById(placeId);
+        if (placeDoc) {
+          oh = placeDoc.openingHours || null;
+          coords = placeDoc.coordinates?.coordinates || placeDoc.coordinates || null;
+        }
+      } catch (_e) {
+        // Ignore place lookup failure
+      }
+    }
+
     const { parents, children } = await this._loadGroup(userId, { childId, participantChildIds });
     const duration = durationMinutes ? parseInt(durationMinutes, 10) : PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
     const busy = await playdateService.getBusyIntervals(
@@ -135,7 +149,15 @@ class PlaydateSuggestionService {
     );
 
     return {
-      slots: suggestTimeSlots({ parents, from: rangeFrom, to: rangeTo, durationMinutes: duration, busy }),
+      slots: suggestTimeSlots({
+        parents,
+        from: rangeFrom,
+        to: rangeTo,
+        durationMinutes: duration,
+        busy,
+        placeOpeningHours: oh,
+        placeCoordinates: coords,
+      }),
     };
   }
 
@@ -143,10 +165,11 @@ class PlaydateSuggestionService {
    * GET /playdates/suggestions/places
    * Places around the families' midpoint: preferred place types first, then the nearest. The response
    * never contains the midpoint nor any family's coordinates.
+   * If date and time are provided, ranks places based on whether they are open (BUD-49 C).
    * @param {string} userId
-   * @param {{ childId: string, participantChildIds?: string, type?: string, limit?: number }} query
+   * @param {{ childId: string, participantChildIds?: string, type?: string, limit?: number, date?: string, time?: string, durationMinutes?: number }} query
    */
-  async getPlaceSuggestions(userId, { childId, participantChildIds, type, limit } = {}) {
+  async getPlaceSuggestions(userId, { childId, participantChildIds, type, limit, date, time, durationMinutes } = {}) {
     const { parents, children } = await this._loadGroup(userId, { childId, participantChildIds });
 
     // Saved locations are ward centers (geocoded from area + city), the same points Discovery measures from
@@ -174,11 +197,20 @@ class PlaydateSuggestionService {
     const ages = children.map((child) => calculateAgeYears(child.dateOfBirth)).filter((age) => age !== null);
     const parsedLimit = Math.min(SUGGESTION_LIMITS.MAX_PLACES, Math.max(1, parseInt(limit, 10) || SUGGESTION_LIMITS.PLACES));
 
+    let targetStart = null;
+    let targetEnd = null;
+    if (date && time) {
+      targetStart = getScheduledStart(new Date(date), time);
+      targetEnd = new Date(targetStart.getTime() + (parseInt(durationMinutes, 10) || 60) * 60 * 1000);
+    }
+
     return {
       places: rankPlaces(places, {
         preferredTypes: preferredPlaceTypes(parents),
         youngestAge: ages.length ? Math.min(...ages) : null,
         families,
+        targetStart,
+        targetEnd,
         limit: parsedLimit,
       }),
     };
