@@ -6,6 +6,8 @@ import subscriptionService from '../subscription/subscription.service.js';
 import connectionService from '../connection/connection.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
+import sentinelService from '../safety/sentinel.service.js';
+import { calculatePolicySanction, checkActionPolicyCompliance } from '../safety/moderation-policy.rules.js';
 import chatService from '../chat/chat.service.js';
 import notificationService from '../notification/notification.service.js';
 import { NOTIFICATION_TYPES } from '../notification/notification.constants.js';
@@ -859,6 +861,12 @@ class AdminService {
       )
       .sort((a, b) => new Date(b.performedAt) - new Date(a.performedAt));
 
+    const priorSanctionsCount = await safetyService.countUserPriorSanctions(report.reportedUserId);
+    const effectiveSeverity = report.sentinelAssessment?.severityRecommendation || report.severity;
+    const policyGuidance = report.sentinelAssessment?.assessedAt
+      ? calculatePolicySanction(report.category, effectiveSeverity, priorSanctionsCount, report.targetType)
+      : null;
+
     return AdminReportDetailDTO.toResponse({
       report,
       reporterParent,
@@ -870,6 +878,7 @@ class AdminService {
       relatedOpenReports,
       pastReports,
       previousSanctions,
+      policyGuidance,
       isOverdue: checkIsOverdue(report),
       totalReportsSubmitted,
     });
@@ -951,9 +960,9 @@ class AdminService {
    * Apply a sanction, through the service of the module that owns its target
    * @param {string} adminUserId
    * @param {string} id
-   * @param {{ type: string, durationDays?: number, note?: string }} param2
+   * @param {{ type: string, durationDays?: number, note?: string, isPolicyOverride?: boolean, overrideReason?: string }} param2
    */
-  async applyReportAction(adminUserId, id, { type, durationDays, note }) {
+  async applyReportAction(adminUserId, id, { type, durationDays, note, isPolicyOverride = false, overrideReason = '' }) {
     const report = await this._getReportDocOrFail(id);
 
     if (REPORT_CLOSED_STATUSES.includes(report.status)) {
@@ -967,6 +976,28 @@ class AdminService {
     }
     if ((report.actions || []).some((action) => action.type === type)) {
       throw new AppError('This action has already been applied to this report', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+    }
+
+    // Verify policy compliance against Standard Sanction Matrix
+    const priorCount = await safetyService.countUserPriorSanctions(report.reportedUserId);
+    const effectiveSeverity = report.sentinelAssessment?.severityRecommendation || report.severity;
+    const policyResult = calculatePolicySanction(report.category, effectiveSeverity, priorCount, report.targetType);
+    const { isOverride: requiredOverride } = checkActionPolicyCompliance(type, policyResult);
+
+    if (requiredOverride && !isPolicyOverride) {
+      throw new AppError(
+        `Chế tài "${type}" không nằm trong khung quy chuẩn cho vi phạm ${report.category} (${report.severity}). Cần tích chọn "Áp dụng ngoại lệ chính sách (Policy Override)" và giải trình lý do (ít nhất 20 ký tự).`,
+        400,
+        'POLICY_OVERRIDE_REQUIRED'
+      );
+    }
+
+    if (isPolicyOverride && (!overrideReason || overrideReason.trim().length < 20)) {
+      throw new AppError(
+        'Vui lòng nhập lý do giải trình ngoại lệ chính sách (tối thiểu 20 ký tự).',
+        400,
+        'OVERRIDE_REASON_REQUIRED'
+      );
     }
 
     const reportedParent = await parentService.getParentById(report.reportedUserId);
@@ -991,6 +1022,9 @@ class AdminService {
       performedBy: adminUserId,
       performedAt: new Date(),
       note: note || '',
+      isPolicyOverride: Boolean(isPolicyOverride),
+      overrideReason: isPolicyOverride ? overrideReason.trim() : '',
+      policyClause: policyResult.clause,
     });
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
@@ -998,12 +1032,225 @@ class AdminService {
       toStatus: report.status,
       by: adminUserId,
       at: new Date(),
-      note: note || `Đã thi hành chế tài: ${type}`,
-      metadata: { actionType: type, durationDays: durationValue },
+      note: isPolicyOverride
+        ? `Đã thi hành chế tài (Ngoại lệ chính sách): ${type} - Lý do: ${overrideReason}`
+        : `Đã thi hành chế tài theo quy chuẩn: ${type}`,
+      metadata: { actionType: type, durationDays: durationValue, isPolicyOverride, overrideReason },
     });
+
+    if (isPolicyOverride) {
+      report.history.push({
+        eventType: REPORT_HISTORY_EVENT_TYPES.POLICY_OVERRIDDEN,
+        fromStatus: report.status,
+        toStatus: report.status,
+        by: adminUserId,
+        at: new Date(),
+        note: `Ngoại lệ chính sách cho "${type}": ${overrideReason}`,
+        metadata: { actionType: type, overrideReason },
+      });
+    }
 
     await safetyService.saveReport(report);
     return this.getReportDetail(id);
+  }
+
+  /**
+   * Run Sentinel AI Assessment on report
+   * @param {string} adminUserId
+   * @param {string} id
+   * @param {{ forceRefresh?: boolean }} param2
+   */
+  async assessReportWithSentinel(adminUserId, id, { forceRefresh = false } = {}) {
+    const report = await this._getReportDocOrFail(id);
+    const assessedReport = await sentinelService.assessReport(report, adminUserId, { forceRefresh });
+    return this.getReportDetail(assessedReport._id.toString());
+  }
+
+  /**
+   * 1-Click Approve Sentinel recommendations
+   * @param {string} adminUserId
+   * @param {string} id
+   */
+  async applySentinelRecommendation(adminUserId, id) {
+    const report = await this._getReportDocOrFail(id);
+
+    if (REPORT_CLOSED_STATUSES.includes(report.status)) {
+      throw new AppError('Cannot apply recommendation on a closed report', 409, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
+    }
+
+    let currentReport = report;
+    if (!currentReport.sentinelAssessment?.assessedAt) {
+      currentReport = await sentinelService.assessReport(currentReport, adminUserId);
+    }
+
+    const assessment = currentReport.sentinelAssessment;
+    if (!assessment) {
+      throw new AppError('No Sentinel assessment available for this report', 400, 'NO_SENTINEL_ASSESSMENT');
+    }
+
+    // 1. Auto-claim if still PENDING
+    if (currentReport.status === REPORT_STATUS.PENDING) {
+      currentReport.status = REPORT_STATUS.REVIEWING;
+      currentReport.assignedTo = adminUserId;
+      currentReport.history.push({
+        eventType: REPORT_HISTORY_EVENT_TYPES.CLAIM,
+        fromStatus: REPORT_STATUS.PENDING,
+        toStatus: REPORT_STATUS.REVIEWING,
+        by: adminUserId,
+        at: new Date(),
+        note: 'Tiếp nhận xử lý vụ việc qua Sentinel 1-Click Approve',
+      });
+    }
+
+    // 2. Update severity to Sentinel recommendation if different
+    if (assessment.severityRecommendation && currentReport.severity !== assessment.severityRecommendation) {
+      const oldSeverity = currentReport.severity;
+      currentReport.severity = assessment.severityRecommendation;
+      currentReport.history.push({
+        eventType: REPORT_HISTORY_EVENT_TYPES.SEVERITY_CHANGE,
+        fromStatus: currentReport.status,
+        toStatus: currentReport.status,
+        by: adminUserId,
+        at: new Date(),
+        note: `Đồng bộ mức độ theo đề xuất Sentinel: ${assessment.severityRecommendation}`,
+        metadata: { oldSeverity, newSeverity: assessment.severityRecommendation },
+      });
+    }
+
+    await safetyService.saveReport(currentReport);
+
+    // 3. Execute each recommended sanction according to the policy
+    const recommended = assessment.recommendedSanctions || [];
+    for (const sanction of recommended) {
+      if (sanction.type === REPORT_ACTION_TYPES.DELETE_MESSAGE && currentReport.targetType !== REPORT_TARGET_TYPES.MESSAGE) {
+        continue;
+      }
+      if (sanction.type === REPORT_ACTION_TYPES.CANCEL_PLAYDATE && currentReport.targetType !== REPORT_TARGET_TYPES.PLAYDATE) {
+        continue;
+      }
+      const alreadyApplied = (currentReport.actions || []).some((a) => a.type === sanction.type);
+      if (!alreadyApplied && REPORT_SANCTION_TYPES.includes(sanction.type)) {
+        try {
+          await this.applyReportAction(adminUserId, id, {
+            type: sanction.type,
+            durationDays: sanction.durationDays,
+            note: sanction.reason || assessment.draftNotes?.adminNote || `Thi hành theo đề xuất Sentinel (${assessment.policyClause})`,
+            isPolicyOverride: false,
+          });
+        } catch (err) {
+          if (
+            err.code !== ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED &&
+            err.code !== ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND
+          ) {
+            throw err;
+          }
+        }
+      }
+    }
+
+    // Reload updated report to check if an account sanction was applied for auto-merging duplicates
+    const updatedDoc = await this._getReportDocOrFail(id);
+    const hasAccountSanction = (updatedDoc.actions || []).some((a) =>
+      REPORT_ACCOUNT_SANCTION_TYPES.includes(a.type)
+    );
+    let applyToRelatedReportIds = [];
+    if (hasAccountSanction) {
+      const otherReports = await safetyService.getOtherReportsAgainst(updatedDoc.reportedUserId, updatedDoc._id);
+      applyToRelatedReportIds = otherReports
+        .filter((other) => REPORT_OPEN_STATUSES.includes(other.status))
+        .map((other) => other._id.toString());
+    }
+
+    // 4. Resolve the report automatically
+    return this.resolveReport(adminUserId, id, {
+      status: REPORT_STATUS.RESOLVED,
+      resolution: (updatedDoc.actions || []).length > 0
+        ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN
+        : REPORT_RESOLUTION_TYPES.NO_ACTION,
+      adminNotes: assessment.draftNotes?.adminNote || `Đã giải quyết theo đề xuất của Sentinel AI (${assessment.policyClause}).`,
+      applyToRelatedReportIds,
+    });
+  }
+
+  /**
+   * Batch scan open reports in the moderation queue using BuddyLink Sentinel AI
+   * @param {string} adminUserId
+   */
+  async batchScanReportsWithSentinel(adminUserId) {
+    const { items } = await safetyService.findReportPage({
+      page: 1,
+      limit: 50,
+    });
+
+    const openReports = items.filter((r) => REPORT_OPEN_STATUSES.includes(r.status));
+    const unassessed = openReports.filter((r) => !r.sentinelAssessment?.assessedAt);
+    const targets = (unassessed.length > 0 ? unassessed : openReports).slice(0, 8);
+
+    let scannedCount = 0;
+    let highConfidenceCount = 0;
+    let autoShieldCount = 0;
+
+    for (const item of targets) {
+      const doc = await safetyService.getReportDocById(item._id);
+      if (!doc) continue;
+      const assessed = await sentinelService.assessReport(doc, adminUserId, {
+        forceRefresh: unassessed.length === 0,
+      });
+      scannedCount += 1;
+      if ((assessed.sentinelAssessment?.confidenceScore || 0) >= 80) {
+        highConfidenceCount += 1;
+      }
+      if (assessed.sentinelAssessment?.autoShieldApplied) {
+        autoShieldCount += 1;
+      }
+    }
+
+    return {
+      scannedCount,
+      highConfidenceCount,
+      autoShieldCount,
+      totalOpenCount: openReports.length,
+    };
+  }
+
+  /**
+   * Batch execute & auto-resolve all open reports that meet the AI confidence threshold
+   * @param {string} adminUserId
+   * @param {{ minConfidence?: number }} [options]
+   */
+  async batchApplySentinelRecommendations(adminUserId, { minConfidence = 75 } = {}) {
+    const threshold = Math.max(50, Math.min(100, parseInt(minConfidence, 10) || 75));
+    const { items } = await safetyService.findReportPage({
+      page: 1,
+      limit: 50,
+    });
+
+    const openCandidates = items.filter(
+      (r) =>
+        REPORT_OPEN_STATUSES.includes(r.status) &&
+        r.sentinelAssessment?.assessedAt &&
+        (r.sentinelAssessment.confidenceScore || 0) >= threshold
+    );
+
+    let executedCount = 0;
+    const processedIds = [];
+
+    for (const candidate of openCandidates) {
+      const freshDoc = await safetyService.getReportDocById(candidate._id);
+      // Skip if already closed by an earlier duplicate merge in this loop
+      if (!freshDoc || REPORT_CLOSED_STATUSES.includes(freshDoc.status)) {
+        continue;
+      }
+      await this.applySentinelRecommendation(adminUserId, freshDoc._id.toString());
+      executedCount += 1;
+      processedIds.push(freshDoc._id.toString());
+    }
+
+    return {
+      executedCount,
+      minConfidence: threshold,
+      processedIds,
+    };
   }
 
   /**

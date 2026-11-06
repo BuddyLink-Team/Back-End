@@ -31,6 +31,8 @@ import {
   applyReportActionValidation,
   resolveReportValidation,
   reopenReportValidation,
+  assessSentinelValidation,
+  applySentinelValidation,
   adminAnalyticsValidation,
   listAdminNotificationsValidation,
   readAllAdminNotificationsValidation,
@@ -92,12 +94,16 @@ router.get('/revenue/summary', validate(revenueSummaryValidation), adminControll
 // Safety & Reports Moderation
 router.get('/reports', validate(listReportsValidation), adminController.getReports);
 router.get('/reports/stats', validate(reportStatsValidation), adminController.getReportStats);
+router.post('/reports/sentinel-batch-scan', adminController.batchScanReportsWithSentinel);
+router.post('/reports/sentinel-batch-apply', adminController.batchApplySentinelRecommendations);
 router.get('/reports/:id', validate(reportIdParamValidation), adminController.getReportDetail);
 router.patch('/reports/:id/review', validate(reviewReportValidation), adminController.reviewReport);
 router.patch('/reports/:id/severity', validate(updateReportSeverityValidation), adminController.updateReportSeverity);
 router.post('/reports/:id/action', validate(applyReportActionValidation), adminController.applyReportAction);
 router.patch('/reports/:id/resolve', validate(resolveReportValidation), adminController.resolveReport);
 router.patch('/reports/:id/reopen', validate(reopenReportValidation), adminController.reopenReport);
+router.post('/reports/:id/sentinel-assess', validate(assessSentinelValidation), adminController.assessReportWithSentinel);
+router.post('/reports/:id/sentinel-apply', validate(applySentinelValidation), adminController.applySentinelRecommendation);
 
 // System Analytics & Dashboard
 router.get('/analytics', validate(adminAnalyticsValidation), adminController.getAnalytics);

@@ -68,6 +68,9 @@ export const REPORT_HISTORY_EVENT_TYPES = Object.freeze({
   SEVERITY_CHANGE: 'severity_change',
   ACTION_APPLIED: 'action_applied',
   REOPEN: 'reopen',
+  SENTINEL_ASSESSED: 'sentinel_assessed',
+  AUTO_SHIELDED: 'auto_shielded',
+  POLICY_OVERRIDDEN: 'policy_overridden',
 });
 
 // What an admin can apply from POST /admin/reports/:id/action (closing a report has its own endpoint)

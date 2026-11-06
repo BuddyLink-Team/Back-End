@@ -492,6 +492,9 @@ const toReportActions = (actions, actorsById) =>
     performedBy: toReportActor(action.performedBy, actorsById),
     performedAt: action.performedAt,
     note: action.note || '',
+    isPolicyOverride: Boolean(action.isPolicyOverride),
+    overrideReason: action.overrideReason || '',
+    policyClause: action.policyClause || '',
   }));
 
 const toReportPerson = (parent, parentId, user) => ({
@@ -546,6 +549,16 @@ export class AdminReportListItemDTO {
       resolvedBy: toReportActor(report.resolvedBy, actorsById),
       resolvedAt: report.resolvedAt || null,
       actions: toReportActions(report.actions, actorsById),
+      sentinelAssessment: report.sentinelAssessment?.assessedAt
+        ? {
+            severityRecommendation: report.sentinelAssessment.severityRecommendation,
+            confidenceScore: report.sentinelAssessment.confidenceScore,
+            summary: report.sentinelAssessment.summary,
+            policyClause: report.sentinelAssessment.policyClause,
+            autoShieldApplied: Boolean(report.sentinelAssessment.autoShieldApplied),
+            recommendedSanctions: report.sentinelAssessment.recommendedSanctions || [],
+          }
+        : null,
       createdAt: report.createdAt,
       updatedAt: report.updatedAt,
     };
@@ -564,6 +577,7 @@ export class AdminReportDetailDTO {
     relatedOpenReports = [],
     pastReports = [],
     previousSanctions = [],
+    policyGuidance = null,
     isOverdue,
     totalReportsSubmitted = 0,
   }) {
@@ -607,6 +621,8 @@ export class AdminReportDetailDTO {
         metadata: entry.metadata || null,
       })),
       relatedOpenReports,
+      policyGuidance,
+      sentinelAssessment: report.sentinelAssessment?.assessedAt ? report.sentinelAssessment : null,
       resolution: report.resolution || null,
       adminNotes: report.adminNotes || '',
       resolvedBy: toReportActor(report.resolvedBy, actorsById),

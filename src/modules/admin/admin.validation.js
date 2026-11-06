@@ -434,6 +434,14 @@ export const updateReportSeverityValidation = [
     .optional()
     .isString()
     .trim(),
+  body('isPolicyOverride')
+    .optional()
+    .isBoolean()
+    .withMessage('isPolicyOverride must be a boolean'),
+  body('overrideReason')
+    .optional()
+    .isString()
+    .trim(),
 ];
 
 /**
@@ -460,6 +468,14 @@ export const applyReportActionValidation = [
       return true;
     }),
   body('note')
+    .optional()
+    .isString()
+    .trim(),
+  body('isPolicyOverride')
+    .optional()
+    .isBoolean()
+    .withMessage('isPolicyOverride must be a boolean'),
+  body('overrideReason')
     .optional()
     .isString()
     .trim(),
@@ -527,6 +543,24 @@ export const reopenReportValidation = [
       }
       return true;
     }),
+];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/:id/sentinel-assess
+ */
+export const assessSentinelValidation = [
+  ...reportIdParamValidation,
+  body('forceRefresh')
+    .optional()
+    .isBoolean()
+    .withMessage('forceRefresh must be a boolean'),
+];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/:id/sentinel-apply
+ */
+export const applySentinelValidation = [
+  ...reportIdParamValidation,
 ];
 
 /**

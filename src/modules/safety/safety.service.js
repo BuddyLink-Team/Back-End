@@ -249,6 +249,11 @@ class SafetyService {
       category: report.category,
     });
 
+    // Background Auto-Triage & Autonomous Shield via BuddyLink Sentinel
+    import('./sentinel.service.js')
+      .then(({ default: sentinelService }) => sentinelService.assessReport(report, null))
+      .catch(() => {});
+
     return SafetyDTO.toReportResponse(report);
   }
 
@@ -340,6 +345,10 @@ class SafetyService {
 
   async countReportsFiledBy(parentId) {
     return safetyRepository.countReportsFiledBy(parentId);
+  }
+
+  async countUserPriorSanctions(parentId) {
+    return safetyRepository.countUserPriorSanctions(parentId);
   }
 
   async saveReport(report) {

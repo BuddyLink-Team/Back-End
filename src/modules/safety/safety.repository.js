@@ -329,6 +329,19 @@ class SafetyRepository {
     return Report.countDocuments({ reporterId });
   }
 
+  /**
+   * Count distinct reports with actions taken (sanctions) applied against a user.
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @returns {Promise<number>}
+   */
+  async countUserPriorSanctions(reportedUserId) {
+    return Report.countDocuments({
+      reportedUserId,
+      'actions.0': { $exists: true },
+      status: REPORT_STATUS.RESOLVED,
+    });
+  }
+
   async saveReport(report) {
     return report.save();
   }

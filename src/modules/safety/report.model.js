@@ -33,8 +33,55 @@ const reportActionSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    isPolicyOverride: {
+      type: Boolean,
+      default: false,
+    },
+    overrideReason: {
+      type: String,
+      default: '',
+    },
+    policyClause: {
+      type: String,
+      default: '',
+    },
   },
   { _id: true }
+);
+
+const sentinelAssessmentSchema = new mongoose.Schema(
+  {
+    summary: { type: String, default: '' },
+    violationType: { type: String, default: '' },
+    severityRecommendation: {
+      type: String,
+      enum: Object.values(REPORT_SEVERITY),
+      default: null,
+    },
+    confidenceScore: { type: Number, min: 0, max: 100, default: null },
+    strikeCount: { type: Number, default: 1 },
+    policyClause: { type: String, default: '' },
+    evidenceAnalysis: {
+      isValid: { type: Boolean, default: null },
+      notes: { type: String, default: '' },
+    },
+    recommendedSanctions: [
+      {
+        type: { type: String, enum: Object.values(REPORT_ACTION_TYPES) },
+        durationDays: { type: Number, default: null },
+        reason: { type: String, default: '' },
+      },
+    ],
+    draftNotes: {
+      adminNote: { type: String, default: '' },
+      reportedUserNotice: { type: String, default: '' },
+      reporterFeedback: { type: String, default: '' },
+    },
+    assessedAt: { type: Date, default: null },
+    assessedByModel: { type: String, default: null },
+    autoShieldApplied: { type: Boolean, default: false },
+  },
+  { _id: false }
 );
 
 const reportHistorySchema = new mongoose.Schema(
@@ -153,6 +200,10 @@ const reportSchema = new mongoose.Schema(
     actions: {
       type: [reportActionSchema],
       default: [],
+    },
+    sentinelAssessment: {
+      type: sentinelAssessmentSchema,
+      default: null,
     },
     history: {
       type: [reportHistorySchema],
