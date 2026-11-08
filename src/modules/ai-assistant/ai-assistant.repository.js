@@ -10,6 +10,15 @@ class AIAssistantRepository {
     return session.toObject();
   }
 
+  /**
+   * A session opened by the system with a first assistant message (e.g. a prepared rebooking plan)
+   * @param {{ parentId: string, title: string, planDraft: Object|null, messages: Array<Object> }} input
+   */
+  async createWithMessages({ parentId, title, planDraft, messages }) {
+    const session = await AIChatSession.create({ parentId, title, planDraft, messages, lastMessageAt: new Date() });
+    return session.toObject();
+  }
+
   async findActiveByIdAndParent(id, parentId) {
     return AIChatSession.findOne({ _id: id, parentId, isActive: true }).lean();
   }

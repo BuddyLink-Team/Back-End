@@ -4,10 +4,14 @@ import { NOTIFICATION_TYPES } from './notification.constants.js';
 import parentService from '../parent/parent.service.js';
 import childService from '../child/child.service.js';
 import playdateService from '../playdate/playdate.service.js';
+import chatService from '../chat/chat.service.js';
+import aiAssistantService from '../ai-assistant/ai-assistant.service.js';
 import { onConnectionEvent, CONNECTION_EVENTS } from '../connection/connection.events.js';
 import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
+import { onRatingEvent, RATING_EVENTS } from '../rating-feedback/rating-feedback.events.js';
 
 const DEFAULT_PARENT_NAME = 'Một phụ huynh';
+const REBOOKING_MIN_RATING = 4;
 
 /**
  * Run a notification job without making the emitting request wait for it.
@@ -106,13 +110,54 @@ const notifyPlaydateInvited = async ({ playdateId, hostParentId, participantPare
 };
 
 // Playdate starts in 24h / 1h -> notify the host and every accepted participant
-const notifyPlaydateReminder = async ({ playdateId, kind, activity, time, date, placeName, recipientParentIds = [] }) => {
+const notifyPlaydateReminder = async ({
+  playdateId,
+  kind,
+  activity,
+  time,
+  date,
+  placeName,
+  recipientParentIds = [],
+  note = '',
+  chatConversationId = null,
+  missingChaperones = 0,
+}) => {
   const isSoon = kind === 'h1';
   const where = placeName ? ` tại ${placeName}` : '';
   const title = isSoon ? 'Playdate sắp bắt đầu' : 'Nhắc lịch Playdate';
+
+  let safetyNotePart = '';
+  if (kind === 'h24' && note) {
+    if (note.includes('Lưu ý an toàn:')) {
+      const match = note.match(/Lưu ý an toàn:\s*([\s\S]*?)(?=\n\nLưu ý thêm:|$)/);
+      if (match && match[1]) {
+        safetyNotePart += `\nLưu ý an toàn:\n${match[1].trim()}`;
+      }
+    }
+    if (note.includes('Lưu ý thêm:')) {
+      const matchExtra = note.match(/Lưu ý thêm:\s*([\s\S]*?)$/);
+      if (matchExtra && matchExtra[1]) {
+        safetyNotePart += `\nLưu ý thêm / Đồ mang theo:\n${matchExtra[1].trim()}`;
+      }
+    }
+  }
+
+  // Not enough adults coming with the children yet (BUD-49 B5)
+  const chaperonePart = missingChaperones > 0
+    ? `\nCòn thiếu ${missingChaperones} người lớn đi kèm: bấm "Tôi sẽ đi kèm cùng các bé" trong nhóm chat.`
+    : '';
   const body = isSoon
-    ? `"${activity}" sẽ bắt đầu lúc ${time}${where}. Chuẩn bị lên đường nhé!`
-    : `"${activity}" diễn ra lúc ${time} ngày ${date}${where}.`;
+    ? `"${activity}" sẽ bắt đầu lúc ${time}${where}. Chuẩn bị lên đường nhé!${chaperonePart}`
+    : `"${activity}" diễn ra lúc ${time} ngày ${date}${where}.${safetyNotePart}${chaperonePart}`;
+
+  if (chatConversationId && kind === 'h24') {
+    runInBackground('Playdate chat reminder message', async () => {
+      await chatService.postSystemMessage(
+        chatConversationId,
+        `⏰ Nhắc lịch hẹn: "${activity}" diễn ra lúc ${time} ngày ${date}${where}.${safetyNotePart}${chaperonePart}`
+      );
+    });
+  }
 
   const results = await Promise.allSettled(
     recipientParentIds.map(async (parentId) => {
@@ -132,6 +177,26 @@ const notifyPlaydateReminder = async ({ playdateId, kind, activity, time, date, 
     .forEach((result) =>
       logger.error(`[NotificationListeners] Playdate reminder failed for playdate ${playdateId}: ${result.reason?.message}`)
     );
+};
+
+// A playdate rated 4-5 stars -> a ready plan to meet the same friends again (BUD-49 D4), opened from the notification
+const notifyRebookingSuggestion = async ({ playdateId, raterParentId, rating }) => {
+  if (!rating || rating < REBOOKING_MIN_RATING) return;
+  const parent = await parentService.getParentById(raterParentId);
+  if (!parent?.userId) return;
+
+  const prepared = await aiAssistantService.prepareRebookingSession({ parentId: raterParentId, playdateId });
+  if (!prepared) return;
+
+  const streak = parent.streak?.currentWeeklyStreak || 0;
+  const streakText = streak > 0 ? ` Hẹn thêm một buổi trong tuần tới để giữ chuỗi ${streak} tuần nhé!` : '';
+  await notificationService.createNotification({
+    recipientId: parent.userId,
+    type: NOTIFICATION_TYPES.AI_SUGGESTION,
+    title: `Hẹn lại với ${prepared.childNames.join(', ')} nhé?`,
+    body: `Buổi hẹn chơi vừa qua thật tuyệt! BuddyLink AI đã chuẩn bị sẵn kế hoạch buổi tiếp theo, bạn chỉ cần chọn thời gian.${streakText}`,
+    data: { playdateId, sessionId: prepared.sessionId },
+  });
 };
 
 let isRegistered = false;
@@ -155,6 +220,9 @@ export const registerNotificationListeners = () => {
   );
   onPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, (payload) =>
     runInBackground('Playdate reminder notification', () => notifyPlaydateReminder(payload))
+  );
+  onRatingEvent(RATING_EVENTS.CREATED, (payload) =>
+    runInBackground('Playdate rating created rebooking notification', () => notifyRebookingSuggestion(payload))
   );
 };
 

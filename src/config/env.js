@@ -42,6 +42,16 @@ const env = {
     REQUEST_TIMEOUT_MS: parseInt(process.env.AI_REQUEST_TIMEOUT_MS, 10) || 30000,
   },
 
+  // Web search for the real games of a place (BUD-49 A4)
+  ATTRACTION_SEARCH: {
+    // 'tavily': Tavily search + a plain Gemini call (works on the Gemini free tier)
+    // 'google': Gemini Google Search grounding (needs a Gemini project with billing)
+    PROVIDER: process.env.ATTRACTION_SEARCH_PROVIDER || 'tavily',
+    TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
+    TAVILY_API_URL: process.env.TAVILY_API_URL || 'https://api.tavily.com',
+    TIMEOUT_MS: parseInt(process.env.ATTRACTION_SEARCH_TIMEOUT_MS, 10) || 10000,
+  },
+
   // 'mock' lets development run checkouts without PayOS keys (never honored in production)
   PAYMENT_MODE: process.env.PAYMENT_MODE || 'live',
 

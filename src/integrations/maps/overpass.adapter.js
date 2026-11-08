@@ -106,6 +106,11 @@ export const pickPlaceName = (tags = {}) =>
     .map((name) => (name || '').trim())
     .find((name) => name && LATIN_NAME_REGEX.test(name)) || '';
 
+// OSM tags that tell what the place offers (attractions search, BUD-49 A3); the others are not kept
+const KEPT_TAGS = Object.freeze(['leisure', 'amenity', 'sport', 'tourism', 'indoor', 'shop', 'attraction']);
+const pickPlaceTags = (tags) =>
+  Object.fromEntries(KEPT_TAGS.filter((key) => tags[key]).map((key) => [key, String(tags[key]).slice(0, 80)]));
+
 /**
  * Map an Overpass element to a places_cache document (null when unusable)
  * @param {Object} element
@@ -128,6 +133,7 @@ export const mapElementToPlace = (element) => {
     openingHours: tags.opening_hours || '',
     phone: tags.phone || tags['contact:phone'] || '',
     website: tags.website || tags['contact:website'] || '',
+    tags: pickPlaceTags(tags),
     lastFetchedAt: new Date(),
   };
 };

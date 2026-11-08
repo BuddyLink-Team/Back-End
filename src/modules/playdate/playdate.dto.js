@@ -1,5 +1,6 @@
 import { addMinutesToTime } from '../../shared/helpers/date.helper.js';
 import { PLAYDATE_RULES, PLAYDATE_STATUS, PARTICIPANT_STATUS, PLAYDATE_DISPLAY_STATUS } from './playdate.constants.js';
+import { computeChaperoneSummary, hostChildrenOf } from './playdate.rules.js';
 
 // Old playdates / requests were stored without a duration
 const durationOf = (value) => value ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
@@ -49,29 +50,41 @@ export class PlaydateResponseDTO {
     // Format host child details
     const hostChild = playdate.hostChildId && typeof playdate.hostChildId === 'object'
       ? {
-          id: playdate.hostChildId._id?.toString() || playdate.hostChildId.id,
-          displayName: playdate.hostChildId.displayName,
-          dateOfBirth: playdate.hostChildId.dateOfBirth,
-          gender: playdate.hostChildId.gender,
-          interests: playdate.hostChildId.interests || [],
-          favoriteActivities: playdate.hostChildId.favoriteActivities || [],
-          personality: playdate.hostChildId.personality || [],
-        }
+        id: playdate.hostChildId._id?.toString() || playdate.hostChildId.id,
+        displayName: playdate.hostChildId.displayName,
+        dateOfBirth: playdate.hostChildId.dateOfBirth,
+        gender: playdate.hostChildId.gender,
+        interests: playdate.hostChildId.interests || [],
+        favoriteActivities: playdate.hostChildId.favoriteActivities || [],
+        personality: playdate.hostChildId.personality || [],
+      }
       : { id: playdate.hostChildId?.toString() };
+    // Every child of the host (main child first); older playdates only have the main one
+    const hostChildren = hostChildrenOf(playdate).map((child) =>
+      child && typeof child === 'object' && child.displayName
+        ? {
+          id: child._id?.toString() || child.id,
+          displayName: child.displayName,
+          dateOfBirth: child.dateOfBirth,
+          gender: child.gender,
+          interests: child.interests || [],
+        }
+        : { id: (child?._id || child)?.toString() }
+    );
 
     // Format host parent details
     const hostParent = playdate.hostParentId && typeof playdate.hostParentId === 'object'
       ? {
-          id: playdate.hostParentId._id?.toString() || playdate.hostParentId.id,
-          fullName: playdate.hostParentId.fullName,
-          avatarUrl: playdate.hostParentId.avatarUrl || '',
-          isVerified: Boolean(playdate.hostParentId.verification?.isVerifiedParent),
-          // Only the area: never expose the host family's exact address or coordinates
-          location: {
-            area: playdate.hostParentId.location?.area || '',
-            city: playdate.hostParentId.location?.city || '',
-          },
-        }
+        id: playdate.hostParentId._id?.toString() || playdate.hostParentId.id,
+        fullName: playdate.hostParentId.fullName,
+        avatarUrl: playdate.hostParentId.avatarUrl || '',
+        isVerified: Boolean(playdate.hostParentId.verification?.isVerifiedParent),
+        // Only the area: never expose the host family's exact address or coordinates
+        location: {
+          area: playdate.hostParentId.location?.area || '',
+          city: playdate.hostParentId.location?.city || '',
+        },
+      }
       : { id: playdate.hostParentId?.toString() };
 
     // Who the viewer sees: the host sees every invitee and their answer. Anyone else sees the families who
@@ -92,25 +105,33 @@ export class PlaydateResponseDTO {
       parentId: (p.parentId?._id || p.parentId)?.toString(),
       parent: p.parentId && typeof p.parentId === 'object'
         ? {
-            id: (p.parentId._id || p.parentId.id)?.toString(),
-            fullName: p.parentId.fullName,
-            avatarUrl: p.parentId.avatarUrl || '',
-            isVerified: Boolean(p.parentId.verification?.isVerifiedParent),
-          }
+          id: (p.parentId._id || p.parentId.id)?.toString(),
+          fullName: p.parentId.fullName,
+          avatarUrl: p.parentId.avatarUrl || '',
+          isVerified: Boolean(p.parentId.verification?.isVerifiedParent),
+        }
         : null,
       childId: (p.childId?._id || p.childId)?.toString(),
       child: p.childId && typeof p.childId === 'object'
         ? {
-            id: (p.childId._id || p.childId.id)?.toString(),
-            displayName: p.childId.displayName,
-            dateOfBirth: p.childId.dateOfBirth,
-            gender: p.childId.gender,
-            interests: p.childId.interests || [],
-          }
+          id: (p.childId._id || p.childId.id)?.toString(),
+          displayName: p.childId.displayName,
+          dateOfBirth: p.childId.dateOfBirth,
+          gender: p.childId.gender,
+          interests: p.childId.interests || [],
+        }
         : null,
       status: p.status,
       invitedAt: p.invitedAt,
       respondedAt: p.respondedAt,
+    }));
+
+    // Chaperones and chaperone requirement calculation (BUD-49 Part B5)
+    const chaperoneSummary = computeChaperoneSummary(playdate, parentIdStr);
+
+    const chaperones = (playdate.chaperones || []).map((c) => ({
+      parentId: (c.parentId?._id || c.parentId)?.toString(),
+      confirmedAt: c.confirmedAt,
     }));
 
     return {
@@ -119,7 +140,11 @@ export class PlaydateResponseDTO {
       hostParent,
       hostChildId: playdate.hostChildId?._id?.toString() || playdate.hostChildId?.toString(),
       hostChild,
+      hostChildIds: hostChildren.map((child) => child.id),
+      hostChildren,
       participants,
+      chaperones,
+      chaperoneSummary,
       // Families still to answer that the viewer does not see (always 0 for the host)
       otherPendingCount,
       scheduledDate: playdate.scheduledDate,
@@ -163,23 +188,23 @@ export class RescheduleResponseDTO {
 
     const requestedBy = request.requestedBy && typeof request.requestedBy === 'object'
       ? {
-          id: request.requestedBy._id?.toString() || request.requestedBy.id,
-          fullName: request.requestedBy.fullName,
-          avatarUrl: request.requestedBy.avatarUrl || '',
-          isVerified: Boolean(request.requestedBy.verification?.isVerifiedParent),
-        }
+        id: request.requestedBy._id?.toString() || request.requestedBy.id,
+        fullName: request.requestedBy.fullName,
+        avatarUrl: request.requestedBy.avatarUrl || '',
+        isVerified: Boolean(request.requestedBy.verification?.isVerifiedParent),
+      }
       : { id: request.requestedBy?.toString() };
 
     const responses = (request.responses || []).map((r) => {
       const pIdStr = (r.parentId?._id || r.parentId?.id || r.parentId)?.toString();
       const parentObj = r.parentId && typeof r.parentId === 'object'
         ? {
-            _id: (r.parentId._id || r.parentId.id)?.toString(),
-            id: (r.parentId._id || r.parentId.id)?.toString(),
-            fullName: r.parentId.fullName,
-            avatarUrl: r.parentId.avatarUrl || '',
-            isVerified: Boolean(r.parentId.verification?.isVerifiedParent),
-          }
+          _id: (r.parentId._id || r.parentId.id)?.toString(),
+          id: (r.parentId._id || r.parentId.id)?.toString(),
+          fullName: r.parentId.fullName,
+          avatarUrl: r.parentId.avatarUrl || '',
+          isVerified: Boolean(r.parentId.verification?.isVerifiedParent),
+        }
         : { _id: pIdStr, id: pIdStr };
 
       return {

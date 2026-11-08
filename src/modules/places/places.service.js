@@ -89,6 +89,7 @@ const toPlaceResponse = (place, center) => {
     phone: place.phone || '',
     website: place.website || '',
     osmUrl: osmUrlOf(place.osmId),
+    tags: place.tags || {},
   };
 };
 
@@ -351,7 +352,7 @@ class PlacesService {
    * @returns {Promise<Object>}
    */
   async getPlaceById(userId, placeId) {
-    let place = await placesRepository.findById(placeId);
+    let place = await placesRepository.findByIdOrOsmId(placeId);
     if (!place) throw new AppError('Place not found', 404, 'PLACE_NOT_FOUND');
 
     const update = {};
@@ -373,10 +374,23 @@ class PlacesService {
       if (resolved) update.address = resolved;
     }
 
-    if (Object.keys(update).length > 0) place = await placesRepository.updateById(placeId, update);
+    if (Object.keys(update).length > 0) place = await placesRepository.updateById(place._id, update);
 
     const center = await this._resolveCenter(userId);
     return toPlaceResponse(place, center);
+  }
+
+  async saveAttractions(placeId, attractions) {
+    return placesRepository.updateAttractions(placeId, attractions);
+  }
+
+  /**
+   * A cached place by its cache id or its OpenStreetMap id
+   * @param {string} placeId
+   * @returns {Promise<Object|null>}
+   */
+  async getPlaceDocById(placeId) {
+    return placesRepository.findByIdOrOsmId(placeId);
   }
 }
 

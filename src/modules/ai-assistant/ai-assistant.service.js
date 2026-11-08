@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 import aiAssistantRepository from './ai-assistant.repository.js';
 import parentService from '../parent/parent.service.js';
+import playdateService from '../playdate/playdate.service.js';
+import { PARTICIPANT_STATUS } from '../playdate/playdate.constants.js';
+import { hostChildIdsOf } from '../playdate/playdate.rules.js';
 import userService from '../user/user.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
 import geminiAdapter from '../../integrations/ai/gemini.adapter.js';
@@ -14,18 +17,37 @@ import {
   AI_DEFAULT_SESSION_TITLE,
   AI_FALLBACK_REPLY,
   AI_CHOICE_FALLBACK_REPLY,
+  AI_DRAFT_WARNING_CODES,
 } from './ai-assistant.constants.js';
 import { AIMessageDTO, AISessionDTO } from './ai-assistant.dto.js';
 import { buildSystemPrompt } from './ai-assistant.prompt.js';
 import { buildTitle, toGeminiContents, selectCards, cleanReply } from './conversation.rules.js';
-import { toDraftResponse } from './plan-draft.rules.js';
+import { toDraftResponse, draftHostChildren } from './plan-draft.rules.js';
 import { functionDeclarations, executeTool } from './tools/index.js';
 import { createToolContext } from './tools/tool-context.js';
 import { applyChoice } from './tools/choice-handler.js';
+import { startPlan, applyPlanFields, setLocation } from './tools/propose-playdate.tool.js';
+import { advancePlan } from './tools/plan-steps.js';
 import { stripSensitive } from './tools/tool-sanitizer.js';
 
 const QUOTA_ACTION = 'aiAssistant';
 const EMPTY_USAGE = Object.freeze({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+
+const TOOL_PROGRESS_MESSAGES = Object.freeze({
+  getMyChildren: 'Đang kiểm tra thông tin hồ sơ của các bé...',
+  findMatches: 'Đang tìm kiếm các bạn chơi phù hợp...',
+  findNearbyPlaces: 'Đang tìm các địa điểm vui chơi gần khu vực...',
+  suggestTimeSlots: 'Đang kiểm tra lịch trống và giờ mở cửa...',
+  findAvailablePlaymates: 'Đang kiểm tra các bạn chơi rảnh vào khung giờ này...',
+  suggestActivities: 'Đang tìm trò chơi phù hợp với sở thích của các bé...',
+  suggestPlaces: 'Đang gợi ý các địa điểm thuận tiện cho các gia đình...',
+  proposePlaydate: 'Đang cập nhật lịch trình và kiểm tra các lưu ý an toàn...',
+  sendConnectionRequests: 'Đang gửi lời mời kết bạn...',
+  listMyPlaydates: 'Đang tra cứu danh sách lịch hẹn của bé...',
+  reschedulePlaydate: 'Đang gửi yêu cầu dời lịch hẹn...',
+  cancelPlaydate: 'Đang xử lý hủy lịch hẹn...',
+  respondInvitation: 'Đang cập nhật trạng thái tham gia...',
+});
 
 const addUsage = (total, usage = EMPTY_USAGE) => ({
   promptTokens: total.promptTokens + usage.promptTokens,
@@ -118,9 +140,9 @@ class AIAssistantService {
    *
    * @param {string} userId
    * @param {string} sessionId
-   * @param {{ content: string, choice?: { messageId: string, stepId: string, optionIds?: string[], custom?: Object } }} input
+   * @param {{ content: string, choice?: { messageId: string, stepId: string, optionIds?: string[], custom?: Object }, clientMessageId?: string, onProgress?: Function }} input
    */
-  async sendMessage(userId, sessionId, { content, choice }) {
+  async sendMessage(userId, sessionId, { content, choice, clientMessageId, onProgress }) {
     const parent = await this._getParent(userId);
     const session = await aiAssistantRepository.acquireLock(sessionId, parent._id);
     if (!session) {
@@ -129,16 +151,56 @@ class AIAssistantService {
       throw new AppError('A reply is already being prepared for this conversation', 409, 'AI_SESSION_BUSY');
     }
 
+    // A retry of a message whose turn was already stored (e.g. the connection dropped before the reply
+    // arrived): the stored turn is returned, the tools and the tapped option never run twice
+    const replayed = clientMessageId ? await this._replayTurn(parent, session, clientMessageId) : null;
+    if (replayed) {
+      await aiAssistantRepository.releaseLock(session._id);
+      return replayed;
+    }
+
     try {
-      return await this._runTurn(userId, parent, session, { content: content.trim(), choice });
+      return await this._runTurn(userId, parent, session, { content: content.trim(), choice, clientMessageId, onProgress });
     } catch (error) {
       await aiAssistantRepository.releaseLock(session._id);
       throw error;
     }
   }
 
+  /**
+   * Response of a stored turn, found by the client id of its user message
+   * @private
+   * @returns {Promise<Object|null>}
+   */
+  async _replayTurn(parent, session, clientMessageId) {
+    const messages = session.messages || [];
+    const index = messages.findIndex(
+      (message) => message.role === AI_MESSAGE_ROLES.USER && message.clientMessageId === clientMessageId
+    );
+    if (index === -1) return null;
+    const userMessage = messages[index];
+    const reply = messages
+      .slice(index + 1)
+      .find((message) => message.role === AI_MESSAGE_ROLES.ASSISTANT && !message.toolCalls?.length);
+    if (!reply) return null;
+
+    const { usage, messageCap } = await this._getLimits(parent._id);
+    const tapped = userMessage.choice
+      ? messages.find((message) => message._id?.toString() === userMessage.choice.messageId?.toString())
+      : null;
+    return {
+      session: AISessionDTO.toSummary(session, messageCap),
+      userMessage: AIMessageDTO.toResponse(userMessage),
+      reply: AIMessageDTO.toResponse(reply),
+      planDraft: toDraftResponse(session.planDraft),
+      answeredCard: tapped ? { messageId: tapped._id.toString(), cards: tapped.cards || [] } : null,
+      quota: { limit: usage.limit, used: usage.used, remaining: usage.remaining },
+      replayed: true,
+    };
+  }
+
   /** @private */
-  async _runTurn(userId, parent, session, { content, choice }) {
+  async _runTurn(userId, parent, session, { content, choice, clientMessageId, onProgress }) {
     const startedAt = Date.now();
     const { usage, messageCap } = await this._getLimits(parent._id);
     if ((session.messageCount || 0) >= messageCap) {
@@ -155,7 +217,16 @@ class AIAssistantService {
     }
 
     try {
-      return await this._completeTurn(userId, parent, session, { content, choice, startedAt, messageCap, quota, isFirstBilled });
+      return await this._completeTurn(userId, parent, session, {
+        content,
+        choice,
+        clientMessageId,
+        startedAt,
+        messageCap,
+        quota,
+        isFirstBilled,
+        onProgress,
+      });
     } catch (error) {
       if (isFirstBilled) {
         await subscriptionService
@@ -167,7 +238,7 @@ class AIAssistantService {
   }
 
   /** @private */
-  async _completeTurn(userId, parent, session, { content, choice, startedAt, messageCap, quota, isFirstBilled }) {
+  async _completeTurn(userId, parent, session, { content, choice, clientMessageId, startedAt, messageCap, quota, isFirstBilled, onProgress }) {
     const deadline = startedAt + AI_LIMITS.TURN_TIMEOUT_MS;
     const draft = session.planDraft ? structuredClone(session.planDraft) : null;
     const ctx = createToolContext({ userId, parent, draft, lastMatchCard: lastMatchCardOf(session.messages) });
@@ -182,7 +253,7 @@ class AIAssistantService {
 
     let generated;
     try {
-      generated = await this._generateReply(ctx, session, content, systemNote, { allowTools, deadline });
+      generated = await this._generateReply(ctx, session, content, systemNote, { allowTools, deadline, onProgress });
     } catch (error) {
       // The tapped option already took effect (playdate created, requests sent, plan updated): the turn is
       // stored with a plain reply, so a retry cannot repeat it
@@ -201,6 +272,7 @@ class AIAssistantService {
       ...(choice
         ? { choice: { messageId: choice.messageId, stepId: choice.stepId, optionIds: (choice.optionIds || []).map(String) } }
         : {}),
+      ...(clientMessageId ? { clientMessageId } : {}),
       timestamp: now,
     };
     const reply = {
@@ -244,7 +316,7 @@ class AIAssistantService {
    * and the tool rounds stop early when only the time for a last answer is left.
    * @private
    */
-  async _generateReply(ctx, session, content, systemNote, { allowTools: toolsAllowed = true, deadline = Infinity } = {}) {
+  async _generateReply(ctx, session, content, systemNote, { allowTools: toolsAllowed = true, deadline = Infinity, onProgress } = {}) {
     // A failed lookup leaves the children unknown: the model can still call getMyChildren
     const children = await ctx.getChildren().catch(() => null);
     const systemInstruction = buildSystemPrompt({
@@ -303,6 +375,10 @@ class AIAssistantService {
       // One after another: the planning tools share the draft
       const responseParts = [];
       for (const call of calls) {
+        if (typeof onProgress === 'function') {
+          const progressMsg = TOOL_PROGRESS_MESSAGES[call.name] || 'Đang xử lý thông tin...';
+          onProgress({ tool: call.name, message: progressMsg });
+        }
         const result = await executeTool(call.name, call.args, ctx);
         responseParts.push({ functionResponse: { id: call.id, name: call.name, response: result } });
         toolMessages.push({
@@ -318,6 +394,85 @@ class AIAssistantService {
     }
 
     return { text: cleanReply(text) || AI_FALLBACK_REPLY, toolMessages, tokenDelta, rounds, model };
+  }
+
+  /**
+   * After a parent rated a playdate well (BUD-49 D4): a new conversation whose plan is already filled with
+   * the same children, activity and place, opened on the time step. Nothing is created until the parent
+   * confirms the summary, and the AI quota is only used by their first message.
+   * @param {{ parentId: string, playdateId: string }} input
+   * @returns {Promise<{ sessionId: string, childNames: string[] }|null>} null when there is nothing to plan
+   *   (no friend left to invite, own child locked, playdate quota exhausted)
+   */
+  async prepareRebookingSession({ parentId, playdateId }) {
+    const [parent, playdate] = await Promise.all([
+      parentService.getParentById(parentId),
+      playdateService.getPlaydateWithDetails(playdateId),
+    ]);
+    if (!parent?.userId || !playdate) return null;
+
+    const raterId = parent._id.toString();
+    const idOf = (ref) => (ref?._id || ref)?.toString();
+    const isHost = idOf(playdate.hostParentId) === raterId;
+    const accepted = (playdate.participants || []).filter((participant) => participant.status === PARTICIPANT_STATUS.ACCEPTED);
+    // The rater's children who came (all the host's children for the host) and every other child
+    const ownChildIds = isHost
+      ? hostChildIdsOf(playdate)
+      : accepted.filter((participant) => idOf(participant.parentId) === raterId).map((participant) => idOf(participant.childId));
+    const others = [
+      ...(isHost ? [] : hostChildIdsOf(playdate)),
+      ...accepted.filter((participant) => idOf(participant.parentId) !== raterId).map((participant) => idOf(participant.childId)),
+    ].filter(Boolean);
+    if (!ownChildIds.length || !others.length) return null;
+
+    const ctx = createToolContext({ userId: parent.userId.toString(), parent, draft: null });
+    try {
+      if (!(await startPlan(ctx))) return null;
+      await applyPlanFields(ctx, {
+        hostChildIds: ownChildIds,
+        participantChildIds: others,
+        activity: playdate.activity,
+        durationMinutes: playdate.durationMinutes,
+      });
+      if (!ctx.draft.participants.length) return null;
+      if (playdate.location?.name) {
+        setLocation(ctx.draft, {
+          name: playdate.location.name,
+          address: playdate.location.address,
+          placeId: playdate.location.placeId ? idOf(playdate.location.placeId) : null,
+          coordinates: playdate.location.coordinates?.coordinates,
+        });
+      }
+      // Children no longer friends are simply left out of a rebooking
+      ctx.draft.warnings = (ctx.draft.warnings || []).filter((warning) => warning.code !== AI_DRAFT_WARNING_CODES.INVITEE_NOT_FRIEND);
+      await advancePlan(ctx);
+    } catch (error) {
+      logger.warn(`[AIAssistant] rebooking plan skipped for parent=${raterId} playdate=${playdateId}: ${error.message}`);
+      return null;
+    }
+
+    const childNames = ctx.draft.participants.map((participant) => participant.childName);
+    const names = childNames.join(', ');
+    const where = ctx.draft.location?.name ? ` tại ${ctx.draft.location.name}` : '';
+    const session = await aiAssistantRepository.createWithMessages({
+      parentId: parent._id,
+      title: `Hẹn lại với ${names}`,
+      planDraft: ctx.draft,
+      messages: [
+        {
+          _id: new mongoose.Types.ObjectId(),
+          role: AI_MESSAGE_ROLES.ASSISTANT,
+          content:
+            `Buổi chơi vừa rồi của bé ${draftHostChildren(ctx.draft).map((child) => child.displayName).join(', ')} và ${names} thật vui! ` +
+            `Mình đã chuẩn bị sẵn kế hoạch hẹn lại ("${ctx.draft.activity?.title || playdate.activity}"${where}). ` +
+            'Bạn chọn thời gian bên dưới nhé, các bước sau vẫn chỉnh được.',
+          cards: stripSensitive(selectCards(ctx.turn.cards)),
+          toolsUsed: [],
+          timestamp: new Date(),
+        },
+      ],
+    });
+    return { sessionId: session._id.toString(), childNames };
   }
 
   /**

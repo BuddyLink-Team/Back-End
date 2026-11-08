@@ -22,6 +22,13 @@ export const sendMessageValidation = [
     .withMessage('Message content is required')
     .isLength({ max: AI_LIMITS.MAX_MESSAGE_LENGTH })
     .withMessage(`Message content must be at most ${AI_LIMITS.MAX_MESSAGE_LENGTH} characters`),
+  // Same id when the client retries a message, so a turn that already ran is not run again
+  body('clientMessageId')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: AI_LIMITS.CLIENT_MESSAGE_ID_MAX_LENGTH })
+    .withMessage(`clientMessageId must be a string of at most ${AI_LIMITS.CLIENT_MESSAGE_ID_MAX_LENGTH} characters`),
   body('choice').optional().isObject().withMessage('choice must be an object'),
   body('choice.messageId')
     .if(body('choice').exists())

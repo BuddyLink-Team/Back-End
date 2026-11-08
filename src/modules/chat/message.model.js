@@ -12,7 +12,10 @@ const messageSchema = new mongoose.Schema(
     senderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Parent',
-      required: true,
+      required: function () {
+        return this.type !== MESSAGE_TYPES.SYSTEM;
+      },
+      default: null,
     },
     type: {
       type: String,
@@ -27,6 +30,20 @@ const messageSchema = new mongoose.Schema(
     mediaUrl: {
       type: String,
       default: null,
+    },
+    poll: {
+      question: { type: String, default: null },
+      options: [
+        {
+          id: { type: String, required: true },
+          date: { type: String, default: null },
+          time: { type: String, default: null },
+          label: { type: String, required: true },
+          voterParentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Parent' }],
+        },
+      ],
+      deadline: { type: Date, default: null },
+      isClosed: { type: Boolean, default: false },
     },
     readBy: [
       {

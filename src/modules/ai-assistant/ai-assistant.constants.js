@@ -14,6 +14,10 @@ export const AI_TOOL_NAMES = Object.freeze({
   SUGGEST_PLACES: 'suggestPlaces',
   PROPOSE_PLAYDATE: 'proposePlaydate',
   SEND_CONNECTION_REQUESTS: 'sendConnectionRequests',
+  LIST_MY_PLAYDATES: 'listMyPlaydates',
+  RESCHEDULE_PLAYDATE: 'reschedulePlaydate',
+  CANCEL_PLAYDATE: 'cancelPlaydate',
+  RESPOND_INVITATION: 'respondInvitation',
 });
 
 // Tool UI Cards returned with an assistant reply
@@ -23,6 +27,12 @@ export const AI_CARD_TYPES = Object.freeze({
   MATCH_SUGGESTIONS: 'match_suggestions',
   PLAYDATE_DRAFT: 'playdate_draft', // confirm step of a plan
   QUOTA_NOTICE: 'quota_notice', // another quota (e.g. playdate creation) blocks what the parent asked
+});
+
+export const AI_CONFIRM_STEPS = Object.freeze({
+  CANCEL: 'cancel_confirm',
+  RESCHEDULE: 'reschedule_confirm',
+  RESPOND: 'respond_confirm',
 });
 
 export const AI_CHOICE_STATUS = Object.freeze({
@@ -44,8 +54,8 @@ export const AI_STEPS = Object.freeze({
 });
 export const AI_PLAN_STEP_ORDER = Object.freeze([
   AI_STEPS.CHILD,
-  AI_STEPS.TIME,
   AI_STEPS.PLAYMATES,
+  AI_STEPS.TIME,
   AI_STEPS.ACTIVITY,
   AI_STEPS.PLACE,
   AI_STEPS.AGENDA,
@@ -69,13 +79,45 @@ export const AI_OPTION_IDS = Object.freeze({
   CREATE_PLAYDATE: 'confirm:create',
 });
 
+export const AI_WARNING_SEVERITY = Object.freeze({
+  BLOCK: 'block',
+  WARN: 'warn',
+  INFO: 'info',
+});
+
 export const AI_DRAFT_WARNING_CODES = Object.freeze({
-  AGE_GAP: 'AGE_GAP',
-  SCHEDULE_CONFLICT: 'SCHEDULE_CONFLICT',
+  // Time
   PAST_DATE: 'PAST_DATE',
-  INVITEE_NOT_FRIEND: 'INVITEE_NOT_FRIEND',
   UNUSUAL_HOUR: 'UNUSUAL_HOUR',
-  FAR_PLACE: 'FAR_PLACE', // the place is far from a family's home
+  NAP_TIME: 'NAP_TIME',
+  SCHOOL_HOURS: 'SCHOOL_HOURS',
+  TOO_LONG_FOR_AGE: 'TOO_LONG_FOR_AGE',
+  MEAL_TIME: 'MEAL_TIME',
+  SHORT_NOTICE: 'SHORT_NOTICE',
+  HOLIDAY: 'HOLIDAY',
+  // Place
+  PLACE_CLOSED: 'PLACE_CLOSED',
+  PLACE_CLOSES_EARLY: 'PLACE_CLOSES_EARLY',
+  OUTDOOR_AFTER_DARK: 'OUTDOOR_AFTER_DARK',
+  PLACE_AGE: 'PLACE_AGE',
+  ACTIVITY_PLACE_MISMATCH: 'ACTIVITY_PLACE_MISMATCH',
+  FAR_PLACE: 'FAR_PLACE',
+  HOURS_UNKNOWN: 'HOURS_UNKNOWN',
+  // Agenda & Safety
+  AGENDA_OVER_TIME: 'AGENDA_OVER_TIME',
+  ITEM_AGE: 'ITEM_AGE',
+  ITEM_NOT_AT_PLACE: 'ITEM_NOT_AT_PLACE',
+  SAFETY_HIGH_RISK: 'SAFETY_HIGH_RISK',
+  AGENDA_TOO_THIN: 'AGENDA_TOO_THIN',
+  // Participants
+  SCHEDULE_CONFLICT: 'SCHEDULE_CONFLICT',
+  INVITEE_NOT_FRIEND: 'INVITEE_NOT_FRIEND',
+  AGE_GAP: 'AGE_GAP',
+  GROUP_TOO_LARGE: 'GROUP_TOO_LARGE',
+  NOT_PREFERRED_TIME: 'NOT_PREFERRED_TIME',
+  NO_SHARED_INTEREST: 'NO_SHARED_INTEREST',
+  // Weather
+  BAD_WEATHER: 'BAD_WEATHER',
 });
 
 // A playdate starting earlier or ending later than this gets an UNUSUAL_HOUR warning
@@ -98,6 +140,7 @@ export const AI_APP_SECTIONS = Object.freeze({
 });
 
 export const AI_LIMITS = Object.freeze({
+  CLIENT_MESSAGE_ID_MAX_LENGTH: 64,
   MAX_TOOL_ROUNDS: 3, // per user message
   MAX_MESSAGE_LENGTH: 2000,
   HISTORY_WINDOW: 20, // stored text messages sent back to the model
@@ -111,6 +154,10 @@ export const AI_LIMITS = Object.freeze({
   MAX_AGENDA_ITEMS: 5,
   FAR_PLACE_KM: 15, // FAR_PLACE above this distance from a family
   AGENDA_ITEM_MAX_LENGTH: 80,
+  // An item of the real attractions of the place also carries its source link
+  SOURCED_AGENDA_ITEM_MAX_LENGTH: 400,
+  MAX_EXTRA_SAFETY_NOTES: 3,
+  SAFETY_NOTE_MAX_LENGTH: 200,
   NOTE_MAX_LENGTH: 500,
   TOOL_RESULT_MAX_LENGTH: 6000, // stored tool message content
   SESSIONS_PAGE_SIZE: 20,
@@ -138,6 +185,7 @@ export const AI_MESSAGE_RATE_LIMIT = Object.freeze({
 
 export const AI_DEFAULT_SESSION_TITLE = 'Cuộc trò chuyện mới';
 export const AI_AGENDA_NOTE_HEADER = 'Hoạt động chính (gợi ý bởi BuddyLink AI):';
+export const AI_SAFETY_NOTE_HEADER = 'Lưu ý an toàn:';
 // Header of the parent's extra request in the note, under the agenda
 export const AI_EXTRA_NOTE_HEADER = 'Lưu ý thêm:';
 // Reply text when the model produced cards but no sentence

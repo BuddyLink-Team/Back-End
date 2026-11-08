@@ -2,7 +2,7 @@ import chatService from './chat.service.js';
 import ChatDTO from './chat.dto.js';
 import { successResponse } from '../../shared/response/index.js';
 import { getIO } from '../../config/socket.js';
-import { broadcastNewMessage, broadcastReadStatus } from '../../sockets/chat.broadcast.js';
+import { broadcastNewMessage, broadcastReadStatus, broadcastPollVoted } from '../../sockets/chat.broadcast.js';
 
 class ChatController {
   async getConversations(req, res, next) {
@@ -108,6 +108,46 @@ class ChatController {
     try {
       const result = await chatService.uploadAttachment(req.file);
       return successResponse(res, result, 'Attachment uploaded successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async createPoll(req, res, next) {
+    try {
+      const parent = await chatService.getCallerParent(req.userId);
+      const { question, options, deadline } = req.body;
+      const result = await chatService.createPollMessage(parent, req.params.conversationId, {
+        question,
+        options,
+        deadline,
+      });
+
+      const io = getIO();
+      if (io) {
+        broadcastNewMessage(io, result);
+      }
+
+      const messageDto = ChatDTO.toMessageResponse(result.message, parent._id);
+      return successResponse(res, messageDto, 'Poll created successfully', 201);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async votePoll(req, res, next) {
+    try {
+      const parent = await chatService.getCallerParent(req.userId);
+      const { optionId } = req.body;
+      const result = await chatService.votePoll(parent, req.params.messageId, optionId);
+
+      const io = getIO();
+      if (io) {
+        broadcastPollVoted(io, result.conversation._id, result.message);
+      }
+
+      const messageDto = ChatDTO.toMessageResponse(result.message, parent._id);
+      return successResponse(res, messageDto, 'Vote recorded successfully', 200);
     } catch (error) {
       return next(error);
     }

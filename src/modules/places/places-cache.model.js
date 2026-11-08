@@ -45,6 +45,19 @@ const placesCacheSchema = new mongoose.Schema(
     openingHours: { type: String, default: '' },
     phone: { type: String, default: '' },
     website: { type: String, default: '' },
+    // Main OpenStreetMap tags (leisure, amenity, sport, tourism, indoor, shop, attraction)
+    tags: { type: mongoose.Schema.Types.Mixed, default: {} },
+    attractions: [
+      {
+        title: { type: String, required: true },
+        description: { type: String, default: '' },
+        minAge: { type: Number, default: null },
+        maxAge: { type: Number, default: null },
+        durationMinutes: { type: Number, default: null },
+        sourceUrl: { type: String, default: null },
+      },
+    ],
+    attractionsFetchedAt: { type: Date, default: null },
     // Refreshed from OpenStreetMap when older than PLACES_CACHE_TTL_DAYS
     lastFetchedAt: {
       type: Date,

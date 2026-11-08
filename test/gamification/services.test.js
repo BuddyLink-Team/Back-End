@@ -12,6 +12,14 @@ async function loadService(relative, mocks) {
     if (cache.has(path)) return cache.get(path);
     const filename = path.split(/[/\\]/).at(-1);
     let module;
+    if (path.startsWith('node:')) {
+      const nodeModule = await import(path);
+      module = new vm.SyntheticModule(Object.keys(nodeModule), function() {
+        for (const [key, value] of Object.entries(nodeModule)) this.setExport(key, value);
+      }, {context,identifier:path});
+      cache.set(path,module);
+      return module;
+    }
     if (mocks[filename]) {
       const exports = mocks[filename];
       module = new vm.SyntheticModule(Object.keys(exports), function() {
@@ -24,7 +32,7 @@ async function loadService(relative, mocks) {
     return module;
   }
   const target = await get(resolve(dirname(fileURLToPath(import.meta.url)), relative));
-  await target.link((specifier,parent) => get(resolve(dirname(parent.identifier),specifier)));
+  await target.link((specifier,parent) => specifier.startsWith('node:') ? get(specifier) : get(resolve(dirname(parent.identifier),specifier)));
   await target.evaluate();
   return target.namespace;
 }
@@ -110,6 +118,7 @@ async function ratingsModule({ playdate, create, pending = [] }) {
     'parent.service.js':{default:{getParentByUserId:async()=>({_id:'parent'})}},
     'playdate.service.js':{default:{findPlaydateDocById:async()=>playdate,getCompletedPlaydatesForParent:async()=>pending}},
     'rating-feedback.model.js':{default:{create,find:()=>query(['already-rated'])}},
+    'rating-feedback.events.js':{emitRatingEvent:async()=>{},RATING_EVENTS:{CREATED:'rating.created'}},
   });
 }
 test('rating persists authenticated parent ID and ignores supplied identity/tags',async()=>{

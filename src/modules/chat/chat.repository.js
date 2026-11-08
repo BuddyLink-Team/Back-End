@@ -20,10 +20,11 @@ const PLAYDATE_SUMMARY_POPULATE = { path: 'playdateId', select: PLAYDATE_SUMMARY
 // hostParentId, hostChildId and participants must stay selected for the nested populate to work.
 const PLAYDATE_DETAIL_POPULATE = {
   path: 'playdateId',
-  select: `${PLAYDATE_SUMMARY_FIELDS} hostParentId hostChildId participants`,
+  select: `${PLAYDATE_SUMMARY_FIELDS} hostParentId hostChildId hostChildIds participants chaperones durationMinutes note`,
   populate: [
     { path: 'hostParentId', select: PARENT_FIELDS },
     { path: 'hostChildId', select: CHILD_FIELDS },
+    { path: 'hostChildIds', select: CHILD_FIELDS },
     { path: 'participants.parentId', select: PARENT_FIELDS },
     { path: 'participants.childId', select: CHILD_FIELDS },
   ],
@@ -171,6 +172,14 @@ class ChatRepository {
   }
 
   /**
+   * Find a full message document by ID
+   * @param {string|ObjectId} messageId
+   */
+  async findMessageDocById(messageId) {
+    return Message.findById(messageId).populate('senderId', 'fullName avatarUrl verification');
+  }
+
+  /**
    * Create a new message
    * @param {Object} messageData
    * @returns {Promise<Object>}
@@ -192,7 +201,8 @@ class ChatRepository {
     const updateOps = {
       $set: {
         'lastMessage.messageId': messageDoc._id,
-        'lastMessage.senderId': messageDoc.senderId._id || messageDoc.senderId,
+        // A system message (e.g. the playdate reminder) has no sender
+        'lastMessage.senderId': messageDoc.senderId?._id || messageDoc.senderId || null,
         'lastMessage.content': messageDoc.content,
         'lastMessage.type': messageDoc.type,
         'lastMessage.sentAt': messageDoc.createdAt || new Date(),
@@ -304,6 +314,54 @@ class ChatRepository {
     return Conversation.updateOne(
       { _id: conversationId, 'lastMessage.messageId': messageId },
       { $set: { 'lastMessage.content': content, 'lastMessage.type': MESSAGE_TYPES.TEXT } }
+    );
+  }
+
+  /**
+   * Update message fields by ID
+   */
+  async updateMessage(messageId, updateData) {
+    return Message.findByIdAndUpdate(messageId, { $set: updateData }, { new: true });
+  }
+
+  /**
+   * Atomically vote on a poll option (pulls previous votes by this parent and adds to target option).
+   * @param {string|ObjectId} messageId
+   * @param {string} optionId
+   * @param {string|ObjectId} parentId
+   * @returns {Promise<Document|null>}
+   */
+  async votePollOption(messageId, optionId, parentId) {
+    await Message.updateOne(
+      { _id: messageId, 'poll.isClosed': false },
+      {
+        $pull: {
+          'poll.options.$[].voterParentIds': parentId,
+        },
+      }
+    );
+
+    return Message.findOneAndUpdate(
+      { _id: messageId, 'poll.options.id': optionId, 'poll.isClosed': false },
+      {
+        $addToSet: {
+          'poll.options.$.voterParentIds': parentId,
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /**
+   * Close a poll
+   * @param {string|ObjectId} messageId
+   * @returns {Promise<Document|null>}
+   */
+  async closePoll(messageId) {
+    return Message.findByIdAndUpdate(
+      messageId,
+      { $set: { 'poll.isClosed': true } },
+      { new: true }
     );
   }
 

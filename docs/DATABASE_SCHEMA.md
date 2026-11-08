@@ -256,8 +256,10 @@ erDiagram
     PLAYDATES {
         ObjectId _id PK
         ObjectId hostParentId FK "Ref: parents._id"
-        ObjectId hostChildId FK "Ref: children._id"
+        ObjectId hostChildId FK "Ref: children._id (bé chính)"
+        ObjectId[] hostChildIds FK "Mọi bé của chủ trì đi chơi (bé chính đứng đầu)"
         array participants "Array of { parentId, childId, status, invitedAt, respondedAt, quotaConsumedAt }"
+        array chaperones "Array of { parentId, confirmedAt } (người lớn xác nhận đi kèm)"
         date scheduledDate "Ngày tổ chức"
         string time "Giờ bắt đầu, ví dụ: 09:00"
         int durationMinutes "Thời lượng 30 - 480 phút, mặc định 120"
@@ -309,6 +311,9 @@ erDiagram
         string openingHours
         string phone
         string website
+        object tags "Tag OSM chính: leisure, amenity, sport, tourism, indoor, shop, attraction"
+        array attractions "Array of { title, description, minAge, maxAge, durationMinutes, sourceUrl } (tìm trên mạng: Tavily + Gemini hoặc Google Search)"
+        date attractionsFetchedAt "TTL 30 ngày, lưu cả khi rỗng, không lưu khi tìm lỗi"
         date lastFetchedAt "Kiểm tra TTL làm mới cache (30 ngày)"
     }
 ```
@@ -345,10 +350,11 @@ erDiagram
     MESSAGES {
         ObjectId _id PK
         ObjectId conversationId FK "Ref: conversations._id (Socket Room)"
-        ObjectId senderId FK "Ref: parents._id"
-        string type "text | image | emoji | system"
+        ObjectId senderId FK "Ref: parents._id (null với tin system)"
+        string type "text | image | emoji | system | poll"
         string content
         string mediaUrl "Cloud Storage URL"
+        object poll "Tin poll: { question, options[{ id, date, time, label, voterParentIds }], deadline, isClosed }"
         array readBy "Array of { parentId, readAt }"
         boolean isDeleted "Thu hồi tin nhắn"
         date createdAt
@@ -357,10 +363,10 @@ erDiagram
     NOTIFICATIONS {
         ObjectId _id PK
         ObjectId recipientId FK "Ref: users._id"
-        string type "connection_request | playdate_invite | badge_unlocked | streak_reminder..."
+        string type "connection_request | playdate_invite | badge_unlocked | streak_reminder | ai_suggestion..."
         string title
         string body
-        object data "playdateId, senderId, conversationId, badgeCode"
+        object data "playdateId, senderId, conversationId, badgeCode, sessionId"
         boolean isRead
         date readAt
         date createdAt
@@ -370,7 +376,7 @@ erDiagram
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
         string title "Tiêu đề cuộc trò chuyện"
-        array messages "Array of { role, content, toolCalls, toolCallId, toolName, cards, toolsUsed, choice, timestamp }"
+        array messages "Array of { role, content, toolCalls, toolCallId, toolName, cards, toolsUsed, choice, clientMessageId, timestamp }"
         object planDraft "Bản nháp playdate đang lên kế hoạch, null khi không có"
         number messageCount "Số tin của phụ huynh trong phiên"
         date quotaConsumedAt "Lúc phiên dùng lượt AI của tháng"
@@ -817,10 +823,24 @@ interface IConversation {
 interface IMessage {
   _id: ObjectId;
   conversationId: ObjectId; // Tham chiếu conversations._id (Socket Room)
-  senderId: ObjectId; // Tham chiếu parents._id
-  type: "text" | "image" | "emoji" | "system";
+  senderId: ObjectId | null; // Tham chiếu parents._id; null với tin "system" (ví dụ nhắc lịch 24h trong nhóm Playdate)
+  type: "text" | "image" | "emoji" | "system" | "poll";
   content: string;
   mediaUrl?: string; // Cloud Storage URL (nếu gửi hình ảnh)
+
+  // Chỉ có ở tin "poll" (bình chọn khung giờ trong nhóm chat Playdate, BUD-49 D5)
+  poll?: {
+    question: string;
+    options: Array<{
+      id: string; // "opt_1"
+      date: string | null; // "YYYY-MM-DD" khi lấy từ gợi ý khung giờ
+      time: string | null; // "HH:mm"
+      label: string;
+      voterParentIds: ObjectId[]; // Mỗi phụ huynh 1 phiếu ($pull rồi $addToSet nguyên tử)
+    }>;
+    deadline: Date | null; // Mặc định 48 giờ
+    isClosed: boolean; // Đóng khi hết hạn hoặc mọi thành viên đã bình chọn
+  };
 
   // Quản lý trạng thái đã xem qua Socket.IO (Event: 'message_read')
   readBy: Array<{
@@ -857,8 +877,16 @@ interface IPlaydateParticipant {
 interface IPlaydate {
   _id: ObjectId;
   hostParentId: ObjectId; // Tham chiếu parents._id
-  hostChildId: ObjectId; // Tham chiếu children._id
+  hostChildId: ObjectId; // Tham chiếu children._id: bé chính (bạn chơi được xếp hạng theo bé này)
+  // Mọi bé của chủ trì đi chơi, bé chính đứng đầu (BUD-49). Playdate cũ không có: đọc là [hostChildId]
+  hostChildIds: ObjectId[];
   participants: IPlaydateParticipant[];
+  // Người lớn xác nhận đi kèm (host hoặc phụ huynh đã nhận lời, BUD-49 B5).
+  // Số cần có: 1 / 2 bé dưới 5 tuổi, 1 / 3 bé lớn hơn, 1 kèm 1 với hoạt động dưới nước (playdate.rules.js)
+  chaperones: Array<{
+    parentId: ObjectId; // Tham chiếu parents._id
+    confirmedAt: Date;
+  }>;
 
   scheduledDate: Date; // Ngày tổ chức
   time: string; // Giờ bắt đầu (ví dụ: "09:00", "15:30")
@@ -1003,6 +1031,7 @@ interface IAIChatSession {
     cards?: Array<object>; // role 'assistant': Tool UI Cards (choices, place_suggestions, match_suggestions, playdate_draft, quota_notice)
     toolsUsed?: string[]; // role 'assistant'
     choice?: { messageId: ObjectId; stepId: string; optionIds: string[] }; // role 'user': gửi bằng cách bấm lựa chọn
+    clientMessageId?: string; // role 'user': id do client gửi, gửi lại cùng id thì trả lượt đã lưu thay vì chạy lại
     timestamp: Date;
   }>;
   planDraft: object | null; // Bản nháp playdate đang lên kế hoạch từng bước (plan-draft.rules.js), chưa tạo playdate
@@ -1066,6 +1095,7 @@ interface INotification {
     | "playdate_reminder"
     | "badge_unlocked"
     | "streak_reminder"
+    | "ai_suggestion" // Kế hoạch AI chuẩn bị sẵn (hẹn lại sau buổi chơi được đánh giá 4-5 sao)
     | "system";
   title: string;
   body: string;
@@ -1075,6 +1105,7 @@ interface INotification {
     conversationId?: ObjectId;
     badgeCode?: string;
     reportId?: ObjectId; // Tham chiếu reports._id (thông báo kết quả xử lý vi phạm)
+    sessionId?: ObjectId; // Tham chiếu ai_chat_sessions._id (ai_suggestion: mở /ai-assistant?session=)
   };
   isRead: boolean; // Default: false
   readAt?: Date;
@@ -1206,6 +1237,18 @@ interface IPlacesCache {
   openingHours?: string; // Tag opening_hours của OSM
   phone?: string;
   website?: string;
+  // Tag OSM chính của địa điểm (dùng để biết nơi có trò chơi để tìm hay không, BUD-49 A3). Lấy khi đồng bộ
+  tags: { leisure?: string; amenity?: string; sport?: string; tourism?: string; indoor?: string; shop?: string; attraction?: string };
+  // Trò chơi / tiện ích tìm trên mạng (BUD-49 A4: Tavily + Gemini, hoặc Gemini Google Search Grounding); mỗi trò có link nguồn
+  attractions: Array<{
+    title: string;
+    description: string;
+    minAge: number | null;
+    maxAge: number | null;
+    durationMinutes: number | null;
+    sourceUrl: string | null;
+  }>;
+  attractionsFetchedAt: Date | null; // Hết hạn sau 30 ngày; kết quả rỗng cũng được lưu để không tìm lại; lần tìm lỗi (429, mạng) thì không lưu
   lastFetchedAt: Date; // Làm mới từ OpenStreetMap khi quá 30 ngày (PLACES_DEFAULTS.CACHE_TTL_DAYS)
 }
 ```

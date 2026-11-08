@@ -55,6 +55,7 @@ export const toPlaceItem = (place) => ({
   openingHours: place.openingHours || '',
   coordinates: Array.isArray(place.coordinates) ? place.coordinates : null,
   osmUrl: place.osmUrl || null,
+  tags: place.tags || {},
 });
 
 /**

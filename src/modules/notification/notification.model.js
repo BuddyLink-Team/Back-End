@@ -30,6 +30,8 @@ const notificationSchema = new mongoose.Schema(
       conversationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', default: null },
       badgeCode: { type: String, default: null },
       reportId: { type: mongoose.Schema.Types.ObjectId, ref: 'Report', default: null },
+      // ai_suggestion: the prepared AI assistant conversation, opened from the notification
+      sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'AIChatSession', default: null },
     },
     isRead: {
       type: Boolean,

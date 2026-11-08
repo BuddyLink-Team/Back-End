@@ -1,6 +1,7 @@
 import playdateRepository from './playdate.repository.js';
 import rescheduleRepository from './reschedule.repository.js';
 import parentService from '../parent/parent.service.js';
+import userService from '../user/user.service.js';
 import childService from '../child/child.service.js';
 import connectionService from '../connection/connection.service.js';
 import subscriptionService from '../subscription/subscription.service.js';
@@ -24,11 +25,15 @@ import {
   PLAYDATE_WARNING_CODES,
   PLAYDATE_REMINDER,
   REMINDER_KINDS,
+  CHAPERONE_ACTIONS,
 } from './playdate.constants.js';
 import { calculateChildPairScore } from '../discovery/matching.rules.js';
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { PAGINATION } from '../../shared/constants/index.js';
 import { emitPlaydateEvent, PLAYDATE_EVENTS } from './playdate.events.js';
+import { hostChildIdsOf, computeChaperoneSummary } from './playdate.rules.js';
+import { checkPlaceOpeningHours } from './playdate-time.rules.js';
+import placesService from '../places/places.service.js';
 
 const toId = (ref) => (ref?._id || ref)?.toString();
 const MINUTE_MS = 60 * 1000;
@@ -117,11 +122,13 @@ class PlaydateService {
   async _notifyCompleted(playdate) {
     const accepted = (playdate.participants || []).filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED);
     const parentIds = [toId(playdate.hostParentId), ...uniqueParentIds(accepted)];
-    // Host child <-> each accepted child played together (connection records them as child pairs)
-    const childPairs = accepted.map((p) => ({
-      parentIds: [toId(playdate.hostParentId), toId(p.parentId)],
-      childIds: [toId(playdate.hostChildId), toId(p.childId)],
-    }));
+    // Each child of the host <-> each accepted child played together (connection records them as child pairs)
+    const childPairs = hostChildIdsOf(playdate).flatMap((hostChildId) =>
+      accepted.map((p) => ({
+        parentIds: [toId(playdate.hostParentId), toId(p.parentId)],
+        childIds: [hostChildId, toId(p.childId)],
+      }))
+    );
     await emitPlaydateEvent(PLAYDATE_EVENTS.COMPLETED, { playdateId: toId(playdate._id), parentIds, childPairs });
   }
 
@@ -148,7 +155,7 @@ class PlaydateService {
       const start = getScheduledStart(playdate.scheduledDate, playdate.time);
       const end = endOf(start, durationOf(playdate));
       const involved = new Set([
-        toId(playdate.hostChildId),
+        ...hostChildIdsOf(playdate),
         ...(playdate.participants || [])
           .filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED)
           .map((p) => toId(p.childId)),
@@ -192,6 +199,22 @@ class PlaydateService {
   }
 
   /**
+   * A place with known opening hours must be open for the whole playdate (BUD-49 C, PLACE_CLOSED).
+   * A place without opening hours, or not in the cache, is not checked.
+   * @private
+   */
+  async _assertPlaceOpen(location, start, end) {
+    const placeId = location?.placeId;
+    if (!placeId) return;
+    const place = await placesService.getPlaceDocById(placeId).catch(() => null);
+    if (!place?.openingHours) return;
+    const opening = checkPlaceOpeningHours(place.openingHours, start, end, place.coordinates?.coordinates);
+    if (opening.isKnown && !opening.isOpen) {
+      throw new AppError('The place is closed at this time', 400, 'PLACE_CLOSED', { openingHours: place.openingHours });
+    }
+  }
+
+  /**
    * Invited children of the host (a family can have several): connected friends only, their own child,
    * no block relationship
    * @param {ObjectId} hostParentId
@@ -218,8 +241,18 @@ class PlaydateService {
       throw new AppError('Cannot invite a parent you have a block relationship with', 403, 'BLOCKED_INTERACTION');
     }
 
+    // A family whose account is locked, suspended or banned cannot be invited
+    const inviteeParents = await parentService.getParentsByIds(uniqueParentIds(uniqueParticipants));
+    const activeUserIds = new Set(
+      (await userService.getActiveUserIds(inviteeParents.map((parent) => parent.userId).filter(Boolean))).map(String)
+    );
+    const activeParentIds = new Set(inviteeParents.filter((parent) => activeUserIds.has(toId(parent.userId))).map(toId));
+
     for (const p of uniqueParticipants) {
       const targetParentId = toId(p.parentId);
+      if (!activeParentIds.has(targetParentId)) {
+        throw new AppError('Invited child profile is not available', 400, 'INVALID_PARTICIPANT_CHILD');
+      }
       const isFriend = await connectionService.areParentsConnected(hostParentId, targetParentId);
       if (!isFriend) {
         throw new AppError('Only connected friends can be invited to a playdate', 400, 'NOT_CONNECTED_FRIEND');
@@ -436,6 +469,47 @@ class PlaydateService {
   }
 
   /**
+   * Confirm or withdraw chaperone attendance for an upcoming playdate (BUD-49 B5).
+   * @param {string} userId
+   * @param {string} id
+   * @param {'confirm'|'cancel'} action
+   * @returns {Promise<Object>}
+   */
+  async toggleChaperone(userId, id, action = CHAPERONE_ACTIONS.CONFIRM) {
+    const parentId = await this._getParentId(userId);
+    const playdate = await this._findPlaydateOrFail(id);
+
+    if (playdate.status !== PLAYDATE_STATUS.UPCOMING) {
+      throw new AppError('Cannot update chaperone on a completed or cancelled playdate', 400, 'INVALID_PLAYDATE_STATUS');
+    }
+
+    const isHost = this._isHost(playdate, parentId);
+    const isAccepted = (playdate.participants || []).some(
+      (p) => toId(p.parentId) === parentId.toString() && p.status === PARTICIPANT_STATUS.ACCEPTED
+    );
+
+    if (!isHost && !isAccepted) {
+      throw new AppError('Only confirmed participants or host can sign up as chaperones', 403, 'NOT_PARTICIPANT');
+    }
+
+    if (!Array.isArray(playdate.chaperones)) {
+      playdate.chaperones = [];
+    }
+
+    if (action === CHAPERONE_ACTIONS.CONFIRM) {
+      const already = playdate.chaperones.some((c) => toId(c.parentId) === parentId.toString());
+      if (!already) {
+        playdate.chaperones.push({ parentId, confirmedAt: new Date() });
+      }
+    } else if (action === CHAPERONE_ACTIONS.CANCEL) {
+      playdate.chaperones = playdate.chaperones.filter((c) => toId(c.parentId) !== parentId.toString());
+    }
+
+    await playdateRepository.updateById(id, { chaperones: playdate.chaperones });
+    return this.getPlaydateForParent(userId, id);
+  }
+
+  /**
    * Close upcoming playdates of past days (run every day at 00:00 business time).
    * The host can still complete a playdate manually; this only closes what is left:
    * - at least one accepted participant -> completed
@@ -505,6 +579,9 @@ class PlaydateService {
       if (kind === REMINDER_KINDS.H1) await playdateRepository.skipH24Reminder(playdate._id, now);
 
       const day = getZonedParts(start);
+      // Not enough adults coming yet (BUD-49 B5): the reminder asks the families to confirm in the group chat
+      const detailed = await playdateRepository.findWithDetails(playdate._id);
+      const { missingChaperones } = computeChaperoneSummary(detailed || playdate);
       await emitPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, {
         playdateId: toId(playdate._id),
         kind,
@@ -513,6 +590,9 @@ class PlaydateService {
         date: `${String(day.day).padStart(2, '0')}/${String(day.month).padStart(2, '0')}`,
         placeName: playdate.location?.name || '',
         recipientParentIds: this.getAcceptedParentIds(playdate),
+        note: playdate.note || '',
+        chatConversationId: playdate.chatConversationId || null,
+        missingChaperones,
       });
       result[kind] += 1;
     }
@@ -552,9 +632,15 @@ class PlaydateService {
     const searchText = search?.trim().toLowerCase();
     const maxFriends = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || INVITABLE_FRIENDS_LIMIT));
 
-    const friendParents = connections
+    // Families whose account is locked, suspended or banned cannot be invited (their children are not shown)
+    const connectedParents = connections
       .map((conn) => conn.parents.find((p) => toId(p) !== parentId.toString()))
-      .filter((friend) => friend && !blockedSet.has(toId(friend)))
+      .filter((friend) => friend && !blockedSet.has(toId(friend)));
+    const activeUserIds = new Set(
+      (await userService.getActiveUserIds(connectedParents.map((friend) => friend.userId).filter(Boolean))).map(String)
+    );
+    const friendParents = connectedParents
+      .filter((friend) => activeUserIds.has(toId(friend.userId)))
       .filter((friend) => !searchText || friend.fullName?.toLowerCase().includes(searchText))
       .sort((a, b) => (a.fullName || '').localeCompare(b.fullName || '', 'vi'))
       .slice(0, maxFriends);
@@ -637,12 +723,18 @@ class PlaydateService {
   async createPlaydate(userId, data) {
     const hostParentId = await this._getParentId(userId);
 
-    // 1. Verify hostChildId belongs to host
-    const isHostChildValid = await childService.isChildOwnedByParent(data.hostChildId, hostParentId);
-    if (!isHostChildValid) {
-      throw new AppError('Child does not belong to your profile', 400, 'INVALID_HOST_CHILD');
+    // 1. Every child of the host belongs to the host and is usable (hostChildId is the main one)
+    const hostChildIds = [...new Set([data.hostChildId, ...(data.hostChildIds || [])].map(String))];
+    if (hostChildIds.length > PLAYDATE_RULES.MAX_HOST_CHILDREN) {
+      throw new AppError('Too many children for one playdate', 400, 'TOO_MANY_HOST_CHILDREN');
     }
-    await childService.assertChildUsable(data.hostChildId, hostParentId);
+    for (const childId of hostChildIds) {
+      const isHostChildValid = await childService.isChildOwnedByParent(childId, hostParentId);
+      if (!isHostChildValid) {
+        throw new AppError('Child does not belong to your profile', 400, 'INVALID_HOST_CHILD');
+      }
+      await childService.assertChildUsable(childId, hostParentId);
+    }
 
     // 2. The playdate must start in the future
     const durationMinutes = data.durationMinutes ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
@@ -657,7 +749,8 @@ class PlaydateService {
 
     // 4. The host's child cannot be in two playdates at once; invited children only get a warning
     //    (they are checked again when their parent accepts). Nothing is created or sent before this.
-    await this._assertNoConflict(data.hostChildId, start, end);
+    await this._assertNoConflict(hostChildIds, start, end);
+    await this._assertPlaceOpen(data.location, start, end);
     const warnings = await this._inviteeWarnings(uniqueParticipants, start, end);
 
     // 5. Check the creation quota first, consume it only once the playdate exists
@@ -667,6 +760,7 @@ class PlaydateService {
     const playdate = await playdateRepository.create({
       hostParentId,
       hostChildId,
+      hostChildIds,
       scheduledDate,
       time,
       durationMinutes,
@@ -1048,8 +1142,9 @@ class PlaydateService {
       throw new AppError('The proposed schedule is the same as the current one', 400, 'RESCHEDULE_NO_CHANGE');
     }
 
-    // The host's child must be free at the new time (this playdate itself does not count)
-    await this._assertNoConflict(toId(playdate.hostChildId), newStart, endOf(newStart, duration), id);
+    // The host's children must be free at the new time (this playdate itself does not count)
+    await this._assertNoConflict(hostChildIdsOf(playdate), newStart, endOf(newStart, duration), id);
+    await this._assertPlaceOpen(hasNewLocation ? newLocation : playdate.location, newStart, endOf(newStart, duration));
 
     // Each reschedule is its own request: a new proposal replaces the pending one
     await rescheduleRepository.cancelPendingByPlaydateId(id);

@@ -1,4 +1,5 @@
 import { PARTICIPANT_STATUS } from '../playdate/playdate.constants.js';
+import { computeChaperoneSummary, hostChildrenOf } from '../playdate/playdate.rules.js';
 import { DELETED_MESSAGE_PLACEHOLDER } from './chat.constants.js';
 
 export class ChatDTO {
@@ -17,22 +18,31 @@ export class ChatDTO {
     };
   }
 
-  static formatPlaydate(playdate) {
+  /**
+   * Playdate of a group chat, for the detail panel
+   * @param {Object|string} playdate
+   * @param {string} [viewerParentId] - The panel says whether this parent comes as an adult chaperone
+   */
+  static formatPlaydate(playdate, viewerParentId = null) {
     if (!playdate) return null;
     if (typeof playdate === 'string' || !playdate._id) {
       return { id: playdate.toString ? playdate.toString() : playdate };
     }
 
     const hostParent = this.formatParticipant(playdate.hostParentId);
-    const hostChild = playdate.hostChildId && typeof playdate.hostChildId === 'object'
-      ? {
-          id: playdate.hostChildId._id?.toString() || playdate.hostChildId.id,
-          displayName: playdate.hostChildId.displayName || '',
-          dateOfBirth: playdate.hostChildId.dateOfBirth,
-          gender: playdate.hostChildId.gender,
-          interests: playdate.hostChildId.interests || [],
+    const formatChild = (child) =>
+      child && typeof child === 'object' && child.displayName !== undefined
+        ? {
+          id: child._id?.toString() || child.id,
+          displayName: child.displayName || '',
+          dateOfBirth: child.dateOfBirth,
+          gender: child.gender,
+          interests: child.interests || [],
         }
-      : null;
+        : null;
+    const hostChild = formatChild(playdate.hostChildId);
+    // Every child of the host (main child first), for the children list of the panel
+    const hostChildren = hostChildrenOf(playdate).map(formatChild).filter(Boolean);
 
     // Only the families in the group chat: the host and the accepted invitees (pending / declined ones are not members)
     const participants = (playdate.participants || []).filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED).map((p) => ({
@@ -62,7 +72,15 @@ export class ChatDTO {
       status: playdate.status || 'upcoming',
       host: hostParent,
       hostChild,
+      hostChildren,
       participants,
+      // Only the detail view selects these (lists show a summary)
+      ...(playdate.chaperones
+        ? {
+          durationMinutes: playdate.durationMinutes,
+          chaperoneSummary: computeChaperoneSummary(playdate, viewerParentId ? String(viewerParentId) : null),
+        }
+        : {}),
     };
   }
 
@@ -75,7 +93,7 @@ export class ChatDTO {
     // Identify the other participant in direct conversations
     const partner = participants.find((p) => p.id !== currentParentIdStr) || participants[0] || null;
 
-    const playdate = this.formatPlaydate(conversation.playdateId);
+    const playdate = this.formatPlaydate(conversation.playdateId, currentParentIdStr);
 
     // Block state computed by the chat service; members may only appear in the playdate
     const blockState = conversation._blockState || { blockedByMeIds: [], isBlockedByPartner: false };
@@ -144,8 +162,8 @@ export class ChatDTO {
       conversationId: message.conversationId?.toString(),
       sender: message.senderId && typeof message.senderId === 'object'
         ? this.formatParticipant(message.senderId)
-        : { id: senderId },
-      senderId,
+        : senderId ? { id: senderId } : null,
+      senderId: senderId || null,
       type: message.type || 'text',
       content: message.isDeleted ? DELETED_MESSAGE_PLACEHOLDER : message.content || '',
       mediaUrl: message.isDeleted ? null : message.mediaUrl || null,
@@ -153,6 +171,23 @@ export class ChatDTO {
       isMine,
       isRead,
       readBy: message.readBy || [],
+      poll: message.poll
+        ? {
+            question: message.poll.question,
+            options: (message.poll.options || []).map((opt) => ({
+              id: opt.id,
+              date: opt.date,
+              time: opt.time,
+              label: opt.label,
+              voterParentIds: (opt.voterParentIds || []).map((id) => (id?._id || id)?.toString()),
+              voteCount: (opt.voterParentIds || []).length,
+              hasVoted: (opt.voterParentIds || []).some((id) => (id?._id || id)?.toString() === currentParentIdStr),
+            })),
+            deadline: message.poll.deadline,
+            isClosed: Boolean(message.poll.isClosed),
+            totalVotes: (message.poll.options || []).reduce((acc, opt) => acc + (opt.voterParentIds || []).length, 0),
+          }
+        : null,
       createdAt: message.createdAt,
     };
   }

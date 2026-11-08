@@ -11,6 +11,12 @@ import {
 } from './suggestion-tools.js';
 import { proposePlaydateTool } from './propose-playdate.tool.js';
 import { sendConnectionRequestsTool } from './send-connection-requests.tool.js';
+import {
+  listMyPlaydatesTool,
+  reschedulePlaydateTool,
+  cancelPlaydateTool,
+  respondInvitationTool,
+} from './manage-playdates.tools.js';
 import { stripSensitive } from './tool-sanitizer.js';
 
 /**
@@ -26,6 +32,10 @@ const TOOLS = [
   suggestPlacesTool,
   proposePlaydateTool,
   sendConnectionRequestsTool,
+  listMyPlaydatesTool,
+  reschedulePlaydateTool,
+  cancelPlaydateTool,
+  respondInvitationTool,
 ];
 const TOOLS_BY_NAME = new Map(TOOLS.map((tool) => [tool.declaration.name, tool]));
 

@@ -10,6 +10,8 @@ import {
   sendMessageValidation,
   getMessagesValidation,
   getConversationsValidation,
+  createPollValidation,
+  votePollValidation,
 } from './chat.validation.js';
 
 const router = Router();
@@ -61,6 +63,19 @@ router.post(
   '/conversations/:conversationId/read',
   validate(conversationIdParamValidation),
   chatController.markAsRead
+);
+
+// Polls
+router.post(
+  '/conversations/:conversationId/poll',
+  validate(createPollValidation),
+  chatController.createPoll
+);
+
+router.post(
+  '/messages/:messageId/poll/vote',
+  validate(votePollValidation),
+  chatController.votePoll
 );
 
 // Upload attachment

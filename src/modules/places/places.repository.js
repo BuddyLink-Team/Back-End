@@ -183,8 +183,29 @@ class PlacesRepository {
     return PlacesCache.findById(id).lean();
   }
 
+  /**
+   * A cached place by its cache id or by its OpenStreetMap id ("osm-way-123"), the id a place picked in
+   * the place search keeps
+   * @param {string} id
+   * @returns {Promise<Object|null>}
+   */
+  async findByIdOrOsmId(id) {
+    const value = String(id || '');
+    if (!value) return null;
+    if (/^[0-9a-f]{24}$/i.test(value)) return PlacesCache.findById(value).lean();
+    return PlacesCache.findOne({ osmId: value }).lean();
+  }
+
   async updateById(id, update) {
     return PlacesCache.findByIdAndUpdate(id, { $set: update }, { new: true }).lean();
+  }
+
+  async updateAttractions(id, attractions) {
+    return PlacesCache.findByIdAndUpdate(
+      id,
+      { $set: { attractions, attractionsFetchedAt: new Date() } },
+      { new: true }
+    ).lean();
   }
 }
 

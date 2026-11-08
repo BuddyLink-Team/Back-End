@@ -1,5 +1,5 @@
 import { body, param, query } from 'express-validator';
-import { PLAYDATE_RULES, SUGGESTION_LIMITS } from './playdate.constants.js';
+import { PLAYDATE_RULES, SUGGESTION_LIMITS, CHAPERONE_ACTIONS } from './playdate.constants.js';
 import { PLACE_TYPES } from '../places/places.constants.js';
 
 // A playdate starts at a 24-hour time 'HH:mm' and lasts durationMinutes
@@ -56,6 +56,19 @@ export const playdateIdParamValidation = [
 ];
 
 /**
+ * Validation rules for POST /playdates/:id/chaperone
+ */
+export const chaperoneValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid playdate ID'),
+  body('action')
+    .optional()
+    .isIn(Object.values(CHAPERONE_ACTIONS))
+    .withMessage(`action must be one of: ${Object.values(CHAPERONE_ACTIONS).join(', ')}`),
+];
+
+/**
  * Validation rules for POST /playdates (Create Playdate)
  */
 export const createPlaydateValidation = [
@@ -64,6 +77,12 @@ export const createPlaydateValidation = [
     .withMessage('Please select your participating child')
     .isMongoId()
     .withMessage('Invalid child profile ID'),
+  // Every own child who comes (hostChildId included); hostChildId alone when omitted
+  body('hostChildIds')
+    .optional()
+    .isArray({ min: 1, max: PLAYDATE_RULES.MAX_HOST_CHILDREN })
+    .withMessage(`hostChildIds must list 1 to ${PLAYDATE_RULES.MAX_HOST_CHILDREN} of your children`),
+  body('hostChildIds.*').isMongoId().withMessage('Invalid child profile ID'),
   body('scheduledDate')
     .notEmpty()
     .withMessage('Scheduled date is required')
@@ -277,6 +296,8 @@ export const timeSlotSuggestionsValidation = [
   ...suggestionGroupRules,
   query('from').optional().isISO8601().withMessage('from must be a valid ISO8601 date'),
   query('to').optional().isISO8601().withMessage('to must be a valid ISO8601 date'),
+  // The chosen place (cache id or OpenStreetMap id): its opening hours and type apply to the times
+  query('placeId').optional().isString().isLength({ max: 80 }).withMessage('Invalid place ID'),
   query('durationMinutes')
     .optional()
     .isInt({ min: PLAYDATE_RULES.MIN_DURATION_MINUTES, max: PLAYDATE_RULES.MAX_DURATION_MINUTES })
@@ -298,6 +319,39 @@ export const placeSuggestionsValidation = [
     .optional()
     .isInt({ min: 1, max: SUGGESTION_LIMITS.MAX_PLACES })
     .withMessage(`limit must be between 1 and ${SUGGESTION_LIMITS.MAX_PLACES}`),
+  // The chosen time: places closed then (or closing early, dark parks) are listed last
+  query('date').optional().isISO8601().withMessage('date must be a valid ISO8601 date'),
+  query('time')
+    .optional()
+    .matches(TIME_REGEX)
+    .withMessage('time must be HH:mm'),
+  query('durationMinutes')
+    .optional()
+    .isInt({ min: PLAYDATE_RULES.MIN_DURATION_MINUTES, max: PLAYDATE_RULES.MAX_DURATION_MINUTES })
+    .withMessage(
+      `Duration must be between ${PLAYDATE_RULES.MIN_DURATION_MINUTES} and ${PLAYDATE_RULES.MAX_DURATION_MINUTES} minutes`
+    ),
+];
+
+/**
+ * Validation rules for GET /playdates/suggestions/time-check (every time rule of a chosen time)
+ */
+export const timeCheckValidation = [
+  ...suggestionGroupRules,
+  query('date').notEmpty().withMessage('date is required').isISO8601().withMessage('date must be a valid ISO8601 date'),
+  query('time')
+    .notEmpty()
+    .withMessage('time is required')
+    .matches(TIME_REGEX)
+    .withMessage('time must be HH:mm'),
+  query('durationMinutes')
+    .optional()
+    .isInt({ min: PLAYDATE_RULES.MIN_DURATION_MINUTES, max: PLAYDATE_RULES.MAX_DURATION_MINUTES })
+    .withMessage(
+      `Duration must be between ${PLAYDATE_RULES.MIN_DURATION_MINUTES} and ${PLAYDATE_RULES.MAX_DURATION_MINUTES} minutes`
+    ),
+  // The chosen place (cache id or OpenStreetMap id): its opening hours and type apply to the times
+  query('placeId').optional().isString().isLength({ max: 80 }).withMessage('Invalid place ID'),
 ];
 
 /**

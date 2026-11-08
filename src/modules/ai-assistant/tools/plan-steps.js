@@ -1,6 +1,9 @@
 import playdateService from '../../playdate/playdate.service.js';
 import playdateSuggestionService from '../../playdate/playdate-suggestion.service.js';
-import { PLAYDATE_ACTIVITIES } from '../../playdate/playdate.activities.js';
+import { PLAYDATE_ACTIVITIES, pickAttractions } from '../../playdate/playdate.activities.js';
+import { INDOOR_PLACE_TYPES } from '../../playdate/playdate.constants.js';
+import { shouldSearchAttractions } from '../../playdate/playdate-suggestion.rules.js';
+import openMeteoAdapter from '../../../integrations/weather/open-meteo.adapter.js';
 import { distanceKmBetween } from '../../discovery/matching.rules.js';
 import { getScheduledStart, intervalsOverlap } from '../../../shared/helpers/date.helper.js';
 import AppError from '../../../shared/exceptions/app-error.js';
@@ -12,8 +15,19 @@ import {
   AI_LIMITS,
   AI_DRAFT_WARNING_CODES,
   AI_OPTION_IDS,
+  AI_WARNING_SEVERITY,
 } from '../ai-assistant.constants.js';
-import { nextMissingStep, refreshDraft, toDraftResponse, summarizeDraft } from '../plan-draft.rules.js';
+import { isBadWeather } from '../safety-rules.js';
+import {
+  nextMissingStep,
+  refreshDraft,
+  toDraftResponse,
+  summarizeDraft,
+  isCurrentSlotFit,
+  groupKeyOf,
+  draftHostChildren,
+  draftAgendaSize,
+} from '../plan-draft.rules.js';
 import { toPlaymateItem, toSuggestedPlaceItem, tagsOf } from './tool-sanitizer.js';
 
 const MINUTE_MS = 60 * 1000;
@@ -33,7 +47,8 @@ const formatDuration = (minutes) => {
   return rest ? `${hours} giờ ${rest} phút` : `${hours} giờ`;
 };
 
-const slotFitText = ({ matchedParents, totalParents }) => {
+// "Hợp lịch ưu tiên của các gia đình" / "Hợp với 1/3 gia đình": the host and every invited family count
+export const slotFitText = ({ matchedParents, totalParents }) => {
   if (!matchedParents) return 'Chưa ai đặt lịch ưu tiên';
   if (matchedParents === totalParents) {
     return totalParents > 1 ? 'Hợp lịch ưu tiên của các gia đình' : 'Hợp lịch ưu tiên của bạn';
@@ -91,7 +106,9 @@ const requireHostChild = (draft) => {
   return draft.hostChild.childId;
 };
 
-const participantIdsOf = (draft) => draft.participants.map((participant) => participant.childId).join(',');
+// Other children of the group for the suggestions: the host's other own children, then the invited ones
+const participantIdsOf = (draft) =>
+  [...draftHostChildren(draft).slice(1), ...draft.participants].map((child) => child.childId).join(',');
 
 /**
  * Activity of the catalog with this title or key, so the place step knows where it usually happens
@@ -118,8 +135,16 @@ const buildChildStep = async (ctx) => {
     data: { childId: child.childId, displayName: child.displayName, age: child.age },
     links: [],
   }));
-  // Every own child is listed: a typed name could only be a typo
-  return { card: makeChoiceCard({ stepId: AI_STEPS.CHILD, title: 'Hẹn chơi cho bé nào?', options }) };
+  // Every own child is listed: a typed name could only be a typo. Several of them can come together
+  // (at least one; the first picked is the main child the playmates are ranked for)
+  return {
+    card: makeChoiceCard({
+      stepId: AI_STEPS.CHILD,
+      title: 'Hẹn chơi cho bé nào?',
+      options,
+      selectionMode: options.length > 1 ? 'multiple' : 'single',
+    }),
+  };
 };
 
 const buildTimeStep = async (ctx) => {
@@ -132,6 +157,9 @@ const buildTimeStep = async (ctx) => {
     from: day || undefined,
     to: day || undefined,
     durationMinutes: draft.durationMinutes,
+    placeOpeningHours: draft.location?.openingHours || undefined,
+    placeCoordinates: draft.location?.coordinates || undefined,
+    placeId: draft.location?.id || draft.location?.placeId || undefined,
   });
   const options = slots.slice(0, AI_LIMITS.MAX_OPTIONS).map((slot) => ({
     id: `slot:${slot.date}T${slot.time}`,
@@ -214,7 +242,14 @@ const buildActivityStep = async (ctx) => {
 const buildPlaceStep = async (ctx, { type } = {}) => {
   const { draft } = ctx;
   const childId = requireHostChild(draft);
-  const query = { childId, participantChildIds: participantIdsOf(draft), limit: AI_LIMITS.MAX_PLACES };
+  const query = {
+    childId,
+    participantChildIds: participantIdsOf(draft),
+    limit: AI_LIMITS.MAX_PLACES,
+    date: draft.date || undefined,
+    time: draft.time || undefined,
+    durationMinutes: draft.durationMinutes,
+  };
   const types = type ? [type] : (draft.activity?.placeTypes || []).slice(0, AI_LIMITS.MAX_PLACE_TYPES);
 
   const lists = await Promise.all(
@@ -225,8 +260,17 @@ const buildPlaceStep = async (ctx, { type } = {}) => {
   const nearest = (place) => Math.min(...place.familyDistances.map((family) => family.distanceKm), Infinity);
   const byId = new Map();
   lists.flat().forEach((place) => byId.set(place.id, place));
+  // Rain that day (D2): indoor places first. Places closed at the chosen time stay last (C)
+  const isRainy = isBadWeather(draft.weather);
+  const indoorFirst = (place) => (isRainy && INDOOR_PLACE_TYPES.includes(place.type) ? 1 : 0);
   const places = [...byId.values()]
-    .sort((a, b) => Number(b.isPreferredType) - Number(a.isPreferredType) || nearest(a) - nearest(b))
+    .sort(
+      (a, b) =>
+        (a.timePenalty || 0) - (b.timePenalty || 0) ||
+        indoorFirst(b) - indoorFirst(a) ||
+        Number(b.isPreferredType) - Number(a.isPreferredType) ||
+        nearest(a) - nearest(b)
+    )
     .slice(0, AI_LIMITS.MAX_PLACES)
     .map(toSuggestedPlaceItem);
   places.forEach((place) => ctx.turn.places.set(place.id, place));
@@ -243,18 +287,29 @@ const buildPlaceStep = async (ctx, { type } = {}) => {
     data: place,
     links: placeLinks(place),
   }));
-  return { card: makeChoiceCard({ stepId: AI_STEPS.PLACE, title: 'Chọn địa điểm', options, allowCustom: true }) };
+  return {
+    card: makeChoiceCard({
+      stepId: AI_STEPS.PLACE,
+      title: 'Chọn địa điểm',
+      options,
+      allowCustom: true,
+      ...(isRainy ? { description: 'Dự báo ngày này có mưa: các địa điểm trong nhà được xếp trước.' } : {}),
+    }),
+  };
 };
 
 // The main activities written by the model, for the parent to edit before the summary
-const buildAgendaStep = async (ctx) => ({
-  card: makeChoiceCard({
+const buildAgendaStep = async (ctx) => {
+  const searchStatus = ctx.draft.location ? shouldSearchAttractions(ctx.draft.location) : 'no';
+  const card = makeChoiceCard({
     stepId: AI_STEPS.AGENDA,
     title: 'Hoạt động chính của buổi hẹn',
     options: ctx.draft.agenda.map((item, index) => ({ id: `agenda:${index}`, label: item, description: '', data: {}, links: [] })),
     allowCustom: true,
-  }),
-});
+  });
+  card.canSearchAttractions = searchStatus === 'uncertain';
+  return { card };
+};
 
 const buildExtraStep = async () => ({
   card: makeChoiceCard({
@@ -312,12 +367,69 @@ const addScheduleConflicts = async (draft) => {
   }
   const start = getScheduledStart(new Date(draft.date), draft.time);
   const end = new Date(start.getTime() + draft.durationMinutes * MINUTE_MS);
-  const childIds = [draft.hostChild?.childId, ...draft.participants.map((participant) => participant.childId)];
+  const childIds = [...draftHostChildren(draft), ...draft.participants].map((child) => child.childId);
+  const ownIds = new Set(draftHostChildren(draft).map((child) => child.childId));
   const busy = await playdateService.getBusyIntervals(childIds, start, end);
   const conflicts = [
     ...new Set(busy.filter((interval) => intervalsOverlap(start, end, interval.start, interval.end)).map((i) => i.childId)),
-  ].map((childId) => ({ code: AI_DRAFT_WARNING_CODES.SCHEDULE_CONFLICT, childId }));
+  ].map((childId) => ({
+    code: AI_DRAFT_WARNING_CODES.SCHEDULE_CONFLICT,
+    childId,
+    // An own child cannot be in two playdates (POST /playdates refuses it); an invited child only warns,
+    // their parent cannot accept until it is free
+    severity: ownIds.has(childId) ? AI_WARNING_SEVERITY.BLOCK : AI_WARNING_SEVERITY.WARN,
+  }));
   draft.warnings = [...others, ...conflicts];
+};
+
+/**
+ * Fit of the chosen time with the preferred days and time slots of the host and invited families,
+ * kept on the draft for the NOT_PREFERRED_TIME warning (recomputed when the time or the invitees change)
+ * @private
+ */
+const addSlotFit = async (ctx) => {
+  const { draft } = ctx;
+  if (!draft.hostChild || !draft.date || !draft.time) {
+    draft.slotFit = null;
+    return;
+  }
+  if (isCurrentSlotFit(draft, draft.slotFit)) return;
+  try {
+    const fit = await playdateSuggestionService.getSlotFit(ctx.userId, {
+      childId: draft.hostChild.childId,
+      participantChildIds: participantIdsOf(draft),
+      date: draft.date,
+      time: draft.time,
+    });
+    draft.slotFit = { ...fit, date: draft.date, time: draft.time, groupKey: groupKeyOf(draft) };
+  } catch (_error) {
+    // The fit is only an information: a failed lookup leaves the warning out
+    draft.slotFit = null;
+  }
+};
+
+/**
+ * Forecast of the playdate day (Open-Meteo, BUD-49 D2): at the place once it is chosen, before that around
+ * the parent's home, so the place step can put indoor places first on a rainy day.
+ * Fetched again when the day or the point changes; a failed lookup or a day past the forecast leaves the weather out.
+ * @private
+ */
+const addWeather = async (ctx) => {
+  const { draft } = ctx;
+  const placePoint = Array.isArray(draft.location?.coordinates) && draft.location.coordinates.length === 2 ? draft.location.coordinates : null;
+  const home = ctx.parent?.location?.coordinates?.coordinates;
+  const point = placePoint || (Array.isArray(home) && home.length === 2 ? home : null);
+  if (!draft.date || !point) return;
+  const basis = placePoint ? 'place' : 'home';
+  if (draft.weather?.date === draft.date && draft.weather?.basis === basis) return;
+  try {
+    const [lng, lat] = point;
+    const weather = await openMeteoAdapter.getDailyWeather(lat, lng, draft.date);
+    // Unknown weather: never keep the forecast of another day or point
+    draft.weather = weather ? { ...weather, date: draft.date, basis } : null;
+  } catch (_error) {
+    draft.weather = null;
+  }
 };
 
 /**
@@ -348,9 +460,17 @@ export const advancePlan = async (ctx) => {
   const { draft } = ctx;
   const children = await ctx.getChildren();
   if (!draft.hostChild && children.length === 1) {
-    draft.hostChild = { childId: children[0].childId, displayName: children[0].displayName };
+    draft.hostChild = {
+      childId: children[0].childId,
+      displayName: children[0].displayName,
+      age: children[0].age ?? null,
+      interests: children[0].interests || [],
+    };
+    draft.hostChildren = [draft.hostChild];
   }
 
+  await addWeather(ctx);
+  await addSlotFit(ctx);
   refreshDraft(draft);
   // Warned as soon as the time or the place is known, so the model can tell the parent at that step
   await addScheduleConflicts(draft);
@@ -370,13 +490,37 @@ export const advancePlan = async (ctx) => {
     };
   }
   if (step === AI_STEPS.AGENDA && !draft.agenda.length) {
+    const allKids = [
+      ...draftHostChildren(draft).map(
+        (child) => `${child.displayName} (${child.age != null ? `${child.age} tuổi` : ''}${child.interests?.length ? `, thích ${child.interests.join(', ')}` : ''})`
+      ),
+      ...draft.participants.map(
+        (p) => `${p.childName} (${p.age != null ? `${p.age} tuổi` : ''}${p.interests?.length ? `, thích ${p.interests.join(', ')}` : ''})`
+      ),
+    ].filter(Boolean);
+
+    const size = draftAgendaSize(draft);
+    const placeType = draft.location?.placeType || null;
+    // Real attractions of the place (Google Search) or the games that fit this type of place (A3)
+    const attractionsHint = draft.location?.attractions?.length
+      ? ` Real attractions of ${draft.location.name} (use them, they are written with their source automatically): ` +
+        `${draft.location.attractions.map((a) => a.title).join(', ')}.`
+      : ` Games that suit this ${placeType || 'place'}: ${pickAttractions({
+        children: [...draftHostChildren(draft), ...draft.participants],
+        durationMinutes: draft.durationMinutes,
+        placeType,
+      }).join(', ')}.`;
+
     return {
       status: draft.status,
       draft: summarizeDraft(draft),
       nextStep: step,
       next:
-        'Call proposePlaydate now with an agenda of 3-5 concrete games or activities for these children at this place ' +
-        '(what they play, e.g. "Thi xếp Lego theo chủ đề"), no warm-up, getting to know each other or goodbye items. ' +
+        `Call proposePlaydate now with an agenda of ${size.min}-${size.max} concrete games or activities ` +
+        `(${draft.durationMinutes} minutes of playdate) suited for all children: ${allKids.join('; ')}. ` +
+        'Pick from the catalog (playdate.activities.js) or attractions at this place' +
+        attractionsHint +
+        ' (what they play, e.g. "Thi xếp Lego theo chủ đề"), no warm-up, getting to know each other or goodbye items. ' +
         'The parent then reviews and edits it on the card.',
     };
   }

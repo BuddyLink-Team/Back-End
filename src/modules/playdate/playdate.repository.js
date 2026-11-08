@@ -26,6 +26,7 @@ class PlaydateRepository {
     return Playdate.findById(id)
       .populate('hostParentId', 'fullName avatarUrl userId verification location')
       .populate('hostChildId', 'displayName dateOfBirth gender interests favoriteActivities personality')
+      .populate('hostChildIds', 'displayName dateOfBirth gender interests favoriteActivities personality')
       .populate('participants.parentId', 'fullName avatarUrl userId verification location')
       .populate('participants.childId', 'displayName dateOfBirth gender interests favoriteActivities personality');
   }
@@ -48,6 +49,7 @@ class PlaydateRepository {
     return Playdate.findById(id)
       .populate('hostParentId', 'fullName avatarUrl verification location')
       .populate('hostChildId', 'displayName dateOfBirth gender interests')
+      .populate('hostChildIds', 'displayName dateOfBirth gender interests')
       .populate('participants.parentId', 'fullName avatarUrl verification location')
       .populate('participants.childId', 'displayName dateOfBirth gender interests')
       .lean();
@@ -173,6 +175,7 @@ class PlaydateRepository {
     const playdates = await Playdate.populate(ordered, [
       { path: 'hostParentId', select: 'fullName avatarUrl userId verification location' },
       { path: 'hostChildId', select: 'displayName dateOfBirth gender interests favoriteActivities personality' },
+      { path: 'hostChildIds', select: 'displayName dateOfBirth gender interests favoriteActivities personality' },
       { path: 'participants.parentId', select: 'fullName avatarUrl userId verification location' },
       { path: 'participants.childId', select: 'displayName dateOfBirth gender interests favoriteActivities personality' },
     ]);
@@ -534,10 +537,11 @@ class PlaydateRepository {
       ...(excludePlaydateId ? { _id: { $ne: excludePlaydateId } } : {}),
       $or: [
         { hostChildId: { $in: childIds } },
+        { hostChildIds: { $in: childIds } },
         { participants: { $elemMatch: { childId: { $in: childIds }, status: PARTICIPANT_STATUS.ACCEPTED } } },
       ],
     })
-      .select('_id hostParentId hostChildId participants scheduledDate time durationMinutes')
+      .select('_id hostParentId hostChildId hostChildIds participants scheduledDate time durationMinutes')
       .lean();
   }
 
@@ -607,6 +611,7 @@ class PlaydateRepository {
     )
       .populate('hostParentId', 'fullName avatarUrl userId verification location')
       .populate('hostChildId', 'displayName dateOfBirth gender interests favoriteActivities personality')
+      .populate('hostChildIds', 'displayName dateOfBirth gender interests favoriteActivities personality')
       .populate('participants.parentId', 'fullName avatarUrl userId verification location')
       .populate('participants.childId', 'displayName dateOfBirth gender interests favoriteActivities personality');
   }
@@ -662,6 +667,7 @@ class PlaydateRepository {
         .limit(limit)
         .populate('hostParentId', 'fullName avatarUrl userId verification')
         .populate('hostChildId', 'displayName dateOfBirth gender')
+      .populate('hostChildIds', 'displayName dateOfBirth gender')
         .lean(),
       Playdate.countDocuments(filter),
     ]);
