@@ -16,11 +16,13 @@ import { distanceKmBetween } from '../discovery/matching.rules.js';
 import { PLAYDATE_RULES, SUGGESTION_LIMITS, PLACE_SUGGESTION_RADIUS } from './playdate.constants.js';
 import {
   suggestTimeSlots,
+  evaluateSlotFit,
   suggestActivities,
   preferredPlaceTypes,
   midpointOf,
   rankPlaces,
 } from './playdate-suggestion.rules.js';
+import { evaluateTimeIssues } from './playdate-time.rules.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toId = (ref) => (ref?._id || ref)?.toString();
@@ -126,20 +128,7 @@ class PlaydateSuggestionService {
       );
     }
 
-    let oh = placeOpeningHours || null;
-    let coords = placeCoordinates || null;
-    if (!oh && placeId) {
-      try {
-        const placeDoc = await placesService.getPlaceDocById(placeId);
-        if (placeDoc) {
-          oh = placeDoc.openingHours || null;
-          coords = placeDoc.coordinates?.coordinates || placeDoc.coordinates || null;
-        }
-      } catch (_e) {
-        // Ignore place lookup failure
-      }
-    }
-
+    const place = await this._placeOfSlots({ placeId, placeOpeningHours, placeCoordinates });
     const { parents, children } = await this._loadGroup(userId, { childId, participantChildIds });
     const duration = durationMinutes ? parseInt(durationMinutes, 10) : PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
     const busy = await playdateService.getBusyIntervals(
@@ -155,10 +144,62 @@ class PlaydateSuggestionService {
         to: rangeTo,
         durationMinutes: duration,
         busy,
-        placeOpeningHours: oh,
-        placeCoordinates: coords,
+        ages: children.map((child) => calculateAgeYears(child.dateOfBirth)),
+        place,
       }),
     };
+  }
+
+  /**
+   * The chosen place of a plan for the time rules (type, opening hours): from the cache by its cache id or
+   * OpenStreetMap id, or the opening hours given by the caller. null without a place.
+   * @private
+   */
+  async _placeOfSlots({ placeId, placeOpeningHours, placeCoordinates }) {
+    if (placeId) {
+      const doc = await placesService.getPlaceDocById(placeId).catch(() => null);
+      if (doc) {
+        return {
+          placeType: doc.placeType || null,
+          openingHours: doc.openingHours || placeOpeningHours || '',
+          coordinates: doc.coordinates?.coordinates || placeCoordinates || null,
+        };
+      }
+    }
+    return placeOpeningHours ? { placeType: null, openingHours: placeOpeningHours, coordinates: placeCoordinates || null } : null;
+  }
+
+  /**
+   * Every time rule a playdate would break (Create Playdate form, before submitting): the same rules as
+   * the time suggestions and the AI plan, for the host's and the invited children and the chosen place
+   * @param {string} userId
+   * @param {{ childId: string, participantChildIds?: string, date: string, time: string, durationMinutes?: number, placeId?: string }} query
+   * @returns {Promise<{ issues: Array<{ code: string, severity: string, params?: Object }> }>}
+   */
+  async getTimeCheck(userId, { childId, participantChildIds, date, time, durationMinutes, placeId } = {}) {
+    const { children } = await this._loadGroup(userId, { childId, participantChildIds });
+    const place = await this._placeOfSlots({ placeId });
+    return {
+      issues: evaluateTimeIssues({
+        date,
+        time,
+        durationMinutes: durationMinutes ? parseInt(durationMinutes, 10) : PLAYDATE_RULES.DEFAULT_DURATION_MINUTES,
+        ages: children.map((child) => calculateAgeYears(child.dateOfBirth)),
+        place,
+      }),
+    };
+  }
+
+  /**
+   * How well a chosen start time fits the preferred days and time slots of the host and invited families
+   * (the "Hợp với x/y gia đình" count of the time suggestions, for a time typed or picked freely)
+   * @param {string} userId
+   * @param {{ childId: string, participantChildIds?: string, date: string, time: string }} input
+   * @returns {Promise<{ matchedParents: number, totalParents: number, parentsWithPreferences: number, timeSlot: string|null, dayType: string }>}
+   */
+  async getSlotFit(userId, { childId, participantChildIds, date, time }) {
+    const { parents } = await this._loadGroup(userId, { childId, participantChildIds });
+    return evaluateSlotFit({ parents, date, time });
   }
 
   /**

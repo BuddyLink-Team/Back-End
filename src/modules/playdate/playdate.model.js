@@ -49,6 +49,8 @@ const playdateSchema = new mongoose.Schema(
       ref: 'Child',
       required: true,
     },
+    // Every child of the host who comes (hostChildId first). Older playdates have none: read [hostChildId]
+    hostChildIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Child' }],
     participants: [playdateParticipantSchema],
     chaperones: [
       {

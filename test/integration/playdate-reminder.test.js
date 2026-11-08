@@ -73,12 +73,18 @@ describe('Playdate reminders (BUD-48)', () => {
     const hostReminders = await waitForReminders(host.userId, playdateId, 1);
     expect(hostReminders).toHaveLength(1);
     expect(hostReminders[0].title).toBe('Nhắc lịch Playdate');
-    expect(hostReminders[0].body).toBe('"Thả diều" diễn ra lúc 07:00 ngày 11/03 tại Công viên Biển Đông.');
+    // Nobody confirmed coming as an adult chaperone yet: the reminder asks for one (BUD-49 B5)
+    expect(hostReminders[0].body).toBe(
+      '"Thả diều" diễn ra lúc 07:00 ngày 11/03 tại Công viên Biển Đông.\n' +
+        'Còn thiếu 1 người lớn đi kèm: bấm "Tôi sẽ đi kèm cùng các bé" trong nhóm chat.'
+    );
     expect(await waitForReminders(accepted.userId, playdateId, 1)).toHaveLength(1);
     expect(await waitForReminders(pending.userId, playdateId, 0)).toHaveLength(0);
   });
 
   it('sends the 1h reminder once', async () => {
+    // Enough adults now: no chaperone line
+    await Playdate.updateOne({ _id: playdateId }, { $set: { chaperones: [{ parentId: host.parentId }] } });
     const soon = new Date(START.getTime() - 50 * MINUTE);
     expect((await playdateService.sendDueReminders(soon)).h1).toBe(1);
     expect((await playdateService.sendDueReminders(soon)).h1).toBe(0);

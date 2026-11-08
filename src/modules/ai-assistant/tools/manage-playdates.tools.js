@@ -1,5 +1,47 @@
 import playdateService from '../../playdate/playdate.service.js';
-import { AI_TOOL_NAMES, AI_CARD_TYPES, AI_CONFIRM_STEPS } from '../ai-assistant.constants.js';
+import AppError from '../../../shared/exceptions/app-error.js';
+import { AI_TOOL_NAMES, AI_CONFIRM_STEPS } from '../ai-assistant.constants.js';
+import { makeChoiceCard } from './plan-steps.js';
+
+const toDay = (date) => (date ? new Date(date).toISOString().slice(0, 10) : '');
+
+/**
+ * The playdate the model refers to, when the parent can see it (the id comes from the model)
+ * @returns {Promise<Object|null>}
+ */
+const findOwnPlaydate = async (ctx, playdateId) => {
+  try {
+    return await playdateService.getPlaydateForParent(ctx.userId, String(playdateId));
+  } catch (error) {
+    if (error instanceof AppError && error.isOperational) return null;
+    throw error;
+  }
+};
+
+const playdateNotFound = () => ({
+  error: { code: 'PLAYDATE_NOT_FOUND', message: 'No playdate of this parent has this id: call listMyPlaydates first.' },
+});
+
+/**
+ * Confirmation card of an action on a playdate: nothing runs until the parent taps "confirm"
+ * (choice-handler.js runs it with the stored option data)
+ */
+const pushConfirmCard = (ctx, { stepId, playdateId, title, description, confirmLabel, dismissLabel, data }) => {
+  ctx.turn.cards.push(
+    makeChoiceCard({
+      stepId,
+      title,
+      description,
+      options: [
+        { id: `${stepId}:confirm:${playdateId}`, label: confirmLabel, description: '', data: { ...data, playdateId, confirm: true }, links: [] },
+        { id: `${stepId}:dismiss:${playdateId}`, label: dismissLabel, description: '', data: { playdateId, dismiss: true }, links: [] },
+      ],
+    })
+  );
+};
+
+const describePlaydate = (playdate) =>
+  `"${playdate.activity}" lúc ${playdate.time} ngày ${toDay(playdate.scheduledDate).split('-').reverse().join('/')}`;
 
 export const listMyPlaydatesTool = {
   declaration: {
@@ -17,8 +59,9 @@ export const listMyPlaydatesTool = {
   },
 
   async execute(args, ctx) {
+    const status = args.status || 'upcoming';
     const query = {
-      status: args.status && args.status !== 'all' ? args.status : 'upcoming',
+      ...(status !== 'all' ? { status } : {}),
       ...(args.childId ? { childId: args.childId } : {}),
     };
     const { playdates } = await playdateService.getPlaydates(ctx.userId, query);
@@ -26,7 +69,7 @@ export const listMyPlaydatesTool = {
     const formatted = (playdates || []).slice(0, 10).map((p) => ({
       id: p.id,
       activity: p.activity,
-      date: p.scheduledDate ? new Date(p.scheduledDate).toISOString().slice(0, 10) : '',
+      date: toDay(p.scheduledDate),
       time: p.time,
       status: p.status,
       placeName: p.location?.name || '',
@@ -59,37 +102,22 @@ export const reschedulePlaydateTool = {
   },
 
   async execute(args, ctx) {
-    ctx.turn.cards.push({
-      type: AI_CARD_TYPES.CHOICES,
+    const playdate = await findOwnPlaydate(ctx, args.playdateId);
+    if (!playdate) return playdateNotFound();
+    const when = `${args.newDate.split('-').reverse().join('/')} lúc ${args.newStartTime}`;
+    pushConfirmCard(ctx, {
       stepId: AI_CONFIRM_STEPS.RESCHEDULE,
+      playdateId: playdate.id,
       title: 'Xác nhận dời lịch hẹn chơi?',
-      description: `Đề xuất đổi lịch sang ngày ${args.newDate} lúc ${args.newStartTime}.`,
-      options: [
-        {
-          id: `reschedule:confirm:${args.playdateId}`,
-          label: `Xác nhận đổi sang ${args.newDate} ${args.newStartTime}`,
-          data: {
-            playdateId: args.playdateId,
-            newDate: args.newDate,
-            newStartTime: args.newStartTime,
-            reason: args.reason || '',
-            confirm: true,
-          },
-        },
-        {
-          id: `reschedule:dismiss:${args.playdateId}`,
-          label: 'Hủy bỏ',
-          data: { playdateId: args.playdateId, dismiss: true },
-        },
-      ],
+      description: `${describePlaydate(playdate)} sẽ được đề xuất đổi sang ${when}. Các gia đình cần đồng ý lịch mới.`,
+      confirmLabel: `Gửi đề xuất dời sang ${when}`,
+      dismissLabel: 'Giữ lịch cũ',
+      data: { newDate: args.newDate, newStartTime: args.newStartTime, reason: args.reason || '' },
     });
-
     return {
       needsConfirmation: true,
-      playdateId: args.playdateId,
-      newDate: args.newDate,
-      newStartTime: args.newStartTime,
-      message: 'Vui lòng xác nhận trên thẻ để gửi yêu cầu dời lịch hẹn đến các phụ huynh trong nhóm.',
+      playdateId: playdate.id,
+      message: 'The confirmation card is shown: ask the parent to tap it. Nothing is sent yet.',
     };
   },
 };
@@ -111,28 +139,21 @@ export const cancelPlaydateTool = {
   },
 
   async execute(args, ctx) {
-    ctx.turn.cards.push({
-      type: AI_CARD_TYPES.CHOICES,
+    const playdate = await findOwnPlaydate(ctx, args.playdateId);
+    if (!playdate) return playdateNotFound();
+    pushConfirmCard(ctx, {
       stepId: AI_CONFIRM_STEPS.CANCEL,
+      playdateId: playdate.id,
       title: 'Xác nhận hủy buổi hẹn chơi?',
-      description: 'Thao tác này sẽ thông báo đến tất cả phụ huynh tham gia và không thể hoàn tác.',
-      options: [
-        {
-          id: `cancel:confirm:${args.playdateId}`,
-          label: 'Xác nhận hủy hẹn',
-          data: { playdateId: args.playdateId, reason: args.reason || '', confirm: true },
-        },
-        {
-          id: `cancel:dismiss:${args.playdateId}`,
-          label: 'Giữ lại lịch hẹn',
-          data: { playdateId: args.playdateId, dismiss: true },
-        },
-      ],
+      description: `${describePlaydate(playdate)} sẽ bị hủy và các gia đình được thông báo. Không thể hoàn tác.`,
+      confirmLabel: 'Xác nhận hủy hẹn',
+      dismissLabel: 'Giữ lại lịch hẹn',
+      data: { reason: args.reason || '' },
     });
     return {
       needsConfirmation: true,
-      playdateId: args.playdateId,
-      message: 'Bạn có chắc chắn muốn hủy buổi hẹn chơi này không? Vui lòng xác nhận trên thẻ để hoàn tất.',
+      playdateId: playdate.id,
+      message: 'The confirmation card is shown: ask the parent to tap it. Nothing is cancelled yet.',
     };
   },
 };
@@ -154,34 +175,24 @@ export const respondInvitationTool = {
   },
 
   async execute(args, ctx) {
+    const playdate = await findOwnPlaydate(ctx, args.playdateId);
+    if (!playdate) return playdateNotFound();
     const isAccept = args.status === 'accepted';
-    ctx.turn.cards.push({
-      type: AI_CARD_TYPES.CHOICES,
+    pushConfirmCard(ctx, {
       stepId: AI_CONFIRM_STEPS.RESPOND,
+      playdateId: playdate.id,
       title: isAccept ? 'Xác nhận tham gia hẹn chơi?' : 'Xác nhận từ chối lời mời?',
       description: isAccept
-        ? 'Bạn sẽ được thêm vào nhóm chat của buổi hẹn chơi này.'
-        : 'Người tổ chức sẽ nhận được thông báo từ chối của bạn.',
-      options: [
-        {
-          id: `respond:confirm:${args.playdateId}`,
-          label: isAccept ? 'Đồng ý tham gia' : 'Từ chối lời mời',
-          data: { playdateId: args.playdateId, status: args.status, confirm: true },
-        },
-        {
-          id: `respond:dismiss:${args.playdateId}`,
-          label: 'Để sau',
-          data: { playdateId: args.playdateId, dismiss: true },
-        },
-      ],
+        ? `Bạn sẽ tham gia ${describePlaydate(playdate)} và vào nhóm chat của buổi hẹn.`
+        : `Người tổ chức ${describePlaydate(playdate)} sẽ nhận được thông báo từ chối của bạn.`,
+      confirmLabel: isAccept ? 'Đồng ý tham gia' : 'Từ chối lời mời',
+      dismissLabel: 'Để sau',
+      data: { status: args.status },
     });
-
     return {
       needsConfirmation: true,
-      playdateId: args.playdateId,
-      status: args.status,
-      message: `Vui lòng xác nhận trên thẻ để ${isAccept ? 'đồng ý tham gia' : 'từ chối'} buổi hẹn chơi.`,
+      playdateId: playdate.id,
+      message: 'The confirmation card is shown: ask the parent to tap it. Nothing is answered yet.',
     };
   },
 };
-

@@ -5,6 +5,8 @@ export const NOTIFICATION_TYPES = Object.freeze({
   PLAYDATE_REMINDER: 'playdate_reminder',
   BADGE_UNLOCKED: 'badge_unlocked',
   STREAK_REMINDER: 'streak_reminder',
+  // A plan prepared by the AI assistant (e.g. meeting the same friends again after a good playdate)
+  AI_SUGGESTION: 'ai_suggestion',
   SYSTEM: 'system',
 });
 

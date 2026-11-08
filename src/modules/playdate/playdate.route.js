@@ -19,6 +19,8 @@ import {
   placeSuggestionsValidation,
   activitySuggestionsValidation,
   busyTimesValidation,
+  chaperoneValidation,
+  timeCheckValidation,
 } from './playdate.validation.js';
 
 const router = Router();
@@ -38,6 +40,7 @@ router.get('/friends', validate(getInvitableFriendsValidation), playdateControll
 
 // GET /api/v1/playdates/suggestions/* (planning helpers; must stay before /:id)
 router.get('/suggestions/time-slots', validate(timeSlotSuggestionsValidation), playdateController.getTimeSlotSuggestions);
+router.get('/suggestions/time-check', validate(timeCheckValidation), playdateController.getTimeCheck);
 router.get('/suggestions/places', validate(placeSuggestionsValidation), playdateController.getPlaceSuggestions);
 router.get('/suggestions/activities', validate(activitySuggestionsValidation), playdateController.getActivitySuggestions);
 // GET /api/v1/playdates/busy-times (children's other playdates on a day; before /:id)
@@ -74,7 +77,7 @@ router.patch('/:id/complete', validate(playdateIdParamValidation), playdateContr
 router.put('/:id/complete', validate(playdateIdParamValidation), playdateController.completePlaydate);
 
 // POST /api/v1/playdates/:id/chaperone (Register or cancel chaperone)
-router.post('/:id/chaperone', validate(playdateIdParamValidation), playdateController.toggleChaperone);
+router.post('/:id/chaperone', validate(chaperoneValidation), playdateController.toggleChaperone);
 
 // PATCH /api/v1/playdates/:id/cancel
 router.patch('/:id/cancel', validate(cancelPlaydateValidation), playdateController.cancelPlaydate);

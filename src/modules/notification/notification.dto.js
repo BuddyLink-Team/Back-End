@@ -44,6 +44,7 @@ class NotificationDTO {
         playdate,
         conversationId: doc.data?.conversationId?.toString() || null,
         badgeCode: doc.data?.badgeCode || null,
+        sessionId: doc.data?.sessionId?.toString() || null,
       },
       isRead: Boolean(doc.isRead),
       readAt: doc.readAt || null,

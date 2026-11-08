@@ -539,7 +539,6 @@ describe('AI assistant (/api/v1/ai-assistant)', () => {
       expect(draft.note).toContain(AI_AGENDA_NOTE_HEADER);
       expect(draft.note).toContain('1. Vẽ tranh màu nước');
       expect(draft.note).toContain('Lưu ý an toàn:');
-      expect(draft.note).toContain('Lưu ý an toàn:');
       expect(draft.location).toMatchObject({ name: 'AI Plan Park', address: '2 Plan Road', coordinates: { type: 'Point', coordinates: [106.912, 11.31] } });
       // The place keeps the details of the place step for the summary
       expect(draft.placeDetails).toMatchObject({ placeType: 'park', osmUrl: expect.stringContaining('openstreetmap.org') });

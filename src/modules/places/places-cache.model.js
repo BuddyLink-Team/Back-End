@@ -45,6 +45,8 @@ const placesCacheSchema = new mongoose.Schema(
     openingHours: { type: String, default: '' },
     phone: { type: String, default: '' },
     website: { type: String, default: '' },
+    // Main OpenStreetMap tags (leisure, amenity, sport, tourism, indoor, shop, attraction)
+    tags: { type: mongoose.Schema.Types.Mixed, default: {} },
     attractions: [
       {
         title: { type: String, required: true },

@@ -222,6 +222,19 @@ class PlaydateController {
   }
 
   /**
+   * GET /api/v1/playdates/suggestions/time-check
+   * Every time rule a chosen time breaks (nap, school, opening hours...), before the form is sent
+   */
+  async getTimeCheck(req, res, next) {
+    try {
+      const result = await playdateSuggestionService.getTimeCheck(req.userId, req.query);
+      return successResponse(res, result, 'Time checked successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
    * GET /api/v1/playdates/busy-times
    * When the host child and the invited children are already busy on a day
    */

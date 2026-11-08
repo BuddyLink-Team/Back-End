@@ -35,6 +35,8 @@ export const TODDLER_DURATION_CAPS = Object.freeze([
 ]);
 
 export const PLAYDATE_RULES = Object.freeze({
+  // Own children the host can bring to one playdate
+  MAX_HOST_CHILDREN: 5,
   // Children further apart than this get an AGE_GAP warning (never blocks the invitation)
   MAX_AGE_GAP_YEARS: 3,
   DEFAULT_DURATION_MINUTES: 120,
@@ -52,6 +54,45 @@ export const TIME_SLOT_START = Object.freeze({
   morning: '09:00',
   afternoon: '15:00',
   evening: '18:00',
+});
+
+// Start times that belong to each preferred time slot, as shown on the profile ("Buổi sáng (8h00 - 11h30)")
+export const TIME_SLOT_RANGES = Object.freeze({
+  morning: { from: '08:00', to: '11:30' },
+  afternoon: { from: '14:00', to: '17:30' },
+  evening: { from: '18:00', to: '20:30' },
+});
+
+// Rules on the time of a playdate (playdate-time.rules.js): warnings of the plan, and the suggested times
+export const PLAYDATE_TIME_RULES = Object.freeze({
+  EARLIEST_START: '07:00',
+  LATEST_END: '21:00',
+  // Young children end earlier
+  LATEST_END_YOUNG: { underAge: 5, time: '20:00' },
+  NAP: { maxAge: 4, from: '12:00', to: '14:00' },
+  SCHOOL: { minAge: 6, ranges: [{ from: '07:30', to: '11:30' }, { from: '13:30', to: '16:30' }] },
+  MAX_LENGTH_BY_AGE: [
+    { underAge: 3, maxMinutes: 90 },
+    { underAge: 6, maxMinutes: 180 },
+  ],
+  MEALS: [
+    { from: '11:30', to: '13:00' },
+    { from: '18:00', to: '19:30' },
+  ],
+  SHORT_NOTICE_HOURS: 4,
+  // "MM-DD" (Tết follows the lunar calendar: not listed)
+  HOLIDAYS: ['01-01', '04-30', '05-01', '09-02'],
+  OUTDOOR_DARK_AFTER: '18:00',
+});
+
+// Places in the open air (night, rain) and places that normally publish opening hours
+export const OUTDOOR_PLACE_TYPES = Object.freeze(['park', 'playground']);
+export const HOURS_EXPECTED_PLACE_TYPES = Object.freeze(['kids_cafe', 'sports_center', 'workshop']);
+export const INDOOR_PLACE_TYPES = Object.freeze(['kids_cafe', 'library', 'workshop']);
+
+export const CHAPERONE_ACTIONS = Object.freeze({
+  CONFIRM: 'confirm',
+  CANCEL: 'cancel',
 });
 
 export const SUGGESTION_LIMITS = Object.freeze({

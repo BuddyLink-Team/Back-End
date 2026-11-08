@@ -40,12 +40,12 @@ class AIAssistantController {
 
   /**
    * POST /api/v1/ai-assistant/sessions/:id/messages
-   * Body: { content, choice? }
+   * Body: { content, choice?, clientMessageId? }
    */
   async sendMessage(req, res, next) {
     try {
-      const { content, choice } = req.body;
-      const data = await aiAssistantService.sendMessage(req.userId, req.params.id, { content, choice });
+      const { content, choice, clientMessageId } = req.body;
+      const data = await aiAssistantService.sendMessage(req.userId, req.params.id, { content, choice, clientMessageId });
       return successResponse(res, data, 'Reply generated successfully', 200);
     } catch (error) {
       return next(error);
@@ -54,7 +54,7 @@ class AIAssistantController {
 
   /**
    * POST /api/v1/ai-assistant/sessions/:id/messages/stream
-   * Body: { content, choice? }
+   * Body: { content, choice?, clientMessageId? }
    * Returns Server-Sent Events (SSE) with live tool progress (BUD-49 D3)
    */
   async streamMessage(req, res, _next) {
@@ -68,10 +68,11 @@ class AIAssistantController {
     };
 
     try {
-      const { content, choice } = req.body;
+      const { content, choice, clientMessageId } = req.body;
       const data = await aiAssistantService.sendMessage(req.userId, req.params.id, {
         content,
         choice,
+        clientMessageId,
         onProgress: (progress) => sendEvent('progress', progress),
       });
       sendEvent('complete', data);

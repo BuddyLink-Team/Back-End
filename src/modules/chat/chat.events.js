@@ -1,9 +1,11 @@
 import { EventEmitter } from 'node:events';
 import logger from '../../shared/logger/index.js';
-import chatService from './chat.service.js';
-import { onPlaydateEvent, PLAYDATE_EVENTS } from '../playdate/playdate.events.js';
+import { getIO } from '../../config/socket.js';
+import { broadcastNewMessage } from '../../sockets/chat.broadcast.js';
 
 export const CHAT_EVENTS = Object.freeze({
+  // A message posted by the system (e.g. the 24h reminder in a playdate group chat)
+  // Payload: { message, conversation }
   MESSAGE_CREATED: 'chat.messageCreated',
 });
 
@@ -33,16 +35,17 @@ export const emitChatEvent = async (event, payload) => {
 let isRegistered = false;
 
 /**
- * Chat reactions to other modules' events. Registered once at app startup.
+ * Realtime reactions to chat events (socket broadcasts). Cross-module triggers live in chat.listener.js,
+ * so this file never imports the chat service (the service imports this file).
  */
-export const registerChatEventListeners = () => {
+export const registerChatRealtimeListeners = () => {
   if (isRegistered) return;
   isRegistered = true;
 
-  // Keep the playdate group chat members = host + accepted participants
-  onPlaydateEvent(PLAYDATE_EVENTS.MEMBERS_CHANGED, ({ playdateId }) =>
-    chatService.syncPlaydateConversation(playdateId),
-  );
+  onChatEvent(CHAT_EVENTS.MESSAGE_CREATED, ({ message, conversation }) => {
+    const io = getIO();
+    if (io) broadcastNewMessage(io, { message, conversation });
+  });
 };
 
-export default registerChatEventListeners;
+export default registerChatRealtimeListeners;

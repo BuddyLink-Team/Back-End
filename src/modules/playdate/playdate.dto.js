@@ -1,7 +1,6 @@
 import { addMinutesToTime } from '../../shared/helpers/date.helper.js';
-import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { PLAYDATE_RULES, PLAYDATE_STATUS, PARTICIPANT_STATUS, PLAYDATE_DISPLAY_STATUS } from './playdate.constants.js';
-import { computeChaperoneSummary } from './playdate.rules.js';
+import { computeChaperoneSummary, hostChildrenOf } from './playdate.rules.js';
 
 // Old playdates / requests were stored without a duration
 const durationOf = (value) => value ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
@@ -60,6 +59,18 @@ export class PlaydateResponseDTO {
         personality: playdate.hostChildId.personality || [],
       }
       : { id: playdate.hostChildId?.toString() };
+    // Every child of the host (main child first); older playdates only have the main one
+    const hostChildren = hostChildrenOf(playdate).map((child) =>
+      child && typeof child === 'object' && child.displayName
+        ? {
+          id: child._id?.toString() || child.id,
+          displayName: child.displayName,
+          dateOfBirth: child.dateOfBirth,
+          gender: child.gender,
+          interests: child.interests || [],
+        }
+        : { id: (child?._id || child)?.toString() }
+    );
 
     // Format host parent details
     const hostParent = playdate.hostParentId && typeof playdate.hostParentId === 'object'
@@ -129,6 +140,8 @@ export class PlaydateResponseDTO {
       hostParent,
       hostChildId: playdate.hostChildId?._id?.toString() || playdate.hostChildId?.toString(),
       hostChild,
+      hostChildIds: hostChildren.map((child) => child.id),
+      hostChildren,
       participants,
       chaperones,
       chaperoneSummary,

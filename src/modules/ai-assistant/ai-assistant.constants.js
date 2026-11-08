@@ -54,8 +54,8 @@ export const AI_STEPS = Object.freeze({
 });
 export const AI_PLAN_STEP_ORDER = Object.freeze([
   AI_STEPS.CHILD,
-  AI_STEPS.TIME,
   AI_STEPS.PLAYMATES,
+  AI_STEPS.TIME,
   AI_STEPS.ACTIVITY,
   AI_STEPS.PLACE,
   AI_STEPS.AGENDA,
@@ -140,6 +140,7 @@ export const AI_APP_SECTIONS = Object.freeze({
 });
 
 export const AI_LIMITS = Object.freeze({
+  CLIENT_MESSAGE_ID_MAX_LENGTH: 64,
   MAX_TOOL_ROUNDS: 3, // per user message
   MAX_MESSAGE_LENGTH: 2000,
   HISTORY_WINDOW: 20, // stored text messages sent back to the model
@@ -153,6 +154,10 @@ export const AI_LIMITS = Object.freeze({
   MAX_AGENDA_ITEMS: 5,
   FAR_PLACE_KM: 15, // FAR_PLACE above this distance from a family
   AGENDA_ITEM_MAX_LENGTH: 80,
+  // An item of the real attractions of the place also carries its source link
+  SOURCED_AGENDA_ITEM_MAX_LENGTH: 400,
+  MAX_EXTRA_SAFETY_NOTES: 3,
+  SAFETY_NOTE_MAX_LENGTH: 200,
   NOTE_MAX_LENGTH: 500,
   TOOL_RESULT_MAX_LENGTH: 6000, // stored tool message content
   SESSIONS_PAGE_SIZE: 20,

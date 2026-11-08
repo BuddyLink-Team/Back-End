@@ -20,10 +20,11 @@ const PLAYDATE_SUMMARY_POPULATE = { path: 'playdateId', select: PLAYDATE_SUMMARY
 // hostParentId, hostChildId and participants must stay selected for the nested populate to work.
 const PLAYDATE_DETAIL_POPULATE = {
   path: 'playdateId',
-  select: `${PLAYDATE_SUMMARY_FIELDS} hostParentId hostChildId participants`,
+  select: `${PLAYDATE_SUMMARY_FIELDS} hostParentId hostChildId hostChildIds participants chaperones durationMinutes note`,
   populate: [
     { path: 'hostParentId', select: PARENT_FIELDS },
     { path: 'hostChildId', select: CHILD_FIELDS },
+    { path: 'hostChildIds', select: CHILD_FIELDS },
     { path: 'participants.parentId', select: PARENT_FIELDS },
     { path: 'participants.childId', select: CHILD_FIELDS },
   ],
@@ -200,7 +201,8 @@ class ChatRepository {
     const updateOps = {
       $set: {
         'lastMessage.messageId': messageDoc._id,
-        'lastMessage.senderId': messageDoc.senderId._id || messageDoc.senderId,
+        // A system message (e.g. the playdate reminder) has no sender
+        'lastMessage.senderId': messageDoc.senderId?._id || messageDoc.senderId || null,
         'lastMessage.content': messageDoc.content,
         'lastMessage.type': messageDoc.type,
         'lastMessage.sentAt': messageDoc.createdAt || new Date(),

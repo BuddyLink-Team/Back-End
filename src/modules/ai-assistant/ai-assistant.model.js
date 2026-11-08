@@ -46,6 +46,11 @@ const aiMessageSchema = new mongoose.Schema(
       ),
       default: undefined,
     },
+    // Role 'user': id given by the client, so a retried message returns the stored turn instead of running again
+    clientMessageId: {
+      type: String,
+      default: undefined,
+    },
     timestamp: {
       type: Date,
       default: Date.now,

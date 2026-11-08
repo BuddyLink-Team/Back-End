@@ -46,6 +46,7 @@ describe('suggestTimeSlots', () => {
       timeSlot: 'afternoon',
       matchedParents: 2,
       totalParents: 2,
+      notes: [],
     });
     expect(slots[1]).toMatchObject({ date: '2026-11-01', time: '15:00', matchedParents: 2 });
     expect(slots[2]).toMatchObject({ date: '2026-10-31', time: '09:00', matchedParents: 1 });

@@ -22,7 +22,8 @@ import subscriptionRoutes from "./modules/subscription/subscription.route.js";
 import discoveryRoutes from "./modules/discovery/discovery.route.js";
 import connectionRoutes from "./modules/connection/connection.route.js";
 import safetyRoutes from "./modules/safety/safety.route.js";
-import { registerChatEventListeners } from "./modules/chat/chat.events.js";
+import { registerChatEventListeners } from "./modules/chat/chat.listener.js";
+import { registerChatRealtimeListeners } from "./modules/chat/chat.events.js";
 import { registerGamificationEventListeners } from "./modules/gamification/gamification.events.js";
 import { registerNotificationEventListeners } from "./modules/notification/notification.events.js";
 import { registerNotificationListeners } from "./modules/notification/notification.listener.js";
@@ -73,6 +74,7 @@ app.get("/api/v1", (req, res) => successResponse(res, null, "BuddyLink API v1 is
 
 // Cross-module event listeners (e.g. playdate members -> playdate group chat)
 registerChatEventListeners();
+registerChatRealtimeListeners();
 registerGamificationEventListeners();
 registerNotificationEventListeners();
 registerNotificationListeners();

@@ -1,6 +1,5 @@
 import playdateService from '../../playdate/playdate.service.js';
 import placeAttractionsService from '../../places/place-attractions.service.js';
-import { shouldSearchAttractions } from '../../playdate/playdate-suggestion.rules.js';
 import { pickAttractions } from '../../playdate/playdate.activities.js';
 import AppError from '../../../shared/exceptions/app-error.js';
 import {
@@ -13,9 +12,20 @@ import {
   AI_MESSAGE_ROLES,
   AI_LIMITS,
 } from '../ai-assistant.constants.js';
-import { isValidDate, isValidTime, isPastSlot, normalizeAgenda, nextMissingStep, toDraftResponse } from '../plan-draft.rules.js';
+import {
+  isValidDate,
+  isValidTime,
+  isPastSlot,
+  normalizeAgenda,
+  nextMissingStep,
+  toDraftResponse,
+  refreshDraft,
+  blockingWarnings,
+  draftHostChildren,
+  withAttractionSource,
+} from '../plan-draft.rules.js';
 import { advancePlan } from './plan-steps.js';
-import { applyPlanFields, setLocation } from './propose-playdate.tool.js';
+import { applyPlanFields, applyPlace } from './propose-playdate.tool.js';
 import { buildCriteria, searchMatches } from './find-matches.tool.js';
 import { sendConnectionRequests } from './send-connection-requests.tool.js';
 
@@ -83,6 +93,14 @@ const customText = (custom, key = 'text') => String(custom?.[key] || '').trim().
 const createFromPlan = async (ctx) => {
   const draft = requirePlan(ctx);
   if (nextMissingStep(draft) !== AI_CONFIRM_STEP) throw invalidChoice('The plan is not complete yet');
+  // Last check before creating (Jira C): the warnings again, as the time may have passed since the summary
+  refreshDraft(draft);
+  const blocking = blockingWarnings(draft.warnings);
+  if (blocking.length) {
+    throw new AppError('The plan has warnings to fix before it can be created', 400, 'AI_PLAN_BLOCKED', {
+      codes: [...new Set(blocking.map((warning) => warning.code))],
+    });
+  }
   if (draft.hasHighRisk && !draft.safetyAcknowledged) {
     throw new AppError(
       'Please acknowledge safety precautions before creating this playdate',
@@ -94,6 +112,7 @@ const createFromPlan = async (ctx) => {
   try {
     const playdate = await playdateService.createPlaydate(ctx.userId, {
       hostChildId: body.hostChildId,
+      hostChildIds: body.hostChildIds,
       scheduledDate: new Date(body.scheduledDate),
       time: body.time,
       durationMinutes: body.durationMinutes,
@@ -206,7 +225,7 @@ export const applyChoice = async (ctx, session, choice) => {
           typed: text,
           todo:
             card.stepId === AI_STEPS.CHILD
-              ? 'Call proposePlaydate with the hostChildId of this child (from the children list), or say no child has this name.'
+              ? 'Call proposePlaydate with hostChildIds of these children (from the children list), or say no child has this name.'
               : 'Call proposePlaydate with participantNames from this text; the result warns about names that are not friends.',
         };
         break;
@@ -214,7 +233,7 @@ export const applyChoice = async (ctx, session, choice) => {
       await applyPlanFields(
         ctx,
         card.stepId === AI_STEPS.CHILD
-          ? { hostChildId: options[0].data.childId }
+          ? { hostChildIds: options.map((option) => option.data.childId) }
           : skipped
             ? { noPlaymates: true }
             : { participantChildIds: options.map((option) => option.data.childId) }
@@ -239,21 +258,11 @@ export const applyChoice = async (ctx, session, choice) => {
       result = await advancePlan(ctx);
       break;
     case AI_STEPS.PLACE: {
-      const draft = requirePlan(ctx);
+      requirePlan(ctx);
       const place = custom || options[0].data;
       if (!String(place.name || '').trim()) throw invalidChoice();
-      setLocation(draft, place);
-      const placeId = place.id || place.placeId;
-      if (shouldSearchAttractions(draft.location) === 'yes' && placeId) {
-        try {
-          const attractions = await placeAttractionsService.getOrFetchAttractions(placeId, draft.location);
-          if (attractions && attractions.length) {
-            draft.location.attractions = attractions;
-          }
-        } catch (_e) {
-          // Ignore attraction lookup error
-        }
-      }
+      // A place picked in the search keeps its cached details (type, opening hours, attractions)
+      await applyPlace(ctx, place);
       result = await advancePlan(ctx);
       break;
     }
@@ -268,17 +277,13 @@ export const applyChoice = async (ctx, session, choice) => {
               draft.location.attractions = attractions;
               const picked = pickAttractions({
                 children: [
-                  ...(draft.hostChild ? [{ age: draft.hostChild.age, displayName: draft.hostChild.displayName }] : []),
+                  ...draftHostChildren(draft).map((child) => ({ age: child.age, displayName: child.displayName })),
                   ...draft.participants.map((p) => ({ age: p.age, displayName: p.childName })),
                 ],
                 durationMinutes: draft.durationMinutes,
                 availableAttractions: attractions,
               });
-              draft.agenda = picked.map((title) => {
-                const match = attractions.find((a) => (a.title || a.name) === title);
-                const prefix = `Theo thông tin trên mạng về ${draft.location.name}: ${title}`;
-                return match?.sourceUrl ? `${prefix} (${match.sourceUrl})` : prefix;
-              });
+              draft.agenda = picked.map((title) => withAttractionSource(title, draft.location));
             }
           } catch (_e) {
             // Ignore attraction search error
