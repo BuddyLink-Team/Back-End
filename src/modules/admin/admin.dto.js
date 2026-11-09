@@ -557,6 +557,7 @@ export class AdminReportListItemDTO {
             policyClause: report.sentinelAssessment.policyClause,
             autoShieldApplied: Boolean(report.sentinelAssessment.autoShieldApplied),
             recommendedSanctions: report.sentinelAssessment.recommendedSanctions || [],
+            monitoring: report.sentinelAssessment.monitoring || null,
           }
         : null,
       createdAt: report.createdAt,

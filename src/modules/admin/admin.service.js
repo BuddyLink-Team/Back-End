@@ -867,6 +867,60 @@ class AdminService {
       ? calculatePolicySanction(report.category, effectiveSeverity, priorSanctionsCount, report.targetType)
       : null;
 
+    if (report.sentinelAssessment?.assessedAt && !report.sentinelAssessment.monitoring?.investigationSteps?.length) {
+      const monitoringMetrics = await safetyService.getEnforcementMonitoringMetrics(report);
+      const reportsReceivedCount = Math.max(
+        monitoringMetrics.reportsIn30MinCount || 1,
+        monitoringMetrics.openAgainstUserCount || 1
+      );
+      const isHighRisk =
+        Boolean(report.sentinelAssessment.autoShieldApplied) ||
+        effectiveSeverity === REPORT_SEVERITY.CRITICAL ||
+        effectiveSeverity === REPORT_SEVERITY.HIGH ||
+        reportsReceivedCount >= 3;
+      const riskLevel = isHighRisk ? 'high' : reportsReceivedCount === 2 ? 'medium' : 'low';
+      const evidenceNote =
+        report.sentinelAssessment.evidenceAnalysis?.notes ||
+        (report.targetMessageId
+          ? 'Đã kiểm tra ngữ cảnh các tin nhắn liên quan quanh thời điểm báo cáo.'
+          : 'Đã kiểm tra hồ sơ người dùng và nội dung mô tả sự việc.');
+
+      report.sentinelAssessment.monitoring = {
+        reportsReceived: reportsReceivedCount,
+        timeWindow: '30 min',
+        totalOpenAgainstUser: monitoringMetrics.openAgainstUserCount,
+        uniqueReportersCount: monitoringMetrics.uniqueReportersCount,
+        riskLevel,
+        reporterCredibility: {
+          level: monitoringMetrics.credibilityLevel,
+          label: monitoringMetrics.credibilityLabel,
+          totalSubmitted: monitoringMetrics.reporterTotalSubmitted,
+          confirmedCount: monitoringMetrics.reporterConfirmedCount,
+          dismissedCount: monitoringMetrics.reporterDismissedCount,
+          coordinatedSuspected: monitoringMetrics.coordinatedSuspected,
+          isIndependentIncidents: monitoringMetrics.isIndependentIncidents,
+          incidentPattern: monitoringMetrics.incidentPattern,
+        },
+        investigationSteps: [
+          `Phân loại nội dung report: Danh mục "${report.category}" — ${report.sentinelAssessment.violationType || 'Vi phạm quy chuẩn giao tiếp'}.`,
+          `Kiểm tra các tin nhắn liên quan: ${evidenceNote}`,
+          `Xác định các report có cùng một sự việc hay là những sự việc độc lập: ${monitoringMetrics.incidentPattern}`,
+          `Kiểm tra lịch sử vi phạm đã được xác nhận: Tài khoản bị báo cáo có ${priorSanctionsCount} lần kỷ luật đã xác nhận trước đó (Đang xét mức Strike ${policyGuidance?.strikeCount || 1}/3).`,
+          `Đánh giá khả năng report phối hợp hoặc report giả: ${monitoringMetrics.credibilityLabel} (Người báo cáo đã gửi ${monitoringMetrics.reporterTotalSubmitted} report, ${monitoringMetrics.reporterDismissedCount} lần bị bác bỏ).`,
+        ],
+        temporaryRestriction: {
+          applied: isHighRisk,
+          badgeLabel: 'Temporary restriction',
+          steps: [
+            'Tạm hạn chế khả năng gửi tin nhắn mới.',
+            'Gửi cảnh báo đến Admin.',
+            'Tạo một bản phân tích để Admin xem xét.',
+            'Chỉ khôi phục hoặc áp dụng hình phạt chính thức sau khi có đủ căn cứ.',
+          ],
+        },
+      };
+    }
+
     return AdminReportDetailDTO.toResponse({
       report,
       reporterParent,

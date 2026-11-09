@@ -351,6 +351,10 @@ class SafetyService {
     return safetyRepository.countUserPriorSanctions(parentId);
   }
 
+  async getEnforcementMonitoringMetrics(report) {
+    return safetyRepository.getEnforcementMonitoringMetrics(report);
+  }
+
   async saveReport(report) {
     return safetyRepository.saveReport(report);
   }

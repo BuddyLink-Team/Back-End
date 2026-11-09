@@ -80,6 +80,29 @@ const sentinelAssessmentSchema = new mongoose.Schema(
     assessedAt: { type: Date, default: null },
     assessedByModel: { type: String, default: null },
     autoShieldApplied: { type: Boolean, default: false },
+    monitoring: {
+      reportsReceived: { type: Number, default: 1 },
+      timeWindow: { type: String, default: '30 min' },
+      totalOpenAgainstUser: { type: Number, default: 1 },
+      uniqueReportersCount: { type: Number, default: 1 },
+      riskLevel: { type: String, enum: ['low', 'medium', 'high'], default: 'low' },
+      reporterCredibility: {
+        level: { type: String, enum: ['high', 'normal', 'low'], default: 'high' },
+        label: { type: String, default: '' },
+        totalSubmitted: { type: Number, default: 1 },
+        confirmedCount: { type: Number, default: 0 },
+        dismissedCount: { type: Number, default: 0 },
+        coordinatedSuspected: { type: Boolean, default: false },
+        isIndependentIncidents: { type: Boolean, default: true },
+        incidentPattern: { type: String, default: '' },
+      },
+      investigationSteps: [{ type: String }],
+      temporaryRestriction: {
+        applied: { type: Boolean, default: false },
+        badgeLabel: { type: String, default: 'Temporary restriction' },
+        steps: [{ type: String }],
+      },
+    },
   },
   { _id: false }
 );

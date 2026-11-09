@@ -342,6 +342,96 @@ class SafetyRepository {
     });
   }
 
+  /**
+   * Compute 3-Factor Automated Enforcement metrics (Report Velocity, Reporter Credibility, Incident Pattern).
+   * @param {Object} report
+   */
+  async getEnforcementMonitoringMetrics(report) {
+    const anchorTime = report.createdAt ? new Date(report.createdAt) : new Date();
+    const windowMs = 30 * 60 * 1000; // 30 minutes
+    const windowStart = new Date(anchorTime.getTime() - windowMs);
+    const windowEnd = new Date(anchorTime.getTime() + windowMs);
+
+    const [
+      reportsIn30Min,
+      openAgainstUser,
+      reporterTotalSubmitted,
+      reporterConfirmedCount,
+      reporterDismissedCount,
+    ] = await Promise.all([
+      Report.find({
+        reportedUserId: report.reportedUserId,
+        createdAt: { $gte: windowStart, $lte: windowEnd },
+      })
+        .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls')
+        .lean(),
+      Report.find({
+        reportedUserId: report.reportedUserId,
+        status: { $in: REPORT_OPEN_STATUSES },
+      })
+        .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
+        .lean(),
+      Report.countDocuments({ reporterId: report.reporterId }),
+      Report.countDocuments({ reporterId: report.reporterId, status: REPORT_STATUS.RESOLVED }),
+      Report.countDocuments({ reporterId: report.reporterId, status: REPORT_STATUS.DISMISSED }),
+    ]);
+
+    const relevantCluster = reportsIn30Min.length >= openAgainstUser.length ? reportsIn30Min : openAgainstUser;
+    const reportsIn30MinCount = Math.max(1, reportsIn30Min.length);
+    const openAgainstUserCount = Math.max(1, openAgainstUser.length);
+    const uniqueReporterIds = new Set(relevantCluster.map((r) => String(r.reporterId)));
+    const uniqueReportersCount = Math.max(1, uniqueReporterIds.size);
+
+    // Assess whether multiple reports are independent incidents or suspected coordinated brigading
+    const hasDirectTargets = relevantCluster.some(
+      (r) => Boolean(r.targetMessageId) || Boolean(r.targetPlaydateId) || (r.evidenceUrls && r.evidenceUrls.length > 0)
+    );
+    const distinctTargetMessages = new Set(
+      relevantCluster.map((r) => (r.targetMessageId ? String(r.targetMessageId) : null)).filter(Boolean)
+    );
+
+    let coordinatedSuspected = false;
+    let isIndependentIncidents = true;
+    let incidentPattern =
+      'Sự việc đơn lẻ từ phụ huynh báo cáo trực tiếp, không có dấu hiệu nhiều tài khoản phối hợp report.';
+
+    if (uniqueReportersCount >= 2) {
+      if (!hasDirectTargets && distinctTargetMessages.size === 0 && uniqueReportersCount >= 3) {
+        coordinatedSuspected = true;
+        isIndependentIncidents = false;
+        incidentPattern = `Cảnh báo: Ghi nhận ${uniqueReportersCount} tài khoản cùng report trong thời gian ngắn nhưng thiếu bằng chứng tin nhắn trực tiếp (cần kiểm tra khả năng report phối hợp/brigading).`;
+      } else {
+        coordinatedSuspected = false;
+        isIndependentIncidents = true;
+        incidentPattern = `Ghi nhận ${relevantCluster.length} báo cáo từ ${uniqueReportersCount} phụ huynh độc lập với ngữ cảnh tương tác riêng biệt (không phải report giả phối hợp).`;
+      }
+    }
+
+    let credibilityLevel = 'high';
+    let credibilityLabel = 'Đáng tin cậy — Lịch sử báo cáo tốt, không có dấu hiệu phối hợp report ảo';
+    if (reporterDismissedCount >= 2 && reporterDismissedCount > reporterConfirmedCount) {
+      credibilityLevel = 'low';
+      credibilityLabel = `Độ tin cậy thấp — Người báo cáo từng có ${reporterDismissedCount} báo cáo bị bác bỏ`;
+    } else if (coordinatedSuspected) {
+      credibilityLevel = 'normal';
+      credibilityLabel = 'Cần lưu ý — Nhiều báo cáo đổ về cùng lúc, cần Admin đối chiếu bằng chứng';
+    }
+
+    return {
+      reportsIn30MinCount,
+      openAgainstUserCount,
+      uniqueReportersCount,
+      reporterTotalSubmitted: Math.max(1, reporterTotalSubmitted),
+      reporterConfirmedCount,
+      reporterDismissedCount,
+      credibilityLevel,
+      credibilityLabel,
+      coordinatedSuspected,
+      isIndependentIncidents,
+      incidentPattern,
+    };
+  }
+
   async saveReport(report) {
     return report.save();
   }
