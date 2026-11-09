@@ -20,6 +20,7 @@ import { onUserEvent, USER_EVENTS } from '../../src/modules/user/user.events.js'
 import { broadcastAccountLocked, broadcastMessageDeleted } from '../../src/sockets/moderation.broadcast.js';
 import {
   CATEGORY_TO_SEVERITY,
+  REPORT_ACTION_TYPES,
   REPORT_CATEGORIES,
   REPORT_SEVERITY,
   REPORT_STATUS,
@@ -895,6 +896,95 @@ describe('Admin Safety & Reports Moderation (/api/v1/admin/reports)', () => {
     it('does nothing in a process without the parent sockets', () => {
       expect(() => broadcastAccountLocked(null, 'user-1', {})).not.toThrow();
       expect(() => broadcastMessageDeleted(null, { participantIds: ['p1'] })).not.toThrow();
+    });
+  });
+
+  describe('policy compliance with Sentinel AI assessment', () => {
+    it('requires policy override when report has AI assessment and action is out of matrix', async () => {
+      const [reporter, reported] = await createPair();
+      const report = await createReviewingReport(reporter, reported, {
+        category: REPORT_CATEGORIES.SPAM,
+        severity: REPORT_SEVERITY.LOW,
+      });
+
+      // Simulate AI assessment present on report
+      report.sentinelAssessment = {
+        summary: 'Phát hiện spam quảng cáo hàng loạt',
+        violationType: 'spam',
+        severityRecommendation: 'low',
+        policySuggestedSeverity: 'low',
+        confidenceScore: 90,
+        assessedAt: new Date(),
+        recommendedSanctions: [{ type: 'warn' }],
+      };
+      await report.save();
+
+      // Trying BAN for SPAM strike 1 without policy override
+      const res = await post(`/${report._id}/action`, {
+        type: REPORT_ACTION_TYPES.BAN,
+        note: 'Admin muốn cấm luôn',
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('POLICY_OVERRIDE_REQUIRED');
+    });
+
+    it('requires override reason of at least 20 characters when policy override is checked', async () => {
+      const [reporter, reported] = await createPair();
+      const report = await createReviewingReport(reporter, reported, {
+        category: REPORT_CATEGORIES.SPAM,
+        severity: REPORT_SEVERITY.LOW,
+      });
+
+      report.sentinelAssessment = {
+        summary: 'Spam bán hàng',
+        violationType: 'spam',
+        severityRecommendation: 'low',
+        policySuggestedSeverity: 'low',
+        confidenceScore: 85,
+        assessedAt: new Date(),
+        recommendedSanctions: [{ type: 'warn' }],
+      };
+      await report.save();
+
+      const res = await post(`/${report._id}/action`, {
+        type: REPORT_ACTION_TYPES.BAN,
+        isPolicyOverride: true,
+        overrideReason: 'Lý do ngắn',
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('permits valid policy override and records policy_overridden in history', async () => {
+      const [reporter, reported] = await createPair();
+      const report = await createReviewingReport(reporter, reported, {
+        category: REPORT_CATEGORIES.SPAM,
+        severity: REPORT_SEVERITY.LOW,
+      });
+
+      report.sentinelAssessment = {
+        summary: 'Spam bán hàng',
+        violationType: 'spam',
+        severityRecommendation: 'low',
+        policySuggestedSeverity: 'low',
+        confidenceScore: 85,
+        assessedAt: new Date(),
+        recommendedSanctions: [{ type: 'warn' }],
+      };
+      await report.save();
+
+      const validReason = 'Tài khoản có dấu hiệu bot tự động phát tán liên kết lừa đảo độc hại';
+      const res = await post(`/${report._id}/action`, {
+        type: REPORT_ACTION_TYPES.BAN,
+        isPolicyOverride: true,
+        overrideReason: validReason,
+        note: validReason,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.actions.some((a) => a.type === 'ban' && a.isPolicyOverride)).toBe(true);
+      expect(res.body.data.history.some((h) => h.eventType === 'policy_overridden')).toBe(true);
     });
   });
 });

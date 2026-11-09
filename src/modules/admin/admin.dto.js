@@ -477,11 +477,14 @@ export class AdminTransactionDTO {
 
 const REPORT_PARENT_FALLBACK_NAME = 'Người dùng BuddyLink';
 
-const toReportActor = (userId, actorsById) => {
+const toReportActor = (userId, actorsById, actorType = 'admin') => {
+  if (actorType === 'system' || (!userId && actorType === 'system')) {
+    return { id: null, fullName: 'Sentinel AI', email: '', isSystem: true };
+  }
   if (!userId) return null;
   const id = userId.toString();
-  const actor = actorsById.get(id);
-  return { id, fullName: actor?.email || '', email: actor?.email || '' };
+  const actor = actorsById?.get(id);
+  return { id, fullName: actor?.email || '', email: actor?.email || '', isSystem: false };
 };
 
 const toReportActions = (actions, actorsById) =>
@@ -489,9 +492,15 @@ const toReportActions = (actions, actorsById) =>
     id: action._id?.toString(),
     type: action.type,
     params: action.params || {},
-    performedBy: toReportActor(action.performedBy, actorsById),
+    performedBy: toReportActor(action.performedBy, actorsById, action.actorType),
+    actorType: action.actorType || 'admin',
+    isProvisional: Boolean(action.isProvisional),
+    propagatedFrom: action.propagatedFrom?.toString() || null,
     performedAt: action.performedAt,
     note: action.note || '',
+    isPolicyOverride: Boolean(action.isPolicyOverride),
+    overrideReason: action.overrideReason || '',
+    policyClause: action.policyClause || '',
   }));
 
 const toReportPerson = (parent, parentId, user) => ({
@@ -543,9 +552,30 @@ export class AdminReportListItemDTO {
       isOverdue: Boolean(isOverdue),
       resolution: report.resolution || null,
       adminNotes: report.adminNotes || '',
-      resolvedBy: toReportActor(report.resolvedBy, actorsById),
+      resolvedBy: report.resolvedBy
+        ? toReportActor(report.resolvedBy, actorsById)
+        : report.sentinelAssessment?.autoResolved
+          ? toReportActor(null, actorsById, 'system')
+          : null,
       resolvedAt: report.resolvedAt || null,
       actions: toReportActions(report.actions, actorsById),
+      sentinelAssessment: report.sentinelAssessment?.assessedAt
+        ? {
+            severityRecommendation: report.sentinelAssessment.severityRecommendation,
+            policySuggestedSeverity: report.sentinelAssessment.policySuggestedSeverity,
+            confidenceScore: report.sentinelAssessment.confidenceScore,
+            summary: report.sentinelAssessment.summary,
+            policyClause: report.sentinelAssessment.policyClause,
+            isFallback: Boolean(report.sentinelAssessment.isFallback),
+            autoResolveEligible: Boolean(report.sentinelAssessment.autoResolveEligible),
+            autoShieldApplied: Boolean(report.sentinelAssessment.autoShieldApplied),
+            autoResolved: Boolean(report.sentinelAssessment.autoResolved),
+            recommendedSanctions: report.sentinelAssessment.recommendedSanctions || [],
+            corroboration: report.sentinelAssessment.corroboration || null,
+            verdict: report.sentinelAssessment.verdict || null,
+            monitoring: report.sentinelAssessment.monitoring || null,
+          }
+        : null,
       createdAt: report.createdAt,
       updatedAt: report.updatedAt,
     };
@@ -564,6 +594,7 @@ export class AdminReportDetailDTO {
     relatedOpenReports = [],
     pastReports = [],
     previousSanctions = [],
+    policyGuidance = null,
     isOverdue,
     totalReportsSubmitted = 0,
   }) {
@@ -601,15 +632,22 @@ export class AdminReportDetailDTO {
         eventType: entry.eventType,
         fromStatus: entry.fromStatus,
         toStatus: entry.toStatus,
-        by: toReportActor(entry.by, actorsById),
+        by: toReportActor(entry.by, actorsById, entry.actorType),
+        actorType: entry.actorType || 'admin',
         at: entry.at,
         note: entry.note || '',
         metadata: entry.metadata || null,
       })),
       relatedOpenReports,
+      policyGuidance,
+      sentinelAssessment: report.sentinelAssessment?.assessedAt ? report.sentinelAssessment : null,
       resolution: report.resolution || null,
       adminNotes: report.adminNotes || '',
-      resolvedBy: toReportActor(report.resolvedBy, actorsById),
+      resolvedBy: report.resolvedBy
+        ? toReportActor(report.resolvedBy, actorsById)
+        : report.sentinelAssessment?.autoResolved
+          ? toReportActor(null, actorsById, 'system')
+          : null,
       resolvedAt: report.resolvedAt || null,
       createdAt: report.createdAt,
       updatedAt: report.updatedAt,

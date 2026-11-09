@@ -463,6 +463,20 @@ export const applyReportActionValidation = [
     .optional()
     .isString()
     .trim(),
+  body('isPolicyOverride')
+    .optional()
+    .isBoolean()
+    .withMessage('isPolicyOverride must be a boolean'),
+  body('overrideReason')
+    .optional()
+    .isString()
+    .trim()
+    .custom((val, { req }) => {
+      if (req.body.isPolicyOverride && (!val || val.length < 20)) {
+        throw new Error('Lý do giải trình ngoại lệ phải có ít nhất 20 ký tự');
+      }
+      return true;
+    }),
 ];
 
 /**
@@ -530,6 +544,46 @@ export const reopenReportValidation = [
 ];
 
 /**
+ * Validation rules for POST /api/v1/admin/reports/:id/sentinel-assess
+ */
+export const assessSentinelValidation = [
+  ...reportIdParamValidation,
+  body('forceRefresh')
+    .optional()
+    .isBoolean()
+    .withMessage('forceRefresh must be a boolean'),
+];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/:id/sentinel-apply
+ */
+/**
+ * Validation rules for POST /api/v1/admin/reports/sentinel-cluster-resolve
+ */
+export const resolveSentinelClusterValidation = [
+  body('reportIds')
+    .isArray({ min: 1, max: 50 })
+    .withMessage('reportIds must hold 1 to 50 report ids'),
+  body('reportIds.*').isMongoId().withMessage('Invalid report id'),
+  body('note')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Note must be at most 500 characters'),
+];
+
+export const applySentinelValidation = [
+  ...reportIdParamValidation,
+  body('note')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Note must be at most 500 characters'),
+];
+
+/**
  * Validation rules for GET /api/v1/admin/analytics
  */
 export const adminAnalyticsValidation = [
@@ -592,3 +646,19 @@ export const listAdminNotificationsValidation = [
  * Validation rules for PATCH /api/v1/admin/notifications/read-all
  */
 export const readAllAdminNotificationsValidation = [notificationCategoryValidation];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/sentinel/batch-scan
+ */
+export const batchScanSentinelValidation = [];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/sentinel/batch-apply
+ */
+export const batchApplySentinelValidation = [
+  body('minConfidence')
+    .optional()
+    .isInt({ min: 75, max: 100 })
+    .withMessage('minConfidence must be an integer between 75 and 100')
+    .toInt(),
+];

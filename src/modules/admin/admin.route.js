@@ -5,7 +5,11 @@ import userRoutes from '../user/user.route.js';
 import { validate } from '../../middlewares/validate.middleware.js';
 import { authenticate } from '../../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../../middlewares/role.middleware.js';
-import { adminLoginLimiter } from '../../middlewares/rate-limit.middleware.js';
+import {
+  adminLoginLimiter,
+  adminSentinelBatchLimiter,
+  adminSentinelReportLimiter,
+} from '../../middlewares/rate-limit.middleware.js';
 import { loginValidation, refreshTokenValidation } from '../auth/auth.validation.js';
 import {
   listUsersValidation,
@@ -31,6 +35,11 @@ import {
   applyReportActionValidation,
   resolveReportValidation,
   reopenReportValidation,
+  assessSentinelValidation,
+  applySentinelValidation,
+  batchScanSentinelValidation,
+  batchApplySentinelValidation,
+  resolveSentinelClusterValidation,
   adminAnalyticsValidation,
   listAdminNotificationsValidation,
   readAllAdminNotificationsValidation,
@@ -92,12 +101,42 @@ router.get('/revenue/summary', validate(revenueSummaryValidation), adminControll
 // Safety & Reports Moderation
 router.get('/reports', validate(listReportsValidation), adminController.getReports);
 router.get('/reports/stats', validate(reportStatsValidation), adminController.getReportStats);
+router.post(
+  '/reports/sentinel-batch-scan',
+  adminSentinelBatchLimiter,
+  validate(batchScanSentinelValidation),
+  adminController.batchScanReportsWithSentinel
+);
+router.post(
+  '/reports/sentinel-batch-apply',
+  adminSentinelBatchLimiter,
+  validate(batchApplySentinelValidation),
+  adminController.batchApplySentinelRecommendations
+);
+router.post(
+  '/reports/sentinel-cluster-resolve',
+  adminSentinelReportLimiter,
+  validate(resolveSentinelClusterValidation),
+  adminController.resolveSentinelCluster
+);
 router.get('/reports/:id', validate(reportIdParamValidation), adminController.getReportDetail);
 router.patch('/reports/:id/review', validate(reviewReportValidation), adminController.reviewReport);
 router.patch('/reports/:id/severity', validate(updateReportSeverityValidation), adminController.updateReportSeverity);
 router.post('/reports/:id/action', validate(applyReportActionValidation), adminController.applyReportAction);
 router.patch('/reports/:id/resolve', validate(resolveReportValidation), adminController.resolveReport);
 router.patch('/reports/:id/reopen', validate(reopenReportValidation), adminController.reopenReport);
+router.post(
+  '/reports/:id/sentinel-assess',
+  adminSentinelReportLimiter,
+  validate(assessSentinelValidation),
+  adminController.assessReportWithSentinel
+);
+router.post(
+  '/reports/:id/sentinel-apply',
+  adminSentinelReportLimiter,
+  validate(applySentinelValidation),
+  adminController.applySentinelRecommendation
+);
 
 // System Analytics & Dashboard
 router.get('/analytics', validate(adminAnalyticsValidation), adminController.getAnalytics);

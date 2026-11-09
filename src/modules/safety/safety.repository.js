@@ -218,6 +218,7 @@ class SafetyRepository {
    */
   async findReportPage({
     status,
+    statuses,
     severity,
     category,
     targetType,
@@ -246,6 +247,7 @@ class SafetyRepository {
 
     const match = {
       ...(status ? { status } : {}),
+      ...(statuses && Array.isArray(statuses) && statuses.length > 0 ? { status: { $in: statuses } } : {}),
       ...(severity ? { severity } : {}),
       ...(category ? { category } : {}),
       ...(targetType ? { targetType } : {}),
@@ -327,6 +329,89 @@ class SafetyRepository {
 
   async countReportsFiledBy(reporterId) {
     return Report.countDocuments({ reporterId });
+  }
+
+  /**
+   * Resolved reports with a sanction of their own against a user (the service counts strikes from them).
+   * Excludes actions that were propagated from another report or are provisional.
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @param {string|mongoose.Types.ObjectId} [excludeReportId]
+   * @returns {Promise<Array<{ _id, targetMessageId, targetPlaydateId }>>}
+   */
+  async findPriorSanctionedReports(reportedUserId, excludeReportId = null) {
+    const query = {
+      reportedUserId,
+      status: REPORT_STATUS.RESOLVED,
+      actions: {
+        $elemMatch: {
+          propagatedFrom: null,
+          isProvisional: { $ne: true },
+        },
+      },
+    };
+    if (excludeReportId) {
+      query._id = { $ne: excludeReportId };
+    }
+    return Report.find(query).select('_id targetMessageId targetPlaydateId').lean();
+  }
+
+  /**
+   * Find reports against a user within a specific time window
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @param {Date} windowStart
+   * @param {Date} windowEnd
+   */
+  async findReportsAgainstInWindow(reportedUserId, windowStart, windowEnd) {
+    return Report.find({
+      reportedUserId,
+      createdAt: { $gte: windowStart, $lte: windowEnd },
+    })
+      .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
+      .lean();
+  }
+
+  /**
+   * Find open reports against a user
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @param {string[]} [openStatuses]
+   */
+  async findOpenReportsAgainst(reportedUserId, openStatuses = REPORT_OPEN_STATUSES) {
+    return Report.find({
+      reportedUserId,
+      status: { $in: openStatuses },
+    })
+      .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
+      .lean();
+  }
+
+  /**
+   * Count report outcomes for a reporter
+   * @param {string|mongoose.Types.ObjectId} reporterId
+   */
+  async countReporterOutcomes(reporterId) {
+    const [totalSubmitted, confirmedCount, dismissedCount] = await Promise.all([
+      Report.countDocuments({ reporterId }),
+      Report.countDocuments({ reporterId, status: REPORT_STATUS.RESOLVED }),
+      Report.countDocuments({ reporterId, status: REPORT_STATUS.DISMISSED }),
+    ]);
+    return {
+      totalSubmitted,
+      confirmedCount,
+      dismissedCount,
+    };
+  }
+
+  /**
+   * Check if reported user currently has open reports with active temporary restriction
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   */
+  async hasOpenRestrictedReports(reportedUserId) {
+    const count = await Report.countDocuments({
+      reportedUserId,
+      status: { $in: REPORT_OPEN_STATUSES },
+      'sentinelAssessment.monitoring.temporaryRestriction.applied': true,
+    });
+    return count > 0;
   }
 
   async saveReport(report) {

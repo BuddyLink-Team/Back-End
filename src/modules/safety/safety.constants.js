@@ -68,6 +68,10 @@ export const REPORT_HISTORY_EVENT_TYPES = Object.freeze({
   SEVERITY_CHANGE: 'severity_change',
   ACTION_APPLIED: 'action_applied',
   REOPEN: 'reopen',
+  SENTINEL_ASSESSED: 'sentinel_assessed',
+  AUTO_SHIELDED: 'auto_shielded',
+  POLICY_OVERRIDDEN: 'policy_overridden',
+  ACTION_FAILED: 'action_failed',
 });
 
 // What an admin can apply from POST /admin/reports/:id/action (closing a report has its own endpoint)
@@ -108,6 +112,32 @@ export const REPORT_CATEGORY_NOTICES = Object.freeze({
   [REPORT_CATEGORIES.CHILD_SAFETY]: 'vi phạm quy tắc an toàn trẻ em',
   [REPORT_CATEGORIES.NO_SHOW]: 'không tham gia cuộc hẹn đã xác nhận',
   [REPORT_CATEGORIES.OTHER]: 'vi phạm Quy chuẩn Cộng đồng',
+});
+
+// Conclusion of the Sentinel AI on a report. Only a violation gets AI-recommended sanctions.
+export const SENTINEL_VERDICTS = Object.freeze({
+  VIOLATION: 'violation',
+  NO_VIOLATION: 'no_violation', // misunderstanding, false or retaliatory report
+  UNCLEAR: 'unclear', // not enough to conclude (also a failed AI call or an assessment made before verdicts)
+});
+
+// Vietnamese labels of sanctions, used in notes and history entries the admin reads
+export const REPORT_ACTION_LABELS = Object.freeze({
+  [REPORT_ACTION_TYPES.WARN]: 'cảnh cáo',
+  [REPORT_ACTION_TYPES.DELETE_MESSAGE]: 'xóa tin nhắn',
+  [REPORT_ACTION_TYPES.CANCEL_PLAYDATE]: 'hủy buổi hẹn',
+  [REPORT_ACTION_TYPES.SUSPEND]: 'tạm đình chỉ tài khoản',
+  [REPORT_ACTION_TYPES.BAN]: 'khóa vĩnh viễn',
+});
+
+/** "warn, suspend" -> "cảnh cáo, tạm đình chỉ tài khoản" */
+export const toActionLabels = (types = []) =>
+  types.map((type) => REPORT_ACTION_LABELS[type] || type).join(', ');
+
+export const RISK_LEVEL_LABELS = Object.freeze({
+  high: 'CAO',
+  medium: 'TRUNG BÌNH',
+  low: 'THẤP',
 });
 
 export const REPORT_LIMITS = Object.freeze({

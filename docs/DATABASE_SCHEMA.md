@@ -559,6 +559,7 @@ interface IUser {
   // Quản lý trạng thái tài khoản bởi Admin (Mục 15.1)
   isActive: Boolean;
   strikeCount: number; // Số lần bị cảnh cáo từ báo cáo vi phạm (Default: 0)
+  messagingRestrictedUntil?: Date | null; // Hạn chế nhắn tin tạm thời (Auto-Shield / Temporary Restriction tối đa 72h)
   suspensionUntil?: Date | null; // Hết hạn đình chỉ: tự mở lại khi đăng nhập hoặc bởi job 15 phút/lần
   banReason?: string | null; // Có giá trị khi tài khoản bị khóa vĩnh viễn từ báo cáo vi phạm
   createdAt: Date;
@@ -1182,21 +1183,51 @@ interface IReport {
   assignedTo?: ObjectId | null; // Tham chiếu users._id của Admin đang xử lý
   resolution?: "action_taken" | "no_action" | "dismissed" | null;
   adminNotes?: string; // Ghi chú xử lý của Admin
-  resolvedBy?: ObjectId; // Tham chiếu users._id của Admin xử lý
+  resolvedBy?: ObjectId | null; // Tham chiếu users._id của Admin xử lý (null nếu do Sentinel AI tự động)
   resolvedAt?: Date;
   actions: Array<{
     type: "warn" | "delete_message" | "cancel_playdate" | "suspend" | "ban";
     params: { durationDays: number | null; reason: string };
-    performedBy: ObjectId; // Tham chiếu users._id của Admin
+    performedBy: ObjectId | null; // Tham chiếu users._id của Admin (null nếu do Sentinel AI)
+    actorType: "admin" | "system"; // Nguồn thi hành chế tài
+    propagatedFrom?: ObjectId | null; // Tham chiếu report._id gốc nếu là bản copy đồng bộ
+    isProvisional?: boolean; // True nếu là chế tài tạm thời do Auto-Shield tạo khi chờ Admin duyệt
     performedAt: Date;
     note: string;
+    isPolicyOverride?: boolean;
+    overrideReason?: string;
+    policyClause?: string;
   }>;
+  // Đánh giá tự động từ Sentinel AI
+  sentinelAssessment?: {
+    summary: string;
+    violationType: string;
+    severityRecommendation: "low" | "medium" | "high" | "critical";
+    policySuggestedSeverity: "low" | "medium" | "high" | "critical";
+    confidenceScore: number;
+    strikeCount: number;
+    policyClause: string;
+    isFallback: boolean;
+    autoResolveEligible: boolean;
+    verdict: "violation" | "no_violation" | "unclear" | null; // Kết luận của AI; chỉ "violation" mới có chế tài AI đề xuất
+    // Xác thực chéo: số phụ huynh khác nhau báo cáo cùng loại vi phạm (có bằng chứng) trong windowDays ngày
+    corroboration: { isCorroborated: boolean; reporterCount: number; requiredReporters: number; incidentCount: number; windowDays: number };
+    evidenceAnalysis: { isValid: boolean | null; notes: string };
+    recommendedSanctions: Array<{ type: string; durationDays?: number | null; reason: string }>;
+    draftNotes: { adminNote: string; reportedUserNotice: string; reporterFeedback: string };
+    assessedAt: Date;
+    assessedByModel: string | null; // Model thật trả lời (null khi AI fallback)
+    autoShieldApplied: boolean;
+    autoResolved: boolean;
+    monitoring: object;
+  } | null;
   // Nhật ký kiểm duyệt: mọi thao tác và đổi trạng thái
   history: Array<{
-    eventType: "status_change" | "claim" | "takeover" | "severity_change" | "action_applied" | "reopen";
+    eventType: "status_change" | "claim" | "takeover" | "severity_change" | "action_applied" | "reopen" | "sentinel_assessed" | "auto_shielded" | "policy_overridden" | "action_failed";
     fromStatus: string | null;
     toStatus: string | null;
-    by: ObjectId; // Tham chiếu users._id của Admin
+    by: ObjectId | null; // Tham chiếu users._id của Admin (null nếu do Sentinel AI)
+    actorType: "admin" | "system";
     at: Date;
     note: string;
     metadata: object | null;

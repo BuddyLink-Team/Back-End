@@ -1,9 +1,11 @@
 import safetyRepository from './safety.repository.js';
 import parentService from '../parent/parent.service.js';
 import AppError from '../../shared/exceptions/app-error.js';
+import logger from '../../shared/logger/index.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import SafetyDTO from './safety.dto.js';
 import { emitSafetyEvent, SAFETY_EVENTS } from './safety.events.js';
+import { incidentKeyOf } from './enforcement-metrics.rules.js';
 import {
   CATEGORY_TO_SEVERITY,
   REPORT_TARGET_TYPES,
@@ -249,6 +251,19 @@ class SafetyService {
       category: report.category,
     });
 
+    // Background Auto-Triage & Autonomous Shield via BuddyLink Sentinel, then bring the other open
+    // reports on the same user up to date (corroboration, velocity...) since this one changes their inputs
+    import('./sentinel.service.js')
+      .then(async ({ default: sentinelService }) => {
+        try {
+          await sentinelService.assessReport(report, null, { allowAutoEnforce: true });
+        } catch (err) {
+          logger.warn(`[Sentinel] Background assess failed report=${report._id}: ${err.code || err.message}`);
+        }
+        await sentinelService.refreshRuleSnapshots(report.reportedUserId);
+      })
+      .catch((err) => logger.warn(`[Sentinel] Rule snapshots refresh failed report=${report._id}: ${err.message}`));
+
     return SafetyDTO.toReportResponse(report);
   }
 
@@ -340,6 +355,37 @@ class SafetyService {
 
   async countReportsFiledBy(parentId) {
     return safetyRepository.countReportsFiledBy(parentId);
+  }
+
+  /**
+   * Strikes of a user: one per sanctioned incident, so several reports about the same playdate or
+   * message (or closed together as one corroborated case) count once.
+   * @param {string} parentId
+   * @param {Object|string} [excludeReport] - Report being handled (its incident is not a prior strike), or its id
+   * @returns {Promise<number>}
+   */
+  async countUserPriorSanctions(parentId, excludeReport = null) {
+    const excludeId = excludeReport?._id ?? excludeReport;
+    const reports = await safetyRepository.findPriorSanctionedReports(parentId, excludeId);
+    const incidents = new Set(reports.map(incidentKeyOf));
+    if (excludeReport?._id) incidents.delete(incidentKeyOf(excludeReport));
+    return incidents.size;
+  }
+
+  async hasOpenRestrictedReports(reportedUserId) {
+    return safetyRepository.hasOpenRestrictedReports(reportedUserId);
+  }
+
+  async findReportsAgainstInWindow(reportedUserId, windowStart, windowEnd) {
+    return safetyRepository.findReportsAgainstInWindow(reportedUserId, windowStart, windowEnd);
+  }
+
+  async findOpenReportsAgainst(reportedUserId, openStatuses) {
+    return safetyRepository.findOpenReportsAgainst(reportedUserId, openStatuses);
+  }
+
+  async countReporterOutcomes(reporterId) {
+    return safetyRepository.countReporterOutcomes(reporterId);
   }
 
   async saveReport(report) {

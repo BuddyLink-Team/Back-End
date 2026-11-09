@@ -47,6 +47,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    messagingRestrictedUntil: {
+      type: Date,
+      default: null,
+    },
     deletedAt: {
       type: Date,
       default: null,

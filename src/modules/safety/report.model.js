@@ -23,7 +23,21 @@ const reportActionSchema = new mongoose.Schema(
     performedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      default: null,
+    },
+    actorType: {
+      type: String,
+      enum: ['admin', 'system'],
+      default: 'admin',
+    },
+    propagatedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Report',
+      default: null,
+    },
+    isProvisional: {
+      type: Boolean,
+      default: false,
     },
     performedAt: {
       type: Date,
@@ -33,8 +47,96 @@ const reportActionSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    isPolicyOverride: {
+      type: Boolean,
+      default: false,
+    },
+    overrideReason: {
+      type: String,
+      default: '',
+    },
+    policyClause: {
+      type: String,
+      default: '',
+    },
   },
   { _id: true }
+);
+
+const sentinelAssessmentSchema = new mongoose.Schema(
+  {
+    summary: { type: String, default: '' },
+    violationType: { type: String, default: '' },
+    severityRecommendation: {
+      type: String,
+      enum: Object.values(REPORT_SEVERITY),
+      default: null,
+    },
+    policySuggestedSeverity: {
+      type: String,
+      enum: Object.values(REPORT_SEVERITY),
+      default: null,
+    },
+    confidenceScore: { type: Number, min: 0, max: 100, default: null },
+    strikeCount: { type: Number, default: 1 },
+    policyClause: { type: String, default: '' },
+    isFallback: { type: Boolean, default: false },
+    autoResolveEligible: { type: Boolean, default: false },
+    // AI conclusion: violation | no_violation | unclear (null on assessments made before it existed)
+    verdict: { type: String, enum: ['violation', 'no_violation', 'unclear', null], default: null },
+    // Distinct parents reporting the same violation (with evidence) within windowDays
+    corroboration: {
+      isCorroborated: { type: Boolean, default: false },
+      reporterCount: { type: Number, default: 0 },
+      requiredReporters: { type: Number, default: 0 },
+      incidentCount: { type: Number, default: 0 },
+      windowDays: { type: Number, default: 0 },
+    },
+    evidenceAnalysis: {
+      isValid: { type: Boolean, default: null },
+      notes: { type: String, default: '' },
+    },
+    recommendedSanctions: [
+      {
+        type: { type: String, enum: Object.values(REPORT_ACTION_TYPES) },
+        durationDays: { type: Number, default: null },
+        reason: { type: String, default: '' },
+      },
+    ],
+    draftNotes: {
+      adminNote: { type: String, default: '' },
+      reportedUserNotice: { type: String, default: '' },
+      reporterFeedback: { type: String, default: '' },
+    },
+    assessedAt: { type: Date, default: null },
+    assessedByModel: { type: String, default: null },
+    autoShieldApplied: { type: Boolean, default: false },
+    autoResolved: { type: Boolean, default: false },
+    monitoring: {
+      reportsReceived: { type: Number, default: 1 },
+      timeWindow: { type: String, default: '30 phút' },
+      totalOpenAgainstUser: { type: Number, default: 1 },
+      uniqueReportersCount: { type: Number, default: 1 },
+      riskLevel: { type: String, enum: ['low', 'medium', 'high'], default: 'low' },
+      reporterCredibility: {
+        level: { type: String, enum: ['high', 'normal', 'low'], default: 'high' },
+        label: { type: String, default: '' },
+        totalSubmitted: { type: Number, default: 1 },
+        confirmedCount: { type: Number, default: 0 },
+        dismissedCount: { type: Number, default: 0 },
+        coordinatedSuspected: { type: Boolean, default: false },
+        isIndependentIncidents: { type: Boolean, default: true },
+        incidentPattern: { type: String, default: '' },
+      },
+      investigationSteps: [{ type: String }],
+      temporaryRestriction: {
+        applied: { type: Boolean, default: false },
+        badgeLabel: { type: String, default: 'Temporary restriction' },
+        steps: [{ type: String }],
+      },
+    },
+  },
+  { _id: false }
 );
 
 const reportHistorySchema = new mongoose.Schema(
@@ -49,7 +151,12 @@ const reportHistorySchema = new mongoose.Schema(
     by: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      default: null,
+    },
+    actorType: {
+      type: String,
+      enum: ['admin', 'system'],
+      default: 'admin',
     },
     at: {
       type: Date,
@@ -153,6 +260,10 @@ const reportSchema = new mongoose.Schema(
     actions: {
       type: [reportActionSchema],
       default: [],
+    },
+    sentinelAssessment: {
+      type: sentinelAssessmentSchema,
+      default: null,
     },
     history: {
       type: [reportHistorySchema],

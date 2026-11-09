@@ -391,6 +391,82 @@ class AdminController {
   }
 
   /**
+   * POST /api/v1/admin/reports/:id/sentinel-assess
+   */
+  async assessReportWithSentinel(req, res, next) {
+    try {
+      const data = await adminService.assessReportWithSentinel(
+        req.user?._id || req.userId,
+        req.params.id,
+        req.body || {}
+      );
+      return successResponse(res, data, 'Report assessed by Sentinel successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/admin/reports/:id/sentinel-apply
+   */
+  async applySentinelRecommendation(req, res, next) {
+    try {
+      const data = await adminService.applySentinelRecommendation(
+        req.user?._id || req.userId,
+        req.params.id,
+        { note: req.body?.note }
+      );
+      return successResponse(res, data, 'Sentinel recommendations applied successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/admin/reports/sentinel-batch-scan
+   */
+  async batchScanReportsWithSentinel(req, res, next) {
+    try {
+      const data = await adminService.batchScanReportsWithSentinel(
+        req.user?._id || req.userId
+      );
+      return successResponse(res, data, 'Batch Sentinel scan completed successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/admin/reports/sentinel-batch-apply
+   */
+  async batchApplySentinelRecommendations(req, res, next) {
+    try {
+      const data = await adminService.batchApplySentinelRecommendations(
+        req.user?._id || req.userId,
+        req.body || {}
+      );
+      return successResponse(res, data, 'Batch Sentinel auto-execution completed successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/admin/reports/sentinel-cluster-resolve
+   */
+  async resolveSentinelCluster(req, res, next) {
+    try {
+      const data = await adminService.resolveSentinelCluster(req.user?._id || req.userId, {
+        reportIds: req.body.reportIds,
+        note: req.body.note,
+      });
+      return successResponse(res, data, 'Sentinel cluster handled successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
    * GET /api/v1/admin/analytics
    */
   async getAnalytics(req, res, next) {
