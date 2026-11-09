@@ -69,7 +69,7 @@ Web admin (Vercel) ──────► API admin (Render) ──────�
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | 2 secret của API phụ huynh |
 | `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN` | `15m`, `7d` |
 | `AI_PROVIDER`, `GEMINI_API_KEY` | `gemini`, key Gemini dùng cho Chat AI Assistant |
-| `SENTINEL_GEMINI_API_KEY` | Key Gemini riêng biệt, bắt buộc cho hệ thống Sentinel AI Moderation (không fallback) |
+| `SENTINEL_GEMINI_API_KEY` | Key Gemini riêng của Sentinel AI (không dùng chung, không fallback sang `GEMINI_API_KEY`). Ở service này nó thẩm định nền mỗi báo cáo mới (tự xử lý / hạn chế nhắn tin theo luật). **Đặt cả ở API admin** (mục 4) |
 | `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | `gemini-3.5-flash`, `gemini-3.5-flash-lite` (chạy `npm run ai:check` trên server để kiểm tra key và tên model) |
 | `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` | key PayOS |
 | `PAYOS_RETURN_URL`, `PAYOS_CANCEL_URL` | `<CLIENT_URL>/payment/success`, `<CLIENT_URL>/payment/cancel` |
@@ -113,6 +113,8 @@ Deploy xong, mở `https://<api-phụ-huynh>.onrender.com/api/v1`. Nếu thấy 
 | `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN` | `15m`, `7d` (có thể ngắn hơn cho admin) |
 | `APP_TIMEZONE` | `Asia/Ho_Chi_Minh` |
 | `STORAGE_*` | như API phụ huynh (admin đổi avatar qua `/user/me/avatar`) |
+| `SENTINEL_GEMINI_API_KEY` | **giống** API phụ huynh. Dùng cho Phân tích lại, Quét hàng loạt, Áp dụng đề xuất, Xử lý cụm; thiếu thì các nút này trả `503 SENTINEL_API_KEY_REQUIRED` |
+| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | **giống** API phụ huynh (Sentinel dùng cùng model) |
 
 - Service này nghe trên biến `PORT` do Render cấp, **không cần** đặt `ADMIN_PORT`.
 - Khi thêm tính năng admin dùng dịch vụ khác (gửi mail, PayOS, …), nhớ thêm env tương ứng vào service này.
