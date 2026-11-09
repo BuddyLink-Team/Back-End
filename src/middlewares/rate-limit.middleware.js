@@ -61,11 +61,18 @@ export const aiMessageLimiter = buildLimiter({
   code: 'AI_RATE_LIMITED',
 });
 
-// Admin Sentinel batch scan and assessment operations (10 requests per 15 minutes per admin)
-export const adminSentinelLimiter = buildLimiter({
+// Sentinel batch scan / batch apply: each call runs up to 20 model requests (per admin)
+export const adminSentinelBatchLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  message: 'Quá nhiều yêu cầu kiểm duyệt Sentinel AI, vui lòng thử lại sau 15 phút.',
-  keyGenerator: (req) => `sentinel:${req.user?._id?.toString() || req.userId || req.ip}`,
-  code: 'TOO_MANY_REQUESTS',
+  message: 'Too many Sentinel batch requests, please try again later.',
+  keyGenerator: (req) => `sentinel-batch:${req.userId || req.ip}`,
+});
+
+// Sentinel assess / apply on a single report: loose cap so day-to-day moderation is never blocked
+export const adminSentinelReportLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: 'Too many Sentinel requests, please try again later.',
+  keyGenerator: (req) => `sentinel-report:${req.userId || req.ip}`,
 });

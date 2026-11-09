@@ -5,6 +5,7 @@ import authService from '../auth/auth.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import sentinelService from '../safety/sentinel.service.js';
+import sanctionExecutorService from '../safety/sanction-executor.service.js';
 import { calculatePolicySanction, checkActionPolicyCompliance } from '../safety/moderation-policy.rules.js';
 import chatService from '../chat/chat.service.js';
 import notificationService from '../notification/notification.service.js';
@@ -36,6 +37,9 @@ import {
   REPORT_STATUS,
   REPORT_TARGET_TYPES,
   OVERDUE_THRESHOLDS_HOURS,
+  REPORT_SEVERITY_WEIGHTS,
+  SENTINEL_VERDICTS,
+  toActionLabels,
 } from '../safety/safety.constants.js';
 import {
   AdminPlaydateDTO,
@@ -216,67 +220,35 @@ class AdminReportService {
       )
       .sort((a, b) => new Date(b.performedAt) - new Date(a.performedAt));
 
-    const priorSanctionsCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report._id);
-    const policyGuidance = report.sentinelAssessment?.assessedAt
-      ? calculatePolicySanction(report.category, report.severity, priorSanctionsCount, report.targetType)
+    // An open report shows the rules applied to the data of now (new reports, strikes, severity):
+    // the AI text stays from its assessment, the numbers and the recommendation are recomputed.
+    // A closed report keeps what was decided.
+    const isOpen = REPORT_OPEN_STATUSES.includes(report.status);
+    const ruleSnapshot = isOpen
+      ? await sentinelService.buildRuleSnapshot(report).catch((err) => {
+          logger.warn(`[AdminReport] Rule snapshot failed for report=${id}: ${err.message}`);
+          return null;
+        })
       : null;
 
-    if (report.sentinelAssessment?.assessedAt && !report.sentinelAssessment.monitoring?.investigationSteps?.length) {
-      const monitoringMetrics = await safetyService.getEnforcementMonitoringMetrics(report);
-      const reportsReceivedCount = Math.max(
-        monitoringMetrics.reportsIn30MinCount || 1,
-        monitoringMetrics.openAgainstUserCount || 1
-      );
-      const isHighRisk =
-        Boolean(report.sentinelAssessment.autoShieldApplied) ||
-        report.severity === REPORT_SEVERITY.CRITICAL ||
-        report.severity === REPORT_SEVERITY.HIGH ||
-        reportsReceivedCount >= 3;
-      const riskLevel = isHighRisk ? 'high' : reportsReceivedCount === 2 ? 'medium' : 'low';
-      const evidenceNote =
-        report.sentinelAssessment.evidenceAnalysis?.notes ||
-        (report.targetMessageId
-          ? 'Đã kiểm tra ngữ cảnh các tin nhắn liên quan quanh thời điểm báo cáo.'
-          : 'Đã kiểm tra hồ sơ người dùng và nội dung mô tả sự việc.');
-
-      report.sentinelAssessment.monitoring = {
-        reportsReceived: reportsReceivedCount,
-        timeWindow: '30 min',
-        totalOpenAgainstUser: monitoringMetrics.openAgainstUserCount,
-        uniqueReportersCount: monitoringMetrics.uniqueReportersCount,
-        riskLevel,
-        reporterCredibility: {
-          level: monitoringMetrics.credibilityLevel,
-          label: monitoringMetrics.credibilityLabel,
-          totalSubmitted: monitoringMetrics.reporterTotalSubmitted,
-          confirmedCount: monitoringMetrics.reporterConfirmedCount,
-          dismissedCount: monitoringMetrics.reporterDismissedCount,
-          coordinatedSuspected: monitoringMetrics.coordinatedSuspected,
-          isIndependentIncidents: monitoringMetrics.isIndependentIncidents,
-          incidentPattern: monitoringMetrics.incidentPattern,
-        },
-        investigationSteps: [
-          `Phân loại nội dung report: Danh mục "${report.category}" — ${report.sentinelAssessment.violationType || 'Vi phạm quy chuẩn giao tiếp'}.`,
-          `Kiểm tra các tin nhắn liên quan: ${evidenceNote}`,
-          `Xác định các report có cùng một sự việc hay là những sự việc độc lập: ${monitoringMetrics.incidentPattern}`,
-          `Kiểm tra lịch sử vi phạm đã được xác nhận: Tài khoản bị báo cáo có ${priorSanctionsCount} lần kỷ luật đã xác nhận trước đó (Đang xét mức Strike ${policyGuidance?.strikeCount || 1}/3).`,
-          `Đánh giá khả năng report phối hợp hoặc report giả: ${monitoringMetrics.credibilityLabel} (Người báo cáo đã gửi ${monitoringMetrics.reporterTotalSubmitted} report, ${monitoringMetrics.reporterDismissedCount} lần bị bác bỏ).`,
-        ],
-        temporaryRestriction: {
-          applied: isHighRisk,
-          badgeLabel: 'Temporary restriction',
-          steps: [
-            'Tạm hạn chế khả năng gửi tin nhắn mới.',
-            'Gửi cảnh báo đến Admin.',
-            'Tạo một bản phân tích để Admin xem xét.',
-            'Chỉ khôi phục hoặc áp dụng hình phạt chính thức sau khi có đủ căn cứ.',
-          ],
-        },
-      };
+    let policyGuidance = ruleSnapshot?.policyResult || null;
+    if (!policyGuidance && report.sentinelAssessment?.assessedAt) {
+      const priorSanctionsCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report);
+      policyGuidance = calculatePolicySanction(report.category, report.severity, priorSanctionsCount, report.targetType);
     }
+    const reportView = ruleSnapshot
+      ? {
+          ...report,
+          sentinelAssessment: {
+            ...report.sentinelAssessment,
+            ...ruleSnapshot.ruleFields,
+            newReportsSinceAssessment: ruleSnapshot.newReportsSinceAssessment,
+          },
+        }
+      : report;
 
     return AdminReportDetailDTO.toResponse({
-      report,
+      report: reportView,
       reporterParent,
       reporterUser: userById.get(String(reporterParent?.userId)),
       reportedParent,
@@ -336,6 +308,19 @@ class AdminReportService {
   }
 
   /**
+   * Bring the stored rule numbers of the user's open reports up to date (strikes, corroboration,
+   * recommendation) after a change, so lists and overviews never show stale ones. Never fails the action.
+   * @private
+   */
+  async _refreshRuleSnapshots(reportedUserId) {
+    try {
+      await sentinelService.refreshRuleSnapshots(reportedUserId);
+    } catch (err) {
+      logger.warn(`[AdminReport] Rule snapshots refresh failed for user=${reportedUserId}: ${err.message}`);
+    }
+  }
+
+  /**
    * Update report severity during review
    * @param {string} adminUserId
    * @param {string} id
@@ -361,6 +346,7 @@ class AdminReportService {
     });
 
     await safetyService.saveReport(report);
+    await this._refreshRuleSnapshots(report.reportedUserId);
     return this.getReportDetail(id);
   }
 
@@ -389,7 +375,7 @@ class AdminReportService {
     this._assertActionTarget(report, type);
 
     const hasAssessment = Boolean(report.sentinelAssessment?.assessedAt);
-    const priorCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report._id);
+    const priorCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report);
     const policyResult = hasAssessment
       ? calculatePolicySanction(report.category, report.severity, priorCount, report.targetType)
       : null;
@@ -397,7 +383,7 @@ class AdminReportService {
 
     if (requiredOverride && !isPolicyOverride) {
       throw new AppError(
-        `Chế tài "${type}" không nằm trong khung quy chuẩn cho vi phạm ${report.category} (${report.severity}). Cần tích chọn "Áp dụng ngoại lệ chính sách (Policy Override)" và giải trình lý do (ít nhất 20 ký tự).`,
+        `Chế tài "${toActionLabels([type])}" không nằm trong khung quy chuẩn cho vi phạm này. Cần tích chọn "Áp dụng ngoại lệ chính sách" và giải trình lý do (ít nhất 20 ký tự).`,
         400,
         'POLICY_OVERRIDE_REQUIRED'
       );
@@ -446,8 +432,8 @@ class AdminReportService {
       actorType: 'admin',
       at: new Date(),
       note: isPolicyOverride
-        ? `Đã thi hành chế tài (Ngoại lệ chính sách): ${type} - Lý do: ${overrideReason}`
-        : `Đã thi hành chế tài theo quy chuẩn: ${type}`,
+        ? `Đã thi hành chế tài (ngoại lệ chính sách): ${toActionLabels([type])} — Lý do: ${overrideReason}`
+        : `Đã thi hành chế tài theo quy chuẩn: ${toActionLabels([type])}`,
       metadata: { actionType: type, durationDays: durationValue, isPolicyOverride, overrideReason },
     });
 
@@ -459,12 +445,13 @@ class AdminReportService {
         by: adminUserId,
         actorType: 'admin',
         at: new Date(),
-        note: `Ngoại lệ chính sách cho "${type}": ${overrideReason}`,
+        note: `Ngoại lệ chính sách cho "${toActionLabels([type])}": ${overrideReason}`,
         metadata: { actionType: type, overrideReason },
       });
     }
 
     await safetyService.saveReport(report);
+    await this._refreshRuleSnapshots(report.reportedUserId);
     return this.getReportDetail(id);
   }
 
@@ -500,11 +487,17 @@ class AdminReportService {
   }
 
   /**
-   * 1-Click Approve Sentinel recommendations
+   * Apply the recommended sanctions still missing (recommendation of now). Never closes the report:
+   * the admin concludes it from the drawer, with notes and related reports.
+   * Every sanction is checked first: if one cannot run, none runs. A sanction with nothing to act on
+   * (cancelling a playdate already held) is skipped as not applicable, not as a failure.
+   * If a recommended sanction fails, an ACTION_FAILED entry is added to the history.
    * @param {string} adminUserId
    * @param {string} id
+   * @param {{ note?: string }} [options] - Admin's approval note, kept in the audit log
+   * @returns {Promise<Object>} Report detail, with `sentinelApplyResult: { applied, failed, notApplicable }`
    */
-  async applySentinelRecommendation(adminUserId, id) {
+  async applySentinelRecommendation(adminUserId, id, { note = '' } = {}) {
     const report = await this._getReportDocOrFail(id);
 
     if (REPORT_CLOSED_STATUSES.includes(report.status)) {
@@ -550,64 +543,84 @@ class AdminReportService {
 
     await safetyService.saveReport(currentReport);
 
-    const recommended = assessment.recommendedSanctions || [];
-    for (const sanction of recommended) {
-      if (sanction.type === REPORT_ACTION_TYPES.DELETE_MESSAGE && currentReport.targetType !== REPORT_TARGET_TYPES.MESSAGE) {
-        continue;
-      }
-      if (sanction.type === REPORT_ACTION_TYPES.CANCEL_PLAYDATE && currentReport.targetType !== REPORT_TARGET_TYPES.PLAYDATE) {
-        continue;
-      }
-      const alreadyApplied = (currentReport.actions || []).some((a) => a.type === sanction.type);
-      if (!alreadyApplied && REPORT_SANCTION_TYPES.includes(sanction.type)) {
+    const approvalNote = (note || '').trim();
+    // Recommendation of now (current severity and strikes), never the one stored at assessment time
+    const liveSnapshot = await sentinelService.buildRuleSnapshot(currentReport).catch(() => null);
+    // AI recommendation of now: none when the AI concluded there is no violation (or could not conclude)
+    const recommended = liveSnapshot?.ruleFields?.recommendedSanctions ?? assessment.recommendedSanctions ?? [];
+    const policyClause = liveSnapshot?.policyResult?.clause || assessment.policyClause;
+    const pending = recommended.filter(
+      (sanction) =>
+        REPORT_SANCTION_TYPES.includes(sanction.type) &&
+        !(currentReport.actions || []).some((a) => a.type === sanction.type)
+    );
+
+    // Check every sanction first: a sanction that cannot run blocks them all (no half-applied report),
+    // one with nothing to act on (a playdate already held) is skipped as not applicable
+    const reportedParent = await parentService.getParentById(currentReport.reportedUserId).catch(() => null);
+    const targetUser = reportedParent?.userId
+      ? await userService.getUserById(reportedParent.userId).catch(() => null)
+      : null;
+    const plan = await sanctionExecutorService.planSanctions({
+      report: currentReport,
+      targetUser,
+      actions: pending,
+    });
+
+    const appliedTypes = [];
+    const failed = plan.blockers.map((b) => ({
+      type: b.type,
+      code: b.code,
+      message: 'Không tìm thấy tài khoản bị báo cáo',
+    }));
+    const notApplicable = plan.notApplicable;
+
+    if (failed.length === 0) {
+      for (const sanction of plan.executable) {
         try {
           await this.applyReportAction(adminUserId, id, {
             type: sanction.type,
             durationDays: sanction.durationDays,
-            note: sanction.reason || assessment.draftNotes?.adminNote || `Thi hành theo đề xuất Sentinel (${assessment.policyClause})`,
+            note:
+              approvalNote ||
+              sanction.reason ||
+              assessment.draftNotes?.adminNote ||
+              `Thi hành theo đề xuất Sentinel (${policyClause})`,
             isPolicyOverride: false,
           });
+          appliedTypes.push(sanction.type);
         } catch (err) {
-          if (
-            err.code !== ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED &&
-            err.code !== ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND
-          ) {
-            currentReport.history.push({
-              eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
-              fromStatus: currentReport.status,
-              toStatus: currentReport.status,
-              by: adminUserId,
-              actorType: 'admin',
-              at: new Date(),
-              note: `ACTION_FAILED: Thất bại khi áp dụng ${sanction.type} (${err.message})`,
-              metadata: { actionType: sanction.type, error: err.message },
-            });
-            await safetyService.saveReport(currentReport);
+          if (err.code !== ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED) {
+            failed.push({ type: sanction.type, code: err.code || 'INTERNAL_ERROR', message: err.message });
           }
         }
       }
     }
 
-    const updatedDoc = await this._getReportDocOrFail(id);
-    const hasAccountSanction = (updatedDoc.actions || []).some((a) =>
-      REPORT_ACCOUNT_SANCTION_TYPES.includes(a.type)
-    );
-    let applyToRelatedReportIds = [];
-    if (hasAccountSanction) {
-      const otherReports = await safetyService.getOtherReportsAgainst(updatedDoc.reportedUserId, updatedDoc._id);
-      applyToRelatedReportIds = otherReports
-        .filter((other) => REPORT_OPEN_STATUSES.includes(other.status))
-        .map((other) => other._id.toString());
+    if (failed.length > 0) {
+      // Reload: applyReportAction saved newer versions of the report
+      const freshDoc = await this._getReportDocOrFail(id);
+      freshDoc.history.push({
+        eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_FAILED,
+        fromStatus: freshDoc.status,
+        toStatus: freshDoc.status,
+        by: adminUserId,
+        actorType: 'admin',
+        at: new Date(),
+        note: `Không thể thi hành đủ chế tài theo đề xuất Sentinel (${toActionLabels(
+          failed.map((f) => f.type)
+        )}) — báo cáo vẫn mở để Admin xử lý tiếp`,
+        metadata: { appliedActions: appliedTypes, failedActions: failed, notApplicable },
+      });
+      await safetyService.saveReport(freshDoc);
+      const detail = await this.getReportDetail(id);
+      return { ...detail, sentinelApplyResult: { applied: appliedTypes, failed, notApplicable } };
     }
 
-    return this.resolveReport(adminUserId, id, {
-      status: REPORT_STATUS.RESOLVED,
-      resolution: (updatedDoc.actions || []).length > 0
-        ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN
-        : REPORT_RESOLUTION_TYPES.NO_ACTION,
-      adminNotes: assessment.draftNotes?.adminNote || `Đã giải quyết theo đề xuất của Sentinel AI (${assessment.policyClause}).`,
-      applyToRelatedReportIds,
-    });
+    // The report stays open: the admin concludes it (notes, related reports) from the drawer
+    await this._refreshRuleSnapshots(currentReport.reportedUserId);
+    const detail = await this.getReportDetail(id);
+    return { ...detail, sentinelApplyResult: { applied: appliedTypes, failed, notApplicable } };
   }
 
   /**
@@ -690,6 +703,192 @@ class AdminReportService {
   }
 
   /**
+   * Quick handling of a cluster (open reports against one parent) from the Sentinel overview,
+   * following the same rules as the drawer:
+   * - the AI found a violation: the recommended sanctions are applied ONCE, on the most severe report,
+   *   which is resolved; the other violation reports of the cluster are closed with it as the same case
+   *   (they get its warning / suspension / ban as propagated actions, never counted as extra strikes)
+   * - the AI found no violation: the report is dismissed, unless a sanction was already applied to it
+   * - left open for the admin: no assessment, an unclear verdict, child safety or critical,
+   *   a ban or a suspension over 7 days, or a sanction that failed
+   * @param {string} adminUserId
+   * @param {{ reportIds: string[], note?: string }} payload
+   * @returns {Promise<{ sanctionedReportId: string|null, applied: string[], resolved: string[], dismissed: string[], skipped: Array<{ id: string, reason: string }>, failed: Array<Object> }>}
+   */
+  async resolveSentinelCluster(adminUserId, { reportIds = [], note = '' } = {}) {
+    const approvalNote = (note || '').trim();
+    const docs = (await Promise.all([...new Set(reportIds)].map((id) => safetyService.getReportDocById(id)))).filter(
+      (doc) => doc && REPORT_OPEN_STATUSES.includes(doc.status)
+    );
+    if (docs.length === 0) {
+      throw new AppError('No open report in this cluster', 400, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
+    }
+    const reportedUserId = String(docs[0].reportedUserId);
+    if (docs.some((doc) => String(doc.reportedUserId) !== reportedUserId)) {
+      throw new AppError('A cluster only holds reports against one parent', 400, ADMIN_REPORT_ERRORS.CLUSTER_MIXED_USERS);
+    }
+
+    const result = { sanctionedReportId: null, applied: [], resolved: [], dismissed: [], skipped: [], failed: [] };
+    const skip = (doc, reason) => result.skipped.push({ id: doc._id.toString(), reason });
+
+    const violations = [];
+    const noViolations = [];
+    for (const doc of docs) {
+      const verdict = doc.sentinelAssessment?.assessedAt ? doc.sentinelAssessment.verdict : null;
+      if (!doc.sentinelAssessment?.assessedAt) {
+        skip(doc, 'Chưa có phân tích AI');
+      } else if (verdict === SENTINEL_VERDICTS.NO_VIOLATION) {
+        noViolations.push(doc);
+      } else if (verdict !== SENTINEL_VERDICTS.VIOLATION) {
+        skip(doc, 'AI chưa đủ căn cứ kết luận — cần Admin xem xét');
+      } else if (doc.category === REPORT_CATEGORIES.CHILD_SAFETY || doc.severity === REPORT_SEVERITY.CRITICAL) {
+        skip(doc, 'An toàn trẻ em hoặc mức nghiêm trọng — bắt buộc Admin xử lý trong chi tiết');
+      } else {
+        violations.push(doc);
+      }
+    }
+
+    if (violations.length > 0) {
+      // The most severe report carries the sanctions, the oldest one first on a tie
+      const [primary, ...others] = [...violations].sort(
+        (a, b) =>
+          (REPORT_SEVERITY_WEIGHTS[b.severity] || 0) - (REPORT_SEVERITY_WEIGHTS[a.severity] || 0) ||
+          new Date(a.createdAt) - new Date(b.createdAt)
+      );
+      const primaryId = primary._id.toString();
+      const snapshot = await sentinelService.buildRuleSnapshot(primary).catch(() => null);
+      const recommended = snapshot?.ruleFields?.recommendedSanctions || [];
+      const isHeavy = recommended.some(
+        (s) => s.type === REPORT_ACTION_TYPES.BAN || (s.type === REPORT_ACTION_TYPES.SUSPEND && (s.durationDays || 0) > 7)
+      );
+
+      if (isHeavy) {
+        violations.forEach((doc) => skip(doc, 'Đề xuất khóa tài khoản hoặc đình chỉ trên 7 ngày — cần Admin xác nhận trong chi tiết'));
+      } else {
+        const applyResult = await this.applySentinelRecommendation(adminUserId, primaryId, { note: approvalNote });
+        const { applied = [], failed = [] } = applyResult.sentinelApplyResult || {};
+        result.applied = applied;
+        if (failed.length > 0) {
+          result.failed.push({ id: primaryId, actions: failed });
+          others.forEach((doc) => skip(doc, 'Chế tài của cụm chưa thi hành được — xử lý cùng báo cáo chính'));
+        } else {
+          const primaryDoc = await this._getReportDocOrFail(primaryId);
+          const officialActions = (primaryDoc.actions || []).filter((action) => !action.isProvisional);
+          const notes =
+            approvalNote ||
+            primaryDoc.sentinelAssessment?.draftNotes?.adminNote ||
+            'Xử lý nhanh cụm báo cáo theo đề xuất của Sentinel AI.';
+          await this.resolveReport(adminUserId, primaryId, {
+            status: REPORT_STATUS.RESOLVED,
+            resolution: officialActions.length > 0 ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN : REPORT_RESOLUTION_TYPES.NO_ACTION,
+            adminNotes: notes,
+          });
+          result.sanctionedReportId = primaryId;
+          result.resolved.push(primaryId);
+
+          for (const other of others) {
+            const closed = await this._closeAsSameCase(adminUserId, other._id, primaryDoc, officialActions, notes);
+            if (closed) result.resolved.push(other._id.toString());
+            else skip(other, 'Báo cáo đã có chế tài riêng — cần Admin kết luận trong chi tiết');
+          }
+        }
+      }
+    }
+
+    for (const doc of noViolations) {
+      if ((doc.actions || []).some((action) => !action.isProvisional)) {
+        skip(doc, 'AI kết luận không vi phạm nhưng báo cáo đã có chế tài — cần Admin kết luận');
+        continue;
+      }
+      try {
+        await this.resolveReport(adminUserId, doc._id.toString(), {
+          status: REPORT_STATUS.DISMISSED,
+          resolution: REPORT_RESOLUTION_TYPES.DISMISSED,
+          adminNotes:
+            approvalNote ||
+            doc.sentinelAssessment?.draftNotes?.adminNote ||
+            'Bác bỏ theo kết luận của Sentinel AI: không có vi phạm.',
+        });
+        result.dismissed.push(doc._id.toString());
+      } catch (err) {
+        result.failed.push({ id: doc._id.toString(), code: err.code || 'INTERNAL_ERROR' });
+      }
+    }
+
+    await this._liftRestrictionIfNoneLeft(reportedUserId);
+    await this._refreshRuleSnapshots(reportedUserId);
+    return result;
+  }
+
+  /**
+   * Close a violation report of a cluster with the report that carried its sanctions: it gets the
+   * warning / suspension / ban as propagated actions (no new strike, nothing executed again).
+   * Sanctions tied to one target (a message, a playdate) stay on the report they belong to.
+   * A report that already has its own sanction is left to the admin.
+   * @private
+   * @returns {Promise<boolean>} Whether the report was closed
+   */
+  async _closeAsSameCase(adminUserId, reportId, sourceDoc, sourceActions, notes) {
+    const report = await this._getReportDocOrFail(reportId);
+    if (!REPORT_OPEN_STATUSES.includes(report.status)) return false;
+    if ((report.actions || []).some((action) => !action.isProvisional)) return false;
+
+    const fromStatus = report.status;
+    const shared = sourceActions.filter((action) =>
+      [REPORT_ACTION_TYPES.WARN, ...REPORT_ACCOUNT_SANCTION_TYPES].includes(action.type)
+    );
+    const now = new Date();
+    shared.forEach((action) => {
+      report.actions.push({
+        type: action.type,
+        params: action.params,
+        performedBy: adminUserId,
+        actorType: 'admin',
+        propagatedFrom: sourceDoc._id,
+        performedAt: now,
+        note: action.note,
+        policyClause: action.policyClause || '',
+      });
+    });
+    report.history.push({
+      eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
+      fromStatus,
+      toStatus: fromStatus,
+      by: adminUserId,
+      actorType: 'admin',
+      at: now,
+      note: shared.length > 0
+        ? `Xử lý chung cụm với báo cáo ${sourceDoc._id}: ${toActionLabels(shared.map((a) => a.type))}`
+        : `Xử lý chung cụm với báo cáo ${sourceDoc._id}`,
+      metadata: { sourceReportId: sourceDoc._id },
+    });
+    this._closeReport(report, {
+      adminUserId,
+      status: REPORT_STATUS.RESOLVED,
+      resolution: shared.length > 0 ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN : REPORT_RESOLUTION_TYPES.NO_ACTION,
+      adminNotes: notes,
+      historyNote: `Đóng cùng cụm với báo cáo ${sourceDoc._id}: ${notes}`,
+      historyMetadata: { sourceReportId: sourceDoc._id },
+    });
+    await safetyService.saveReport(report);
+    await this._notifyReporter(report, REPORT_STATUS.RESOLVED);
+    return true;
+  }
+
+  /**
+   * Lift the messaging restriction of a parent once none of the open reports against them keeps it
+   * @private
+   */
+  async _liftRestrictionIfNoneLeft(reportedUserId) {
+    const hasRemainingRestricted = await safetyService.hasOpenRestrictedReports(reportedUserId);
+    if (hasRemainingRestricted) return;
+    const reportedParent = await parentService.getParentById(reportedUserId).catch(() => null);
+    if (reportedParent?.userId) {
+      await userService.liftMessagingRestriction(reportedParent.userId).catch(() => {});
+    }
+  }
+
+  /**
    * Batch execute & auto-resolve all open reports that meet the AI confidence threshold
    * @param {string} adminUserId
    * @param {{ minConfidence?: number }} [options]
@@ -705,6 +904,7 @@ class AdminReportService {
     let executedCount = 0;
     const processedIds = [];
     const skipped = [];
+    const failed = [];
 
     for (const candidate of items) {
       const freshDoc = await safetyService.getReportDocById(candidate._id);
@@ -712,11 +912,16 @@ class AdminReportService {
         continue;
       }
 
-      const assessment = freshDoc.sentinelAssessment;
-      if (!assessment?.assessedAt) {
+      if (!freshDoc.sentinelAssessment?.assessedAt) {
         skipped.push({ id: freshDoc._id.toString(), reason: 'Chưa có đánh giá từ Sentinel AI' });
         continue;
       }
+      // Eligibility and recommendation of now: new reports or strikes since the assessment count
+      const liveSnapshot = await sentinelService.buildRuleSnapshot(freshDoc).catch(() => null);
+      const assessment = {
+        ...freshDoc.sentinelAssessment.toObject(),
+        ...(liveSnapshot?.ruleFields || {}),
+      };
       if ((assessment.confidenceScore || 0) < threshold) {
         skipped.push({ id: freshDoc._id.toString(), reason: `Độ tự tin (${assessment.confidenceScore}%) thấp hơn ngưỡng ${threshold}%` });
         continue;
@@ -746,9 +951,30 @@ class AdminReportService {
         continue;
       }
 
-      await this.applySentinelRecommendation(adminUserId, freshDoc._id.toString());
-      executedCount += 1;
-      processedIds.push(freshDoc._id.toString());
+      const reportId = freshDoc._id.toString();
+      try {
+        const result = await this.applySentinelRecommendation(adminUserId, reportId);
+        if (result.sentinelApplyResult?.failed?.length) {
+          failed.push({ id: reportId, code: 'ACTION_FAILED', actions: result.sentinelApplyResult.failed });
+          continue;
+        }
+        // Batch apply concludes each report itself: this one only, the others are taken one by one
+        const appliedDoc = await this._getReportDocOrFail(reportId);
+        await this.resolveReport(adminUserId, reportId, {
+          status: REPORT_STATUS.RESOLVED,
+          resolution: (appliedDoc.actions || []).some((action) => !action.isProvisional)
+            ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN
+            : REPORT_RESOLUTION_TYPES.NO_ACTION,
+          adminNotes:
+            assessment.draftNotes?.adminNote ||
+            `Thi hành hàng loạt theo đề xuất của Sentinel AI (${assessment.policyClause}).`,
+        });
+        executedCount += 1;
+        processedIds.push(reportId);
+      } catch (err) {
+        logger.warn(`[Sentinel Batch Apply] report=${reportId} failed: ${err.code || err.message}`);
+        failed.push({ id: reportId, code: err.code || 'INTERNAL_ERROR' });
+      }
     }
 
     return {
@@ -756,6 +982,7 @@ class AdminReportService {
       minConfidence: threshold,
       processedIds,
       skipped,
+      failed,
     };
   }
 
@@ -777,8 +1004,17 @@ class AdminReportService {
     if ((status === REPORT_STATUS.DISMISSED) !== (resolution === REPORT_RESOLUTION_TYPES.DISMISSED)) {
       throw new AppError('The resolution does not match the status', 400, ADMIN_REPORT_ERRORS.INVALID_RESOLUTION);
     }
-    if (resolution === REPORT_RESOLUTION_TYPES.ACTION_TAKEN && report.actions.length === 0) {
+    // The outcome must match the sanctions: provisional ones (Auto-Shield) are not a decision
+    const hasOfficialSanction = report.actions.some((action) => !action.isProvisional);
+    if (resolution === REPORT_RESOLUTION_TYPES.ACTION_TAKEN && !hasOfficialSanction) {
       throw new AppError('Resolved report with action_taken requires at least one action', 400, ADMIN_REPORT_ERRORS.ACTIONS_REQUIRED_FOR_RESOLVE);
+    }
+    if (resolution !== REPORT_RESOLUTION_TYPES.ACTION_TAKEN && hasOfficialSanction) {
+      throw new AppError(
+        'Sanctions were applied to this report: it can only be resolved with action_taken',
+        400,
+        ADMIN_REPORT_ERRORS.RESOLUTION_CONFLICTS_WITH_ACTIONS
+      );
     }
 
     const accountSanctions = report.actions.filter((action) => REPORT_ACCOUNT_SANCTION_TYPES.includes(action.type));
@@ -812,7 +1048,7 @@ class AdminReportService {
             by: adminUserId,
             actorType: 'admin',
             at: new Date(),
-            note: `Áp dụng chế tài ${action.type} theo báo cáo ${report._id}`,
+            note: `Áp dụng chế tài ${toActionLabels([action.type])} theo báo cáo ${report._id}`,
             metadata: { actionType: action.type, sourceReportId: report._id },
           });
         });
@@ -829,15 +1065,9 @@ class AdminReportService {
       }
     }
 
-    // Check if reported user has other open restricted reports; if not, lift messaging restriction
-    const hasRemainingRestricted = await safetyService.hasOpenRestrictedReports(report.reportedUserId);
-    if (!hasRemainingRestricted) {
-      const reportedParent = await parentService.getParentById(report.reportedUserId).catch(() => null);
-      if (reportedParent?.userId) {
-        await userService.liftMessagingRestriction(reportedParent.userId).catch(() => {});
-      }
-    }
+    await this._liftRestrictionIfNoneLeft(report.reportedUserId);
 
+    await this._refreshRuleSnapshots(report.reportedUserId);
     return this.getReportDetail(id);
   }
 
@@ -870,6 +1100,7 @@ class AdminReportService {
     });
 
     await safetyService.saveReport(report);
+    await this._refreshRuleSnapshots(report.reportedUserId);
     return this.getReportDetail(id);
   }
 

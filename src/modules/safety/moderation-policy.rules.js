@@ -22,9 +22,9 @@ export const POLICY_STRIKE_LEVELS = Object.freeze({
 export const SANCTION_POLICY_MATRIX = Object.freeze({
   [REPORT_CATEGORIES.CHILD_SAFETY]: {
     clause:
-      "Rule 1.1: Zero tolerance child safety violation (Grooming, Predatory behavior, Exploitation)",
+      "Điều 1.1: Không khoan nhượng với vi phạm an toàn trẻ em (dụ dỗ, hành vi săn mồi, bóc lột)",
     description:
-      "Any violation concerning child safety results in immediate permanent ban.",
+      "Mọi vi phạm liên quan đến an toàn trẻ em đều bị khóa tài khoản vĩnh viễn ngay lập tức.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [
         { type: REPORT_ACTION_TYPES.DELETE_MESSAGE },
@@ -61,8 +61,8 @@ export const SANCTION_POLICY_MATRIX = Object.freeze({
   },
 
   [REPORT_CATEGORIES.HARASSMENT]: {
-    clause: "Rule 2.1: Harassment, bullying, and hostile communication",
-    description: "Verbal attacks, threats, or severe repetitive harassment.",
+    clause: "Điều 2.1: Quấy rối, bắt nạt và giao tiếp thù địch",
+    description: "Công kích bằng lời, đe dọa hoặc quấy rối nghiêm trọng lặp lại.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [
         { type: REPORT_ACTION_TYPES.DELETE_MESSAGE },
@@ -99,8 +99,8 @@ export const SANCTION_POLICY_MATRIX = Object.freeze({
   },
 
   [REPORT_CATEGORIES.INAPPROPRIATE_CONTENT]: {
-    clause: "Rule 3.1: Inappropriate text, media, or vulgar language",
-    description: "Adult content, profane language, or disturbing imagery.",
+    clause: "Điều 3.1: Văn bản, hình ảnh không phù hợp hoặc ngôn từ thô tục",
+    description: "Nội dung người lớn, ngôn từ tục tĩu hoặc hình ảnh gây khó chịu.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [
         { type: REPORT_ACTION_TYPES.DELETE_MESSAGE },
@@ -138,8 +138,8 @@ export const SANCTION_POLICY_MATRIX = Object.freeze({
 
   [REPORT_CATEGORIES.FAKE_PROFILE]: {
     clause:
-      "Rule 4.1: Impersonation, deceptive identity, or misleading family profile",
-    description: "Creating fake accounts or impersonating other parents.",
+      "Điều 4.1: Mạo danh, giả danh hoặc hồ sơ gia đình sai sự thật",
+    description: "Tạo tài khoản giả hoặc mạo danh phụ huynh khác.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [{ type: REPORT_ACTION_TYPES.WARN }],
       allowedTypes: [REPORT_ACTION_TYPES.WARN],
@@ -159,8 +159,8 @@ export const SANCTION_POLICY_MATRIX = Object.freeze({
 
   [REPORT_CATEGORIES.SPAM]: {
     clause:
-      "Rule 5.1: Commercial spam, unsolicited solicitation, or repetitive junk",
-    description: "Sending bulk sales pitches or unsolicited links.",
+      "Điều 5.1: Quảng cáo, chào mời không mong muốn hoặc tin rác lặp lại",
+    description: "Gửi hàng loạt tin chào hàng hoặc liên kết không mong muốn.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [
         { type: REPORT_ACTION_TYPES.DELETE_MESSAGE },
@@ -197,8 +197,8 @@ export const SANCTION_POLICY_MATRIX = Object.freeze({
   },
 
   [REPORT_CATEGORIES.NO_SHOW]: {
-    clause: "Rule 6.1: Repeated confirmed playdate abandonment without notice",
-    description: "Failing to attend confirmed playdates repeatedly.",
+    clause: "Điều 6.1: Nhiều lần vắng mặt tại buổi hẹn đã xác nhận mà không báo trước",
+    description: "Nhiều lần không tham gia buổi hẹn đã xác nhận.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [
         { type: REPORT_ACTION_TYPES.WARN },
@@ -235,9 +235,9 @@ export const SANCTION_POLICY_MATRIX = Object.freeze({
   },
 
   [REPORT_CATEGORIES.OTHER]: {
-    clause: "Rule 7.1: General Community Guidelines violation",
+    clause: "Điều 7.1: Vi phạm chung Quy chuẩn Cộng đồng",
     description:
-      "Other disruptive behaviors not covered by specific categories.",
+      "Các hành vi gây ảnh hưởng khác ngoài những danh mục cụ thể.",
     [POLICY_STRIKE_LEVELS.FIRST]: {
       actions: [{ type: REPORT_ACTION_TYPES.WARN }],
       allowedTypes: [REPORT_ACTION_TYPES.WARN],
@@ -328,7 +328,7 @@ export const calculatePolicySanction = (
     return {
       strikeCount,
       strikeLevel,
-      clause: "Rule 0.1: Critical Severity Emergency Escalate",
+      clause: "Điều 0.1: Mức nghiêm trọng — chuyển xử lý khẩn cấp",
       description: categoryPolicy.description,
       suggestedSeverity: REPORT_SEVERITY.CRITICAL,
       standardActions: filtered.actions,
@@ -350,17 +350,26 @@ export const calculatePolicySanction = (
 
 /**
  * Check whether an admin action requires a policy override justification.
+ * Out of matrix, or a suspension whose length differs from the standard one, is an override.
  * @param {string} actionType
- * @param {Object} policyResult
+ * @param {Object|null} policyResult - null when the report has no Sentinel assessment (no matrix applies)
+ * @param {number|string|null} [durationDays] - Suspension length chosen by the admin
  * @returns {{ isOverride: boolean, reasonRequired: boolean }}
  */
-export const checkActionPolicyCompliance = (actionType, policyResult) => {
+export const checkActionPolicyCompliance = (actionType, policyResult, durationDays = null) => {
   if (!policyResult || !policyResult.allowedActionTypes) {
     return { isOverride: false, reasonRequired: false };
   }
   const isAllowed = policyResult.allowedActionTypes.includes(actionType);
-  return {
-    isOverride: !isAllowed,
-    reasonRequired: !isAllowed,
-  };
+  const standard = (policyResult.standardActions || []).find((a) => a.type === actionType);
+  const isDurationMismatch = Boolean(
+    isAllowed &&
+      actionType === REPORT_ACTION_TYPES.SUSPEND &&
+      standard?.durationDays &&
+      durationDays !== null &&
+      durationDays !== undefined &&
+      Number(durationDays) !== Number(standard.durationDays)
+  );
+  const isOverride = !isAllowed || isDurationMismatch;
+  return { isOverride, reasonRequired: isOverride };
 };

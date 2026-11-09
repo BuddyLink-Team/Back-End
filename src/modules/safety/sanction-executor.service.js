@@ -8,10 +8,12 @@ import notificationService from '../notification/notification.service.js';
 import moderationRealtimeService from './moderation-realtime.service.js';
 import { emitUserEvent, USER_EVENTS } from '../user/user.events.js';
 import { NOTIFICATION_TYPES } from '../notification/notification.constants.js';
+import { PLAYDATE_STATUS } from '../playdate/playdate.constants.js';
 import {
   REPORT_ACTION_TYPES,
   REPORT_CATEGORY_NOTICES,
   REPORT_STATUS,
+  REPORT_TARGET_TYPES,
 } from './safety.constants.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/app-error.js';
@@ -56,6 +58,58 @@ class SanctionExecutorService {
       overrideReason: overrideReason || '',
       policyClause: policyClause || '',
     };
+  }
+
+  /**
+   * Whether the playdate of a report can still be cancelled: upcoming and its day not over.
+   * A playdate already held (a no-show), completed or cancelled makes CANCEL_PLAYDATE not applicable.
+   * @param {Object} report
+   * @returns {Promise<boolean>}
+   */
+  async isPlaydateCancellable(report) {
+    if (!report.targetPlaydateId) return false;
+    const playdate = await playdateService.getPlaydateById(report.targetPlaydateId).catch(() => null);
+    if (!playdate || playdate.status !== PLAYDATE_STATUS.UPCOMING) return false;
+    return new Date(playdate.scheduledDate).getTime() + DAY_MS > Date.now();
+  }
+
+  /**
+   * Check every sanction before running any of them, so a report is never left half-sanctioned
+   * (e.g. a warning sent, then the report handed back to the admin).
+   * - executable: can run
+   * - notApplicable: nothing to do for this target (not a failure), e.g. cancelling a playdate already held
+   * - blockers: the sanction cannot run at all (e.g. reported account missing) -> run nothing
+   * @param {{ report: Object, targetUser: Object|null, actions: Array<{ type: string, durationDays?: number }> }} param0
+   * @returns {Promise<{ executable: Array, notApplicable: Array<{ type: string, reason: string }>, blockers: Array<{ type: string, code: string }> }>}
+   */
+  async planSanctions({ report, targetUser, actions = [] }) {
+    const executable = [];
+    const notApplicable = [];
+    const blockers = [];
+
+    for (const action of actions) {
+      if (action.type === REPORT_ACTION_TYPES.DELETE_MESSAGE) {
+        if (report.targetType !== REPORT_TARGET_TYPES.MESSAGE || !report.targetMessageId) {
+          notApplicable.push({ type: action.type, reason: 'TARGET_MISMATCH' });
+        } else {
+          executable.push(action);
+        }
+      } else if (action.type === REPORT_ACTION_TYPES.CANCEL_PLAYDATE) {
+        if (report.targetType !== REPORT_TARGET_TYPES.PLAYDATE || !report.targetPlaydateId) {
+          notApplicable.push({ type: action.type, reason: 'TARGET_MISMATCH' });
+        } else if (!(await this.isPlaydateCancellable(report))) {
+          notApplicable.push({ type: action.type, reason: 'PLAYDATE_NOT_OPEN' });
+        } else {
+          executable.push(action);
+        }
+      } else if (!targetUser) {
+        blockers.push({ type: action.type, code: 'TARGET_USER_NOT_FOUND' });
+      } else {
+        executable.push(action);
+      }
+    }
+
+    return { executable, notApplicable, blockers };
   }
 
   /**
@@ -143,7 +197,7 @@ class SanctionExecutorService {
 
     const isSystem = actor?.actorType === 'system';
     const note = params.note || (isSystem
-      ? `🤖 Sentinel AI: Tự động ghi nhận Strike theo khung quy chuẩn`
+      ? `Sentinel AI: Tự động ghi nhận một lần vi phạm theo khung quy chuẩn`
       : 'Đã gửi cảnh cáo vi phạm quy chuẩn cộng đồng');
 
     return this._buildActionDoc(REPORT_ACTION_TYPES.WARN, actor, {
@@ -180,7 +234,7 @@ class SanctionExecutorService {
 
     const isSystem = actor?.actorType === 'system';
     const note = params.note || (isSystem
-      ? '🤖 Sentinel AI: Tự động gỡ bỏ tin nhắn vi phạm theo khung quy chuẩn'
+      ? 'Sentinel AI: Tự động gỡ bỏ tin nhắn vi phạm theo khung quy chuẩn'
       : 'Gỡ bỏ tin nhắn vi phạm');
 
     return this._buildActionDoc(REPORT_ACTION_TYPES.DELETE_MESSAGE, actor, {
@@ -206,7 +260,7 @@ class SanctionExecutorService {
     await playdateService.cancelPlaydateByAdmin(report.targetPlaydateId, reason);
 
     const note = params.note || (isSystem
-      ? '🤖 Sentinel AI: Tự động hủy buổi hẹn theo khung quy chuẩn'
+      ? 'Sentinel AI: Tự động hủy buổi hẹn theo khung quy chuẩn'
       : `Đã hủy buổi hẹn: ${reason}`);
 
     return this._buildActionDoc(REPORT_ACTION_TYPES.CANCEL_PLAYDATE, actor, {
@@ -246,7 +300,7 @@ class SanctionExecutorService {
 
     const isSystem = actor?.actorType === 'system';
     const note = params.note || (isSystem
-      ? `🤖 Sentinel AI: Tự động tạm đình chỉ ${days} ngày theo khung quy chuẩn`
+      ? `Sentinel AI: Tự động tạm đình chỉ ${days} ngày theo khung quy chuẩn`
       : `Tạm đình chỉ tài khoản ${days} ngày`);
 
     return this._buildActionDoc(REPORT_ACTION_TYPES.SUSPEND, actor, {
@@ -283,7 +337,7 @@ class SanctionExecutorService {
     });
 
     const note = params.note || (isSystem
-      ? '🤖 Sentinel AI: Cấm tài khoản vĩnh viễn theo khung quy chuẩn'
+      ? 'Sentinel AI: Cấm tài khoản vĩnh viễn theo khung quy chuẩn'
       : `Đã cấm tài khoản vĩnh viễn: ${banReason}`);
 
     return this._buildActionDoc(REPORT_ACTION_TYPES.BAN, actor, {

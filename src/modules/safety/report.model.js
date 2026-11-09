@@ -82,6 +82,16 @@ const sentinelAssessmentSchema = new mongoose.Schema(
     policyClause: { type: String, default: '' },
     isFallback: { type: Boolean, default: false },
     autoResolveEligible: { type: Boolean, default: false },
+    // AI conclusion: violation | no_violation | unclear (null on assessments made before it existed)
+    verdict: { type: String, enum: ['violation', 'no_violation', 'unclear', null], default: null },
+    // Distinct parents reporting the same violation (with evidence) within windowDays
+    corroboration: {
+      isCorroborated: { type: Boolean, default: false },
+      reporterCount: { type: Number, default: 0 },
+      requiredReporters: { type: Number, default: 0 },
+      incidentCount: { type: Number, default: 0 },
+      windowDays: { type: Number, default: 0 },
+    },
     evidenceAnalysis: {
       isValid: { type: Boolean, default: null },
       notes: { type: String, default: '' },
@@ -104,7 +114,7 @@ const sentinelAssessmentSchema = new mongoose.Schema(
     autoResolved: { type: Boolean, default: false },
     monitoring: {
       reportsReceived: { type: Number, default: 1 },
-      timeWindow: { type: String, default: '30 min' },
+      timeWindow: { type: String, default: '30 phút' },
       totalOpenAgainstUser: { type: Number, default: 1 },
       uniqueReportersCount: { type: Number, default: 1 },
       riskLevel: { type: String, enum: ['low', 'medium', 'high'], default: 'low' },

@@ -5,7 +5,11 @@ import userRoutes from '../user/user.route.js';
 import { validate } from '../../middlewares/validate.middleware.js';
 import { authenticate } from '../../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../../middlewares/role.middleware.js';
-import { adminLoginLimiter, adminSentinelLimiter } from '../../middlewares/rate-limit.middleware.js';
+import {
+  adminLoginLimiter,
+  adminSentinelBatchLimiter,
+  adminSentinelReportLimiter,
+} from '../../middlewares/rate-limit.middleware.js';
 import { loginValidation, refreshTokenValidation } from '../auth/auth.validation.js';
 import {
   listUsersValidation,
@@ -35,6 +39,7 @@ import {
   applySentinelValidation,
   batchScanSentinelValidation,
   batchApplySentinelValidation,
+  resolveSentinelClusterValidation,
   adminAnalyticsValidation,
   listAdminNotificationsValidation,
   readAllAdminNotificationsValidation,
@@ -98,15 +103,21 @@ router.get('/reports', validate(listReportsValidation), adminController.getRepor
 router.get('/reports/stats', validate(reportStatsValidation), adminController.getReportStats);
 router.post(
   '/reports/sentinel-batch-scan',
-  adminSentinelLimiter,
+  adminSentinelBatchLimiter,
   validate(batchScanSentinelValidation),
   adminController.batchScanReportsWithSentinel
 );
 router.post(
   '/reports/sentinel-batch-apply',
-  adminSentinelLimiter,
+  adminSentinelBatchLimiter,
   validate(batchApplySentinelValidation),
   adminController.batchApplySentinelRecommendations
+);
+router.post(
+  '/reports/sentinel-cluster-resolve',
+  adminSentinelReportLimiter,
+  validate(resolveSentinelClusterValidation),
+  adminController.resolveSentinelCluster
 );
 router.get('/reports/:id', validate(reportIdParamValidation), adminController.getReportDetail);
 router.patch('/reports/:id/review', validate(reviewReportValidation), adminController.reviewReport);
@@ -116,13 +127,13 @@ router.patch('/reports/:id/resolve', validate(resolveReportValidation), adminCon
 router.patch('/reports/:id/reopen', validate(reopenReportValidation), adminController.reopenReport);
 router.post(
   '/reports/:id/sentinel-assess',
-  adminSentinelLimiter,
+  adminSentinelReportLimiter,
   validate(assessSentinelValidation),
   adminController.assessReportWithSentinel
 );
 router.post(
   '/reports/:id/sentinel-apply',
-  adminSentinelLimiter,
+  adminSentinelReportLimiter,
   validate(applySentinelValidation),
   adminController.applySentinelRecommendation
 );

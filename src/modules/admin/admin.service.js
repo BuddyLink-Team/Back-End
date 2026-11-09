@@ -694,8 +694,8 @@ class AdminService {
     return adminReportService.assessReportWithSentinel(adminUserId, id, options);
   }
 
-  async applySentinelRecommendation(adminUserId, id) {
-    return adminReportService.applySentinelRecommendation(adminUserId, id);
+  async applySentinelRecommendation(adminUserId, id, options = {}) {
+    return adminReportService.applySentinelRecommendation(adminUserId, id, options);
   }
 
   async batchScanReportsWithSentinel(adminUserId) {
@@ -704,6 +704,10 @@ class AdminService {
 
   async batchApplySentinelRecommendations(adminUserId, options = {}) {
     return adminReportService.batchApplySentinelRecommendations(adminUserId, options);
+  }
+
+  async resolveSentinelCluster(adminUserId, payload) {
+    return adminReportService.resolveSentinelCluster(adminUserId, payload);
   }
 
   async resolveReport(adminUserId, id, data) {

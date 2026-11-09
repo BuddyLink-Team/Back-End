@@ -3,7 +3,12 @@
  * 1. Velocity Analysis (windowed report volume and unique reporters)
  * 2. Reporter Credibility (reporter history and account age)
  * 3. Incident Pattern (independent vs suspected coordinated brigading)
+ * 4. Corroboration (distinct parents reporting the same violation within days)
  */
+
+/** Investigation step shown once the messaging restriction is really applied */
+export const RESTRICTION_STEP =
+  'Tự động kích hoạt hạn chế nhắn tin tạm thời (tối đa 72h) để bảo vệ an toàn cộng đồng';
 
 /**
  * Calculates report velocity metrics from reports occurring within a 30-minute window.
@@ -67,7 +72,7 @@ export function calculateCredibility(reporter, outcomes = {}, options = {}) {
   const hasNoConfirmedHistory = confirmedCount === 0;
 
   let level = 'high';
-  let label = 'Đáng tin cậy — Lịch sử báo cáo tốt, không có dấu hiệu phối hợp report ảo';
+  let label = 'Đáng tin cậy — Lịch sử báo cáo tốt, không có dấu hiệu phối hợp báo cáo ảo';
 
   if (dismissedCount >= 2 && dismissedCount > confirmedCount) {
     level = 'low';
@@ -116,17 +121,17 @@ export function calculatePattern(reportsIn30Min = []) {
   let coordinatedSuspected = false;
   let isIndependentIncidents = true;
   let incidentPattern =
-    'Sự việc đơn lẻ từ phụ huynh báo cáo trực tiếp, không có dấu hiệu nhiều tài khoản phối hợp report.';
+    'Sự việc đơn lẻ từ phụ huynh báo cáo trực tiếp, không có dấu hiệu nhiều tài khoản phối hợp báo cáo.';
 
   if (uniqueReportersCount >= 2) {
     if (!hasDirectTargets && distinctTargetMessages.size === 0 && uniqueReportersCount >= 3) {
       coordinatedSuspected = true;
       isIndependentIncidents = false;
-      incidentPattern = `Cảnh báo: Ghi nhận ${uniqueReportersCount} tài khoản cùng report trong 30 phút nhưng thiếu bằng chứng trực tiếp (cần kiểm tra khả năng report phối hợp/brigading).`;
+      incidentPattern = `Cảnh báo: Ghi nhận ${uniqueReportersCount} tài khoản cùng báo cáo trong 30 phút nhưng thiếu bằng chứng trực tiếp (cần kiểm tra khả năng nhiều tài khoản phối hợp báo cáo ảo).`;
     } else {
       coordinatedSuspected = false;
       isIndependentIncidents = true;
-      incidentPattern = `Ghi nhận ${reportsIn30Min.length} báo cáo từ ${uniqueReportersCount} phụ huynh độc lập với ngữ cảnh tương tác riêng biệt (không phải report giả phối hợp).`;
+      incidentPattern = `Ghi nhận ${reportsIn30Min.length} báo cáo từ ${uniqueReportersCount} phụ huynh độc lập với ngữ cảnh tương tác riêng biệt (không phải báo cáo giả phối hợp).`;
     }
   }
 
@@ -157,26 +162,28 @@ export function buildMonitoringSnapshot(report, data, policy = {}) {
     coordinatedSuspected: pattern.coordinatedSuspected,
   });
 
+  // Many reports without direct evidence (suspected brigading) must never restrict the target
   const shouldApplyTempRestriction = Boolean(
-    velocity.isHighVelocityRisk ||
-    policy.requiresTemporaryRestriction ||
-    (report.severity === 'critical' && reportsIn30Min.length >= 2)
+    !pattern.coordinatedSuspected &&
+      (velocity.isHighVelocityRisk ||
+        policy.requiresTemporaryRestriction ||
+        (report.severity === 'critical' && reportsIn30Min.length >= 2))
   );
 
   const steps = [
-    'Giám sát phòng thủ tự động (Auto-Shield)',
+    'Giám sát phòng thủ tự động',
     `Cửa sổ 30 phút: ${velocity.reportsIn30MinCount} báo cáo từ ${velocity.uniqueReportersCount} người báo cáo`,
     `Độ tin cậy người báo cáo: ${credibility.label}`,
     pattern.incidentPattern,
   ];
 
   if (shouldApplyTempRestriction) {
-    steps.push('Tự động kích hoạt hạn chế nhắn tin tạm thời (tối đa 72h) để bảo vệ an toàn cộng đồng');
+    steps.push(RESTRICTION_STEP);
   }
 
   return {
     reportsReceived: velocity.reportsIn30MinCount,
-    timeWindow: '30 min',
+    timeWindow: '30 phút',
     totalOpenAgainstUser: openAgainstUser.length,
     uniqueReportersCount: velocity.uniqueReportersCount,
     riskLevel: velocity.riskLevel,
@@ -197,10 +204,103 @@ export function buildMonitoringSnapshot(report, data, policy = {}) {
       steps: shouldApplyTempRestriction
         ? [
             'Hạn chế gửi tin nhắn trong 72 giờ hoặc cho đến khi Admin xử lý',
-            'Chặn tạo lời mời Playdate mới trong thời gian hạn chế',
           ]
         : [],
     },
   };
 }
 
+/**
+ * Settles the restriction part of a snapshot on what was really done, so an assessment that only
+ * recommends a restriction (no enforcement) never shows it as applied.
+ * @param {Object} snapshot - From buildMonitoringSnapshot
+ * @param {boolean} applied - Whether the messaging restriction was really enforced
+ * @returns {Object}
+ */
+export function withRestrictionOutcome(snapshot, applied) {
+  if (applied) return snapshot;
+  return {
+    ...snapshot,
+    investigationSteps: snapshot.investigationSteps.filter(
+      (step) => step !== RESTRICTION_STEP
+    ),
+    temporaryRestriction: {
+      ...snapshot.temporaryRestriction,
+      applied: false,
+      steps: [],
+    },
+  };
+}
+
+/** Days before or after a report in which reports from other parents corroborate it */
+export const CORROBORATION_WINDOW_DAYS = 7;
+/** Distinct parents needed before Sentinel may sanction without an admin */
+export const MIN_CORROBORATING_REPORTERS = 3;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const hasDirectEvidence = (r) =>
+  Boolean(r?.targetMessageId || r?.targetPlaydateId || (Array.isArray(r?.evidenceUrls) && r.evidenceUrls.length > 0));
+
+/**
+ * Key of the incident a report is about: every report on the same playdate / message is one incident,
+ * a profile report is its own incident.
+ * @param {Object} report
+ * @returns {string}
+ */
+export function incidentKeyOf(report) {
+  if (report?.targetPlaydateId) return `playdate:${report.targetPlaydateId}`;
+  if (report?.targetMessageId) return `message:${report.targetMessageId}`;
+  return `report:${report?._id}`;
+}
+
+/**
+ * Cross-check a report against the other open reports on the same user: a sanction is only automated
+ * when enough distinct parents reported the same kind of violation, with evidence, within days of it.
+ * Reports from parents with a low credibility (mostly dismissed reports) never count.
+ * @param {Object} report - Report being assessed
+ * @param {Array<Object>} openReports - Open reports against the same user (may include `report`)
+ * @param {{ lowCredibilityReporterIds?: Array<string> }} [options]
+ * @returns {{
+ *   isCorroborated: boolean,
+ *   reporterCount: number,
+ *   requiredReporters: number,
+ *   incidentCount: number,
+ *   windowDays: number,
+ *   relatedReportIds: Array<string>
+ * }}
+ */
+export function calculateCorroboration(report, openReports = [], options = {}) {
+  const lowCredibility = new Set((options.lowCredibilityReporterIds || []).map(String));
+  const anchor = report?.createdAt ? new Date(report.createdAt).getTime() : Date.now();
+  // Both sides: a report filed later still corroborates an earlier one when it is looked at again
+  const windowStart = anchor - CORROBORATION_WINDOW_DAYS * DAY_MS;
+  const windowEnd = anchor + CORROBORATION_WINDOW_DAYS * DAY_MS;
+
+  const byId = new Map();
+  [report, ...openReports].forEach((r) => {
+    if (r?._id && !byId.has(String(r._id))) byId.set(String(r._id), r);
+  });
+
+  const counted = [...byId.values()].filter((r) => {
+    const createdAt = r.createdAt ? new Date(r.createdAt).getTime() : anchor;
+    return (
+      r.category === report.category &&
+      createdAt >= windowStart &&
+      createdAt <= windowEnd &&
+      hasDirectEvidence(r) &&
+      !lowCredibility.has(String(r.reporterId))
+    );
+  });
+
+  const reporterCount = new Set(counted.map((r) => String(r.reporterId))).size;
+
+  return {
+    isCorroborated: reporterCount >= MIN_CORROBORATING_REPORTERS,
+    reporterCount,
+    requiredReporters: MIN_CORROBORATING_REPORTERS,
+    incidentCount: new Set(counted.map(incidentKeyOf)).size,
+    windowDays: CORROBORATION_WINDOW_DAYS,
+    relatedReportIds: counted.map((r) => String(r._id)).filter((id) => id !== String(report._id)),
+  };
+}

@@ -571,6 +571,8 @@ export class AdminReportListItemDTO {
             autoShieldApplied: Boolean(report.sentinelAssessment.autoShieldApplied),
             autoResolved: Boolean(report.sentinelAssessment.autoResolved),
             recommendedSanctions: report.sentinelAssessment.recommendedSanctions || [],
+            corroboration: report.sentinelAssessment.corroboration || null,
+            verdict: report.sentinelAssessment.verdict || null,
             monitoring: report.sentinelAssessment.monitoring || null,
           }
         : null,

@@ -1178,18 +1178,21 @@ interface IReport {
     policyClause: string;
     isFallback: boolean;
     autoResolveEligible: boolean;
+    verdict: "violation" | "no_violation" | "unclear" | null; // Kết luận của AI; chỉ "violation" mới có chế tài AI đề xuất
+    // Xác thực chéo: số phụ huynh khác nhau báo cáo cùng loại vi phạm (có bằng chứng) trong windowDays ngày
+    corroboration: { isCorroborated: boolean; reporterCount: number; requiredReporters: number; incidentCount: number; windowDays: number };
     evidenceAnalysis: { isValid: boolean | null; notes: string };
     recommendedSanctions: Array<{ type: string; durationDays?: number | null; reason: string }>;
     draftNotes: { adminNote: string; reportedUserNotice: string; reporterFeedback: string };
     assessedAt: Date;
-    assessedByModel: string;
+    assessedByModel: string | null; // Model thật trả lời (null khi AI fallback)
     autoShieldApplied: boolean;
     autoResolved: boolean;
     monitoring: object;
   } | null;
   // Nhật ký kiểm duyệt: mọi thao tác và đổi trạng thái
   history: Array<{
-    eventType: "status_change" | "claim" | "takeover" | "severity_change" | "action_applied" | "reopen" | "sentinel_assessed" | "auto_shielded" | "policy_overridden";
+    eventType: "status_change" | "claim" | "takeover" | "severity_change" | "action_applied" | "reopen" | "sentinel_assessed" | "auto_shielded" | "policy_overridden" | "action_failed";
     fromStatus: string | null;
     toStatus: string | null;
     by: ObjectId | null; // Tham chiếu users._id của Admin (null nếu do Sentinel AI)

@@ -413,7 +413,8 @@ class AdminController {
     try {
       const data = await adminService.applySentinelRecommendation(
         req.user?._id || req.userId,
-        req.params.id
+        req.params.id,
+        { note: req.body?.note }
       );
       return successResponse(res, data, 'Sentinel recommendations applied successfully', 200);
     } catch (error) {
@@ -445,6 +446,21 @@ class AdminController {
         req.body || {}
       );
       return successResponse(res, data, 'Batch Sentinel auto-execution completed successfully', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/admin/reports/sentinel-cluster-resolve
+   */
+  async resolveSentinelCluster(req, res, next) {
+    try {
+      const data = await adminService.resolveSentinelCluster(req.user?._id || req.userId, {
+        reportIds: req.body.reportIds,
+        note: req.body.note,
+      });
+      return successResponse(res, data, 'Sentinel cluster handled successfully', 200);
     } catch (error) {
       return next(error);
     }

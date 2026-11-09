@@ -11,11 +11,6 @@ import {
   REPORT_SORTS,
   REPORT_STATUS,
 } from "./safety.constants.js";
-import {
-  calculateVelocity,
-  calculatePattern,
-  calculateCredibility,
-} from "./enforcement-metrics.rules.js";
 
 const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -337,13 +332,13 @@ class SafetyRepository {
   }
 
   /**
-   * Count distinct reports with actions taken (sanctions) applied against a user.
+   * Resolved reports with a sanction of their own against a user (the service counts strikes from them).
    * Excludes actions that were propagated from another report or are provisional.
    * @param {string|mongoose.Types.ObjectId} reportedUserId
    * @param {string|mongoose.Types.ObjectId} [excludeReportId]
-   * @returns {Promise<number>}
+   * @returns {Promise<Array<{ _id, targetMessageId, targetPlaydateId }>>}
    */
-  async countUserPriorSanctions(reportedUserId, excludeReportId = null) {
+  async findPriorSanctionedReports(reportedUserId, excludeReportId = null) {
     const query = {
       reportedUserId,
       status: REPORT_STATUS.RESOLVED,
@@ -357,7 +352,7 @@ class SafetyRepository {
     if (excludeReportId) {
       query._id = { $ne: excludeReportId };
     }
-    return Report.countDocuments(query);
+    return Report.find(query).select('_id targetMessageId targetPlaydateId').lean();
   }
 
   /**
@@ -417,43 +412,6 @@ class SafetyRepository {
       'sentinelAssessment.monitoring.temporaryRestriction.applied': true,
     });
     return count > 0;
-  }
-
-  /**
-   * Compute 3-Factor Automated Enforcement metrics (delegates to enforcement-metrics.rules.js).
-   * @param {Object} report
-   */
-  async getEnforcementMonitoringMetrics(report) {
-    const anchorTime = report.createdAt ? new Date(report.createdAt) : new Date();
-    const windowMs = 30 * 60 * 1000; // 30 minutes
-    const windowStart = new Date(anchorTime.getTime() - windowMs);
-    const windowEnd = new Date(anchorTime.getTime() + windowMs);
-
-    const [reportsIn30Min, openAgainstUser, outcomes] = await Promise.all([
-      this.findReportsAgainstInWindow(report.reportedUserId, windowStart, windowEnd),
-      this.findOpenReportsAgainst(report.reportedUserId),
-      this.countReporterOutcomes(report.reporterId),
-    ]);
-
-    const velocity = calculateVelocity(reportsIn30Min);
-    const pattern = calculatePattern(reportsIn30Min);
-    const credibility = calculateCredibility(null, outcomes, {
-      coordinatedSuspected: pattern.coordinatedSuspected,
-    });
-
-    return {
-      reportsIn30MinCount: velocity.reportsIn30MinCount,
-      openAgainstUserCount: openAgainstUser.length,
-      uniqueReportersCount: velocity.uniqueReportersCount,
-      reporterTotalSubmitted: outcomes.totalSubmitted,
-      reporterConfirmedCount: outcomes.confirmedCount,
-      reporterDismissedCount: outcomes.dismissedCount,
-      credibilityLevel: credibility.level,
-      credibilityLabel: credibility.label,
-      coordinatedSuspected: pattern.coordinatedSuspected,
-      isIndependentIncidents: pattern.isIndependentIncidents,
-      incidentPattern: pattern.incidentPattern,
-    };
   }
 
   async saveReport(report) {

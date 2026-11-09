@@ -434,20 +434,6 @@ export const updateReportSeverityValidation = [
     .optional()
     .isString()
     .trim(),
-  body('isPolicyOverride')
-    .optional()
-    .isBoolean()
-    .withMessage('isPolicyOverride must be a boolean'),
-  body('overrideReason')
-    .optional()
-    .isString()
-    .trim()
-    .custom((val, { req }) => {
-      if (req.body.isPolicyOverride && (!val || val.length < 20)) {
-        throw new Error('Lý do giải trình ngoại lệ phải có ít nhất 20 ký tự');
-      }
-      return true;
-    }),
 ];
 
 /**
@@ -571,8 +557,30 @@ export const assessSentinelValidation = [
 /**
  * Validation rules for POST /api/v1/admin/reports/:id/sentinel-apply
  */
+/**
+ * Validation rules for POST /api/v1/admin/reports/sentinel-cluster-resolve
+ */
+export const resolveSentinelClusterValidation = [
+  body('reportIds')
+    .isArray({ min: 1, max: 50 })
+    .withMessage('reportIds must hold 1 to 50 report ids'),
+  body('reportIds.*').isMongoId().withMessage('Invalid report id'),
+  body('note')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Note must be at most 500 characters'),
+];
+
 export const applySentinelValidation = [
   ...reportIdParamValidation,
+  body('note')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Note must be at most 500 characters'),
 ];
 
 /**
