@@ -36,6 +36,8 @@ const env = {
   AI: {
     PROVIDER: process.env.AI_PROVIDER || 'gemini',
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+    // Dedicated API key for Sentinel AI Safety Moderation in Reports (strictly required for Sentinel, no fallback)
+    SENTINEL_GEMINI_API_KEY: process.env.SENTINEL_GEMINI_API_KEY || '',
     GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
     // Used once when the main model is rate limited or overloaded
     GEMINI_FALLBACK_MODEL: process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash-lite',

@@ -80,6 +80,7 @@ const sentinelAssessmentSchema = new mongoose.Schema(
     assessedAt: { type: Date, default: null },
     assessedByModel: { type: String, default: null },
     autoShieldApplied: { type: Boolean, default: false },
+    autoResolved: { type: Boolean, default: false },
     monitoring: {
       reportsReceived: { type: Number, default: 1 },
       timeWindow: { type: String, default: '30 min' },

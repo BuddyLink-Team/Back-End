@@ -19,7 +19,7 @@ const GENERATION_DEFAULTS = Object.freeze({
   thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
 });
 
-const isConfigured = () => Boolean(env.AI.GEMINI_API_KEY && !env.AI.GEMINI_API_KEY.startsWith('<'));
+const isConfigured = (key = env.AI.GEMINI_API_KEY) => Boolean(key && !key.startsWith('<'));
 
 const toUsage = (metadata = {}) => ({
   promptTokens: metadata.promptTokenCount || 0,
@@ -33,11 +33,28 @@ const providerError = () => new AppError('AI assistant is temporarily unavailabl
  * Google Gemini (the only file importing @google/genai).
  * Errors never leak provider details to the client: they are logged and mapped to AppError codes.
  */
-class GeminiAdapter {
-  constructor() {
+export class GeminiAdapter {
+  constructor(
+    apiKeyResolver = null,
+    name = 'GeminiAdapter',
+    customRequiredMessage = null,
+    errorCode = 'AI_UNAVAILABLE'
+  ) {
+    this._apiKeyResolver = typeof apiKeyResolver === 'function' ? apiKeyResolver : () => apiKeyResolver;
+    this._name = name;
+    this._customRequiredMessage = customRequiredMessage;
+    this._errorCode = errorCode;
     this._client = null;
     // model -> time until which it is skipped after a 429, so every call does not pay a failed request first
     this._rateLimitedUntil = new Map();
+  }
+
+  _getEffectiveApiKey() {
+    return this._apiKeyResolver();
+  }
+
+  isConfigured() {
+    return isConfigured(this._getEffectiveApiKey());
   }
 
   /**
@@ -45,11 +62,15 @@ class GeminiAdapter {
    * @private
    */
   _getClient() {
-    if (!isConfigured()) {
-      throw new AppError('AI assistant is not configured', 503, 'AI_UNAVAILABLE');
+    const key = this._getEffectiveApiKey();
+    if (!isConfigured(key)) {
+      const message =
+        this._customRequiredMessage ||
+        `${this._name} is not configured. Please set the required API key in .env`;
+      throw new AppError(message, 503, this._errorCode);
     }
     if (!this._client) {
-      this._client = new GoogleGenAI({ apiKey: env.AI.GEMINI_API_KEY });
+      this._client = new GoogleGenAI({ apiKey: key });
     }
     return this._client;
   }
@@ -172,5 +193,17 @@ class GeminiAdapter {
   }
 }
 
-export const geminiAdapter = new GeminiAdapter();
+export const geminiAdapter = new GeminiAdapter(
+  () => env.AI.GEMINI_API_KEY,
+  'GeminiAdapter',
+  'AI assistant is not configured. Please set GEMINI_API_KEY in .env',
+  'GEMINI_API_KEY_REQUIRED'
+);
+
+export const sentinelGeminiAdapter = new GeminiAdapter(
+  () => env.AI.SENTINEL_GEMINI_API_KEY,
+  'SentinelGeminiAdapter',
+  'Chưa cấu hình SENTINEL_GEMINI_API_KEY cho Sentinel AI. Vui lòng điền API key riêng cho phần kiểm duyệt báo cáo trong file .env.',
+  'SENTINEL_API_KEY_REQUIRED'
+);
 export default geminiAdapter;
