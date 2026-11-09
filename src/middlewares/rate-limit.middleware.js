@@ -60,3 +60,12 @@ export const aiMessageLimiter = buildLimiter({
   keyGenerator: (req) => `ai:${req.userId}`,
   code: 'AI_RATE_LIMITED',
 });
+
+// Admin Sentinel batch scan and assessment operations (10 requests per 15 minutes per admin)
+export const adminSentinelLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Quá nhiều yêu cầu kiểm duyệt Sentinel AI, vui lòng thử lại sau 15 phút.',
+  keyGenerator: (req) => `sentinel:${req.user?._id?.toString() || req.userId || req.ip}`,
+  code: 'TOO_MANY_REQUESTS',
+});

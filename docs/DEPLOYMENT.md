@@ -68,7 +68,8 @@ Web admin (Vercel) ──────► API admin (Render) ──────�
 | `MONGODB_URI` | connection string Atlas |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | 2 secret của API phụ huynh |
 | `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN` | `15m`, `7d` |
-| `AI_PROVIDER`, `GEMINI_API_KEY` | `gemini`, key Gemini |
+| `AI_PROVIDER`, `GEMINI_API_KEY` | `gemini`, key Gemini dùng cho Chat AI Assistant |
+| `SENTINEL_GEMINI_API_KEY` | Key Gemini riêng biệt, bắt buộc cho hệ thống Sentinel AI Moderation (không fallback) |
 | `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | `gemini-3.5-flash`, `gemini-3.5-flash-lite` (chạy `npm run ai:check` trên server để kiểm tra key và tên model) |
 | `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` | key PayOS |
 | `PAYOS_RETURN_URL`, `PAYOS_CANCEL_URL` | `<CLIENT_URL>/payment/success`, `<CLIENT_URL>/payment/cancel` |

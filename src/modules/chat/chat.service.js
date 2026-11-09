@@ -1,5 +1,6 @@
 import chatRepository from './chat.repository.js';
 import parentService from '../parent/parent.service.js';
+import userService from '../user/user.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import connectionService from '../connection/connection.service.js';
@@ -22,8 +23,13 @@ class ChatService {
       throw new AppError('User or parent ID is required', 400, 'ID_REQUIRED');
     }
 
-    // Already a parent object/doc. Checked on `_id` only: an ObjectId also exposes an `id` getter.
-    if (typeof parentOrUserId === 'object' && parentOrUserId._id) {
+    // Already a parent object/doc (not a bare ObjectId)
+    if (
+      typeof parentOrUserId === 'object' &&
+      !parentOrUserId._bsontype &&
+      parentOrUserId._id &&
+      parentOrUserId.userId
+    ) {
       return parentOrUserId;
     }
 
@@ -284,6 +290,15 @@ class ChatService {
    */
   async sendMessage(parentOrUserId, conversationId, { content, type, mediaUrl }) {
     const parent = await this._resolveParent(parentOrUserId);
+
+    const userId = parent?.userId?._id || parent?.userId;
+    if (userId) {
+      const senderUser = await userService.getUserById(userId).catch(() => null);
+      if (senderUser?.messagingRestrictedUntil && new Date(senderUser.messagingRestrictedUntil) > new Date()) {
+        throw new AppError('Messaging is temporarily restricted', 403, 'MESSAGING_RESTRICTED');
+      }
+    }
+
     const conversation = await chatRepository.findConversationDocById(conversationId);
 
     if (!conversation) {

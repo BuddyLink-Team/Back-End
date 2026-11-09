@@ -23,7 +23,21 @@ const reportActionSchema = new mongoose.Schema(
     performedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      default: null,
+    },
+    actorType: {
+      type: String,
+      enum: ['admin', 'system'],
+      default: 'admin',
+    },
+    propagatedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Report',
+      default: null,
+    },
+    isProvisional: {
+      type: Boolean,
+      default: false,
     },
     performedAt: {
       type: Date,
@@ -58,9 +72,16 @@ const sentinelAssessmentSchema = new mongoose.Schema(
       enum: Object.values(REPORT_SEVERITY),
       default: null,
     },
+    policySuggestedSeverity: {
+      type: String,
+      enum: Object.values(REPORT_SEVERITY),
+      default: null,
+    },
     confidenceScore: { type: Number, min: 0, max: 100, default: null },
     strikeCount: { type: Number, default: 1 },
     policyClause: { type: String, default: '' },
+    isFallback: { type: Boolean, default: false },
+    autoResolveEligible: { type: Boolean, default: false },
     evidenceAnalysis: {
       isValid: { type: Boolean, default: null },
       notes: { type: String, default: '' },
@@ -120,7 +141,12 @@ const reportHistorySchema = new mongoose.Schema(
     by: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      default: null,
+    },
+    actorType: {
+      type: String,
+      enum: ['admin', 'system'],
+      default: 'admin',
     },
     at: {
       type: Date,

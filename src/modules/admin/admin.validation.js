@@ -441,7 +441,13 @@ export const updateReportSeverityValidation = [
   body('overrideReason')
     .optional()
     .isString()
-    .trim(),
+    .trim()
+    .custom((val, { req }) => {
+      if (req.body.isPolicyOverride && (!val || val.length < 20)) {
+        throw new Error('Lý do giải trình ngoại lệ phải có ít nhất 20 ký tự');
+      }
+      return true;
+    }),
 ];
 
 /**
@@ -478,7 +484,13 @@ export const applyReportActionValidation = [
   body('overrideReason')
     .optional()
     .isString()
-    .trim(),
+    .trim()
+    .custom((val, { req }) => {
+      if (req.body.isPolicyOverride && (!val || val.length < 20)) {
+        throw new Error('Lý do giải trình ngoại lệ phải có ít nhất 20 ký tự');
+      }
+      return true;
+    }),
 ];
 
 /**
@@ -626,3 +638,19 @@ export const listAdminNotificationsValidation = [
  * Validation rules for PATCH /api/v1/admin/notifications/read-all
  */
 export const readAllAdminNotificationsValidation = [notificationCategoryValidation];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/sentinel/batch-scan
+ */
+export const batchScanSentinelValidation = [];
+
+/**
+ * Validation rules for POST /api/v1/admin/reports/sentinel/batch-apply
+ */
+export const batchApplySentinelValidation = [
+  body('minConfidence')
+    .optional()
+    .isInt({ min: 75, max: 100 })
+    .withMessage('minConfidence must be an integer between 75 and 100')
+    .toInt(),
+];

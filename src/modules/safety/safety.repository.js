@@ -11,6 +11,11 @@ import {
   REPORT_SORTS,
   REPORT_STATUS,
 } from "./safety.constants.js";
+import {
+  calculateVelocity,
+  calculatePattern,
+  calculateCredibility,
+} from "./enforcement-metrics.rules.js";
 
 const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -218,6 +223,7 @@ class SafetyRepository {
    */
   async findReportPage({
     status,
+    statuses,
     severity,
     category,
     targetType,
@@ -246,6 +252,7 @@ class SafetyRepository {
 
     const match = {
       ...(status ? { status } : {}),
+      ...(statuses && Array.isArray(statuses) && statuses.length > 0 ? { status: { $in: statuses } } : {}),
       ...(severity ? { severity } : {}),
       ...(category ? { category } : {}),
       ...(targetType ? { targetType } : {}),
@@ -331,19 +338,89 @@ class SafetyRepository {
 
   /**
    * Count distinct reports with actions taken (sanctions) applied against a user.
+   * Excludes actions that were propagated from another report or are provisional.
    * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @param {string|mongoose.Types.ObjectId} [excludeReportId]
    * @returns {Promise<number>}
    */
-  async countUserPriorSanctions(reportedUserId) {
-    return Report.countDocuments({
+  async countUserPriorSanctions(reportedUserId, excludeReportId = null) {
+    const query = {
       reportedUserId,
-      'actions.0': { $exists: true },
       status: REPORT_STATUS.RESOLVED,
-    });
+      actions: {
+        $elemMatch: {
+          propagatedFrom: null,
+          isProvisional: { $ne: true },
+        },
+      },
+    };
+    if (excludeReportId) {
+      query._id = { $ne: excludeReportId };
+    }
+    return Report.countDocuments(query);
   }
 
   /**
-   * Compute 3-Factor Automated Enforcement metrics (Report Velocity, Reporter Credibility, Incident Pattern).
+   * Find reports against a user within a specific time window
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @param {Date} windowStart
+   * @param {Date} windowEnd
+   */
+  async findReportsAgainstInWindow(reportedUserId, windowStart, windowEnd) {
+    return Report.find({
+      reportedUserId,
+      createdAt: { $gte: windowStart, $lte: windowEnd },
+    })
+      .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
+      .lean();
+  }
+
+  /**
+   * Find open reports against a user
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   * @param {string[]} [openStatuses]
+   */
+  async findOpenReportsAgainst(reportedUserId, openStatuses = REPORT_OPEN_STATUSES) {
+    return Report.find({
+      reportedUserId,
+      status: { $in: openStatuses },
+    })
+      .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
+      .lean();
+  }
+
+  /**
+   * Count report outcomes for a reporter
+   * @param {string|mongoose.Types.ObjectId} reporterId
+   */
+  async countReporterOutcomes(reporterId) {
+    const [totalSubmitted, confirmedCount, dismissedCount] = await Promise.all([
+      Report.countDocuments({ reporterId }),
+      Report.countDocuments({ reporterId, status: REPORT_STATUS.RESOLVED }),
+      Report.countDocuments({ reporterId, status: REPORT_STATUS.DISMISSED }),
+    ]);
+    return {
+      totalSubmitted,
+      confirmedCount,
+      dismissedCount,
+    };
+  }
+
+  /**
+   * Check if reported user currently has open reports with active temporary restriction
+   * @param {string|mongoose.Types.ObjectId} reportedUserId
+   */
+  async hasOpenRestrictedReports(reportedUserId) {
+    const count = await Report.countDocuments({
+      reportedUserId,
+      status: { $in: REPORT_OPEN_STATUSES },
+      'sentinelAssessment.monitoring.temporaryRestriction.applied': true,
+    });
+    return count > 0;
+  }
+
+  /**
+   * Compute 3-Factor Automated Enforcement metrics (delegates to enforcement-metrics.rules.js).
    * @param {Object} report
    */
   async getEnforcementMonitoringMetrics(report) {
@@ -352,83 +429,30 @@ class SafetyRepository {
     const windowStart = new Date(anchorTime.getTime() - windowMs);
     const windowEnd = new Date(anchorTime.getTime() + windowMs);
 
-    const [
-      reportsIn30Min,
-      openAgainstUser,
-      reporterTotalSubmitted,
-      reporterConfirmedCount,
-      reporterDismissedCount,
-    ] = await Promise.all([
-      Report.find({
-        reportedUserId: report.reportedUserId,
-        createdAt: { $gte: windowStart, $lte: windowEnd },
-      })
-        .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls')
-        .lean(),
-      Report.find({
-        reportedUserId: report.reportedUserId,
-        status: { $in: REPORT_OPEN_STATUSES },
-      })
-        .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
-        .lean(),
-      Report.countDocuments({ reporterId: report.reporterId }),
-      Report.countDocuments({ reporterId: report.reporterId, status: REPORT_STATUS.RESOLVED }),
-      Report.countDocuments({ reporterId: report.reporterId, status: REPORT_STATUS.DISMISSED }),
+    const [reportsIn30Min, openAgainstUser, outcomes] = await Promise.all([
+      this.findReportsAgainstInWindow(report.reportedUserId, windowStart, windowEnd),
+      this.findOpenReportsAgainst(report.reportedUserId),
+      this.countReporterOutcomes(report.reporterId),
     ]);
 
-    const relevantCluster = reportsIn30Min.length >= openAgainstUser.length ? reportsIn30Min : openAgainstUser;
-    const reportsIn30MinCount = Math.max(1, reportsIn30Min.length);
-    const openAgainstUserCount = Math.max(1, openAgainstUser.length);
-    const uniqueReporterIds = new Set(relevantCluster.map((r) => String(r.reporterId)));
-    const uniqueReportersCount = Math.max(1, uniqueReporterIds.size);
-
-    // Assess whether multiple reports are independent incidents or suspected coordinated brigading
-    const hasDirectTargets = relevantCluster.some(
-      (r) => Boolean(r.targetMessageId) || Boolean(r.targetPlaydateId) || (r.evidenceUrls && r.evidenceUrls.length > 0)
-    );
-    const distinctTargetMessages = new Set(
-      relevantCluster.map((r) => (r.targetMessageId ? String(r.targetMessageId) : null)).filter(Boolean)
-    );
-
-    let coordinatedSuspected = false;
-    let isIndependentIncidents = true;
-    let incidentPattern =
-      'Sự việc đơn lẻ từ phụ huynh báo cáo trực tiếp, không có dấu hiệu nhiều tài khoản phối hợp report.';
-
-    if (uniqueReportersCount >= 2) {
-      if (!hasDirectTargets && distinctTargetMessages.size === 0 && uniqueReportersCount >= 3) {
-        coordinatedSuspected = true;
-        isIndependentIncidents = false;
-        incidentPattern = `Cảnh báo: Ghi nhận ${uniqueReportersCount} tài khoản cùng report trong thời gian ngắn nhưng thiếu bằng chứng tin nhắn trực tiếp (cần kiểm tra khả năng report phối hợp/brigading).`;
-      } else {
-        coordinatedSuspected = false;
-        isIndependentIncidents = true;
-        incidentPattern = `Ghi nhận ${relevantCluster.length} báo cáo từ ${uniqueReportersCount} phụ huynh độc lập với ngữ cảnh tương tác riêng biệt (không phải report giả phối hợp).`;
-      }
-    }
-
-    let credibilityLevel = 'high';
-    let credibilityLabel = 'Đáng tin cậy — Lịch sử báo cáo tốt, không có dấu hiệu phối hợp report ảo';
-    if (reporterDismissedCount >= 2 && reporterDismissedCount > reporterConfirmedCount) {
-      credibilityLevel = 'low';
-      credibilityLabel = `Độ tin cậy thấp — Người báo cáo từng có ${reporterDismissedCount} báo cáo bị bác bỏ`;
-    } else if (coordinatedSuspected) {
-      credibilityLevel = 'normal';
-      credibilityLabel = 'Cần lưu ý — Nhiều báo cáo đổ về cùng lúc, cần Admin đối chiếu bằng chứng';
-    }
+    const velocity = calculateVelocity(reportsIn30Min);
+    const pattern = calculatePattern(reportsIn30Min);
+    const credibility = calculateCredibility(null, outcomes, {
+      coordinatedSuspected: pattern.coordinatedSuspected,
+    });
 
     return {
-      reportsIn30MinCount,
-      openAgainstUserCount,
-      uniqueReportersCount,
-      reporterTotalSubmitted: Math.max(1, reporterTotalSubmitted),
-      reporterConfirmedCount,
-      reporterDismissedCount,
-      credibilityLevel,
-      credibilityLabel,
-      coordinatedSuspected,
-      isIndependentIncidents,
-      incidentPattern,
+      reportsIn30MinCount: velocity.reportsIn30MinCount,
+      openAgainstUserCount: openAgainstUser.length,
+      uniqueReportersCount: velocity.uniqueReportersCount,
+      reporterTotalSubmitted: outcomes.totalSubmitted,
+      reporterConfirmedCount: outcomes.confirmedCount,
+      reporterDismissedCount: outcomes.dismissedCount,
+      credibilityLevel: credibility.level,
+      credibilityLabel: credibility.label,
+      coordinatedSuspected: pattern.coordinatedSuspected,
+      isIndependentIncidents: pattern.isIndependentIncidents,
+      incidentPattern: pattern.incidentPattern,
     };
   }
 

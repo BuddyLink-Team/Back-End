@@ -13,13 +13,19 @@ import moderationRealtimeService from '../safety/moderation-realtime.service.js'
 import logger from '../../shared/logger/index.js';
 import env from '../../config/env.js';
 import AppError from '../../shared/exceptions/app-error.js';
-import { PAGINATION } from '../../shared/constants/index.js';
 import { getZonedParts, getZonedDayRange } from '../../shared/helpers/date.helper.js';
 import { ADMIN_REPORT_ERRORS } from './admin.constants.js';
 import { emitUserEvent, USER_EVENTS } from '../user/user.events.js';
 import {
+  toOptionalBoolean,
+  toPaging,
+  toPagination,
+  toDateBound,
+} from './admin.helpers.js';
+import {
   REPORT_ACCOUNT_SANCTION_TYPES,
   REPORT_ACTION_TYPES,
+  REPORT_CATEGORIES,
   REPORT_CATEGORY_NOTICES,
   REPORT_CLOSED_STATUSES,
   REPORT_HISTORY_EVENT_TYPES,
@@ -39,33 +45,6 @@ import {
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const toOptionalBoolean = (value) => {
-  if (value === undefined || value === null || value === '') return undefined;
-  return value === true || value === 'true';
-};
-
-const toPaging = ({ page, limit }) => {
-  const pageNum = Math.max(1, parseInt(page, 10) || PAGINATION.DEFAULT_PAGE);
-  const limitNum = Math.min(PAGINATION.MAX_LIMIT, Math.max(1, parseInt(limit, 10) || PAGINATION.DEFAULT_LIMIT));
-  return { page: pageNum, limit: limitNum };
-};
-
-const toPagination = ({ page, limit }, total) => ({
-  page,
-  limit,
-  total,
-  totalPages: Math.ceil(total / limit) || 1,
-});
-
-const toDateBound = (value, { endOfDay = false } = {}) => {
-  if (!value) return undefined;
-  if (typeof value === 'string' && value.length === 10) {
-    const { start, end } = getZonedDayRange(value);
-    return endOfDay ? end : start;
-  }
-  return new Date(value);
-};
 
 const checkIsOverdue = (report) => {
   if (!REPORT_OPEN_STATUSES.includes(report.status)) return false;
@@ -237,10 +216,9 @@ class AdminReportService {
       )
       .sort((a, b) => new Date(b.performedAt) - new Date(a.performedAt));
 
-    const priorSanctionsCount = await safetyService.countUserPriorSanctions(report.reportedUserId);
-    const effectiveSeverity = report.sentinelAssessment?.severityRecommendation || report.severity;
+    const priorSanctionsCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report._id);
     const policyGuidance = report.sentinelAssessment?.assessedAt
-      ? calculatePolicySanction(report.category, effectiveSeverity, priorSanctionsCount, report.targetType)
+      ? calculatePolicySanction(report.category, report.severity, priorSanctionsCount, report.targetType)
       : null;
 
     if (report.sentinelAssessment?.assessedAt && !report.sentinelAssessment.monitoring?.investigationSteps?.length) {
@@ -251,8 +229,8 @@ class AdminReportService {
       );
       const isHighRisk =
         Boolean(report.sentinelAssessment.autoShieldApplied) ||
-        effectiveSeverity === REPORT_SEVERITY.CRITICAL ||
-        effectiveSeverity === REPORT_SEVERITY.HIGH ||
+        report.severity === REPORT_SEVERITY.CRITICAL ||
+        report.severity === REPORT_SEVERITY.HIGH ||
         reportsReceivedCount >= 3;
       const riskLevel = isHighRisk ? 'high' : reportsReceivedCount === 2 ? 'medium' : 'low';
       const evidenceNote =
@@ -408,10 +386,14 @@ class AdminReportService {
       throw new AppError('This action has already been applied to this report', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
     }
 
-    const priorCount = await safetyService.countUserPriorSanctions(report.reportedUserId);
-    const effectiveSeverity = report.sentinelAssessment?.severityRecommendation || report.severity;
-    const policyResult = calculatePolicySanction(report.category, effectiveSeverity, priorCount, report.targetType);
-    const { isOverride: requiredOverride } = checkActionPolicyCompliance(type, policyResult);
+    this._assertActionTarget(report, type);
+
+    const hasAssessment = Boolean(report.sentinelAssessment?.assessedAt);
+    const priorCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report._id);
+    const policyResult = hasAssessment
+      ? calculatePolicySanction(report.category, report.severity, priorCount, report.targetType)
+      : null;
+    const { isOverride: requiredOverride } = checkActionPolicyCompliance(type, policyResult, durationDays);
 
     if (requiredOverride && !isPolicyOverride) {
       throw new AppError(
@@ -449,17 +431,19 @@ class AdminReportService {
       type,
       params: { durationDays: durationValue, reason: note || '' },
       performedBy: adminUserId,
+      actorType: 'admin',
       performedAt: new Date(),
       note: note || '',
       isPolicyOverride: Boolean(isPolicyOverride),
       overrideReason: isPolicyOverride ? overrideReason.trim() : '',
-      policyClause: policyResult.clause,
+      policyClause: policyResult?.clause || '',
     });
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
       fromStatus: report.status,
       toStatus: report.status,
       by: adminUserId,
+      actorType: 'admin',
       at: new Date(),
       note: isPolicyOverride
         ? `Đã thi hành chế tài (Ngoại lệ chính sách): ${type} - Lý do: ${overrideReason}`
@@ -473,6 +457,7 @@ class AdminReportService {
         fromStatus: report.status,
         toStatus: report.status,
         by: adminUserId,
+        actorType: 'admin',
         at: new Date(),
         note: `Ngoại lệ chính sách cho "${type}": ${overrideReason}`,
         metadata: { actionType: type, overrideReason },
@@ -481,6 +466,25 @@ class AdminReportService {
 
     await safetyService.saveReport(report);
     return this.getReportDetail(id);
+  }
+
+  _assertActionTarget(report, type) {
+    if (type === REPORT_ACTION_TYPES.DELETE_MESSAGE) {
+      if (report.targetType !== REPORT_TARGET_TYPES.MESSAGE) {
+        throw new AppError('Report is not targeting a message', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
+      }
+      if (!report.targetMessageId) {
+        throw new AppError('The reported message no longer exists', 404, ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND);
+      }
+    }
+    if (type === REPORT_ACTION_TYPES.CANCEL_PLAYDATE) {
+      if (report.targetType !== REPORT_TARGET_TYPES.PLAYDATE) {
+        throw new AppError('Report is not targeting a playdate', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
+      }
+      if (!report.targetPlaydateId) {
+        throw new AppError('The reported playdate no longer exists', 404, ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND);
+      }
+    }
   }
 
   /**
@@ -568,7 +572,17 @@ class AdminReportService {
             err.code !== ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED &&
             err.code !== ADMIN_REPORT_ERRORS.TARGET_NOT_FOUND
           ) {
-            throw err;
+            currentReport.history.push({
+              eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_APPLIED,
+              fromStatus: currentReport.status,
+              toStatus: currentReport.status,
+              by: adminUserId,
+              actorType: 'admin',
+              at: new Date(),
+              note: `ACTION_FAILED: Thất bại khi áp dụng ${sanction.type} (${err.message})`,
+              metadata: { actionType: sanction.type, error: err.message },
+            });
+            await safetyService.saveReport(currentReport);
           }
         }
       }
@@ -602,23 +616,41 @@ class AdminReportService {
    * @param {string} adminUserId
    */
   async batchScanReportsWithSentinel(adminUserId) {
-    const { items } = await safetyService.findReportPage({
+    const { items, total } = await safetyService.findReportPage({
+      statuses: REPORT_OPEN_STATUSES,
       page: 1,
-      limit: 50,
+      limit: 20,
     });
 
-    const openReports = items.filter((r) => REPORT_OPEN_STATUSES.includes(r.status));
-    const targets = openReports.slice(0, 20);
+    const targets = items.filter((r) => {
+      if (r.status === REPORT_STATUS.REVIEWING && r.assignedTo && String(r.assignedTo) !== String(adminUserId)) {
+        return false;
+      }
+      return true;
+    });
 
-    const results = await Promise.all(
-      targets.map(async (item) => {
-        const doc = await safetyService.getReportDocById(item._id);
-        if (!doc) return null;
-        return sentinelService.assessReport(doc, adminUserId, {
-          forceRefresh: false,
-        });
-      })
-    );
+    const failedIds = [];
+    const assessOne = async (item) => {
+      const doc = await safetyService.getReportDocById(item._id);
+      if (!doc) return null;
+      return sentinelService.assessReport(doc, adminUserId, {
+        forceRefresh: false,
+        allowAutoEnforce: false,
+      });
+    };
+
+    const results = [];
+    for (let i = 0; i < targets.length; i += 3) {
+      const chunk = targets.slice(i, i + 3);
+      const settled = await Promise.allSettled(chunk.map((item) => assessOne(item)));
+      settled.forEach((res, idx) => {
+        if (res.status === 'fulfilled' && res.value) {
+          results.push(res.value);
+        } else {
+          failedIds.push(chunk[idx]._id.toString());
+        }
+      });
+    }
 
     let scannedCount = 0;
     let highConfidenceCount = 0;
@@ -639,17 +671,21 @@ class AdminReportService {
       }
     }
 
-    const { items: refreshedItems } = await this.getReports({ page: 1, limit: 50 });
-    const scannedReports = refreshedItems.filter((r) => REPORT_OPEN_STATUSES.includes(r.status));
+    const { items: refreshedItems } = await this.getReports({
+      page: 1,
+      limit: 20,
+      statuses: REPORT_OPEN_STATUSES,
+    });
 
     return {
       scannedCount,
       highConfidenceCount,
       autoShieldCount,
       autoResolvedCount,
-      totalOpenCount: openReports.length,
+      totalOpenCount: total,
+      failedIds,
       scannedAt: new Date().toISOString(),
-      scannedReports,
+      scannedReports: refreshedItems,
     };
   }
 
@@ -658,28 +694,58 @@ class AdminReportService {
    * @param {string} adminUserId
    * @param {{ minConfidence?: number }} [options]
    */
-  async batchApplySentinelRecommendations(adminUserId, { minConfidence = 75 } = {}) {
-    const threshold = Math.max(50, Math.min(100, parseInt(minConfidence, 10) || 75));
+  async batchApplySentinelRecommendations(adminUserId, { minConfidence = 80 } = {}) {
+    const threshold = Math.max(75, Math.min(100, parseInt(minConfidence, 10) || 80));
     const { items } = await safetyService.findReportPage({
+      statuses: REPORT_OPEN_STATUSES,
       page: 1,
       limit: 50,
     });
 
-    const openCandidates = items.filter(
-      (r) =>
-        REPORT_OPEN_STATUSES.includes(r.status) &&
-        r.sentinelAssessment?.assessedAt &&
-        (r.sentinelAssessment.confidenceScore || 0) >= threshold
-    );
-
     let executedCount = 0;
     const processedIds = [];
+    const skipped = [];
 
-    for (const candidate of openCandidates) {
+    for (const candidate of items) {
       const freshDoc = await safetyService.getReportDocById(candidate._id);
       if (!freshDoc || REPORT_CLOSED_STATUSES.includes(freshDoc.status)) {
         continue;
       }
+
+      const assessment = freshDoc.sentinelAssessment;
+      if (!assessment?.assessedAt) {
+        skipped.push({ id: freshDoc._id.toString(), reason: 'Chưa có đánh giá từ Sentinel AI' });
+        continue;
+      }
+      if ((assessment.confidenceScore || 0) < threshold) {
+        skipped.push({ id: freshDoc._id.toString(), reason: `Độ tự tin (${assessment.confidenceScore}%) thấp hơn ngưỡng ${threshold}%` });
+        continue;
+      }
+      if (assessment.isFallback) {
+        skipped.push({ id: freshDoc._id.toString(), reason: 'Đánh giá AI gặp sự cố (Fallback) — Cần Admin xử lý thủ công' });
+        continue;
+      }
+      if (assessment.autoResolveEligible !== true) {
+        skipped.push({ id: freshDoc._id.toString(), reason: 'Không đủ điều kiện tự động thi hành (cần Human-in-the-Loop)' });
+        continue;
+      }
+      if (assessment.monitoring?.reporterCredibility?.coordinatedSuspected) {
+        skipped.push({ id: freshDoc._id.toString(), reason: 'Nghi vấn báo cáo phối hợp/brigading' });
+        continue;
+      }
+      if (freshDoc.category === REPORT_CATEGORIES.CHILD_SAFETY || freshDoc.severity === REPORT_SEVERITY.CRITICAL) {
+        skipped.push({ id: freshDoc._id.toString(), reason: 'Vi phạm an toàn trẻ em hoặc mức Critical bắt buộc Admin xác nhận' });
+        continue;
+      }
+
+      const hasHeavySanction = (assessment.recommendedSanctions || []).some(
+        (s) => s.type === REPORT_ACTION_TYPES.BAN || (s.type === REPORT_ACTION_TYPES.SUSPEND && (s.durationDays || 0) > 7)
+      );
+      if (hasHeavySanction) {
+        skipped.push({ id: freshDoc._id.toString(), reason: 'Đề xuất chế tài nặng (Cấm hoặc đình chỉ > 7 ngày)' });
+        continue;
+      }
+
       await this.applySentinelRecommendation(adminUserId, freshDoc._id.toString());
       executedCount += 1;
       processedIds.push(freshDoc._id.toString());
@@ -689,6 +755,7 @@ class AdminReportService {
       executedCount,
       minConfidence: threshold,
       processedIds,
+      skipped,
     };
   }
 
@@ -733,6 +800,8 @@ class AdminReportService {
             type: action.type,
             params: action.params,
             performedBy: adminUserId,
+            actorType: 'admin',
+            propagatedFrom: report._id,
             performedAt: new Date(),
             note: action.note,
           });
@@ -741,6 +810,7 @@ class AdminReportService {
             fromStatus: related.status,
             toStatus: related.status,
             by: adminUserId,
+            actorType: 'admin',
             at: new Date(),
             note: `Áp dụng chế tài ${action.type} theo báo cáo ${report._id}`,
             metadata: { actionType: action.type, sourceReportId: report._id },
@@ -756,6 +826,15 @@ class AdminReportService {
         });
         await safetyService.saveReport(related);
         await this._notifyReporter(related, status);
+      }
+    }
+
+    // Check if reported user has other open restricted reports; if not, lift messaging restriction
+    const hasRemainingRestricted = await safetyService.hasOpenRestrictedReports(report.reportedUserId);
+    if (!hasRemainingRestricted) {
+      const reportedParent = await parentService.getParentById(report.reportedUserId).catch(() => null);
+      if (reportedParent?.userId) {
+        await userService.liftMessagingRestriction(reportedParent.userId).catch(() => {});
       }
     }
 

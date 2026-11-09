@@ -1,4 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary';
+import axios from 'axios';
 import env from '../../config/env.js';
 import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/app-error.js';
@@ -117,6 +118,59 @@ class StorageAdapter {
       env.NODE_ENV !== 'production' &&
       /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
     );
+  }
+
+  /**
+   * Fetch an image URL and convert it to Gemini inlineData format
+   * @param {string} url
+   * @returns {Promise<{ inlineData: { mimeType: string, data: string } }|null>}
+   */
+  async fetchImageAsInlineData(url) {
+    if (!this.isOwnedMediaUrl(url)) {
+      logger.warn(`[StorageAdapter] Disallowed or unowned media URL: ${url}`);
+      return null;
+    }
+
+    const value = url.trim();
+
+    // If it's already an inline data URL
+    if (value.startsWith('data:')) {
+      const match = value.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+      if (match) {
+        return {
+          inlineData: {
+            mimeType: match[1],
+            data: match[2],
+          },
+        };
+      }
+      return null;
+    }
+
+    try {
+      const response = await axios.get(value, {
+        responseType: 'arraybuffer',
+        timeout: 5000,
+        maxContentLength: 5 * 1024 * 1024,
+      });
+
+      const contentType = response.headers['content-type'] || 'image/jpeg';
+      if (!contentType.startsWith('image/')) {
+        logger.warn(`[StorageAdapter] Non-image content-type returned: ${contentType}`);
+        return null;
+      }
+
+      const base64Data = Buffer.from(response.data).toString('base64');
+      return {
+        inlineData: {
+          mimeType: contentType,
+          data: base64Data,
+        },
+      };
+    } catch (err) {
+      logger.warn(`[StorageAdapter] Failed to download media image ${value}: ${err.message}`);
+      return null;
+    }
   }
 
   /**

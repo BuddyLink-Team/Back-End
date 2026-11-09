@@ -1,6 +1,7 @@
 import safetyRepository from './safety.repository.js';
 import parentService from '../parent/parent.service.js';
 import AppError from '../../shared/exceptions/app-error.js';
+import logger from '../../shared/logger/index.js';
 import storageAdapter from '../../integrations/storage/storage.adapter.js';
 import SafetyDTO from './safety.dto.js';
 import { emitSafetyEvent, SAFETY_EVENTS } from './safety.events.js';
@@ -252,7 +253,7 @@ class SafetyService {
     // Background Auto-Triage & Autonomous Shield via BuddyLink Sentinel
     import('./sentinel.service.js')
       .then(({ default: sentinelService }) => sentinelService.assessReport(report, null))
-      .catch(() => {});
+      .catch((err) => logger.warn(`[Sentinel] Background assess failed report=${report._id}: ${err.code || err.message}`));
 
     return SafetyDTO.toReportResponse(report);
   }
@@ -347,8 +348,24 @@ class SafetyService {
     return safetyRepository.countReportsFiledBy(parentId);
   }
 
-  async countUserPriorSanctions(parentId) {
-    return safetyRepository.countUserPriorSanctions(parentId);
+  async countUserPriorSanctions(parentId, excludeReportId = null) {
+    return safetyRepository.countUserPriorSanctions(parentId, excludeReportId);
+  }
+
+  async hasOpenRestrictedReports(reportedUserId) {
+    return safetyRepository.hasOpenRestrictedReports(reportedUserId);
+  }
+
+  async findReportsAgainstInWindow(reportedUserId, windowStart, windowEnd) {
+    return safetyRepository.findReportsAgainstInWindow(reportedUserId, windowStart, windowEnd);
+  }
+
+  async findOpenReportsAgainst(reportedUserId, openStatuses) {
+    return safetyRepository.findOpenReportsAgainst(reportedUserId, openStatuses);
+  }
+
+  async countReporterOutcomes(reporterId) {
+    return safetyRepository.countReporterOutcomes(reporterId);
   }
 
   async getEnforcementMonitoringMetrics(report) {

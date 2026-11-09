@@ -60,6 +60,14 @@ class UserService {
     return userRepository.updateById(userId, { isActive: false, suspensionUntil: null, banReason });
   }
 
+  async restrictMessaging(userId, until) {
+    return userRepository.updateById(userId, { messagingRestrictedUntil: until });
+  }
+
+  async liftMessagingRestriction(userId) {
+    return userRepository.updateById(userId, { messagingRestrictedUntil: null });
+  }
+
   /**
    * Reactivate the given account when its suspension has ended, so it can sign in right away.
    * @param {Object} user - Updated in place

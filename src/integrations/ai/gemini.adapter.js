@@ -83,11 +83,21 @@ export class GeminiAdapter {
    * @param {Array<Object>} [params.functionDeclarations]
    * @param {boolean} [params.allowTools=true] - false forces a text answer
    * @param {number} [params.deadline] - Epoch ms after which no call is made or kept waiting (the fallback included)
+   * @param {string} [params.responseMimeType]
+   * @param {Object} [params.responseSchema]
    * @returns {Promise<{ text: string, functionCalls: Array<{ id?: string, name: string, args: Object }>,
    *   content: Object|null, usage: { promptTokens: number, completionTokens: number, totalTokens: number }, model: string }>}
    *   `content` is the raw model turn, to be sent back as is (it carries the thought signatures of function calls)
    */
-  async generateContent({ systemInstruction, contents, functionDeclarations = [], allowTools = true, deadline = Infinity }) {
+  async generateContent({
+    systemInstruction,
+    contents,
+    functionDeclarations = [],
+    allowTools = true,
+    deadline = Infinity,
+    responseMimeType,
+    responseSchema,
+  }) {
     const client = this._getClient();
     const configured = [env.AI.GEMINI_MODEL, env.AI.GEMINI_FALLBACK_MODEL].filter(
       (model, index, list) => model && list.indexOf(model) === index
@@ -111,6 +121,8 @@ export class GeminiAdapter {
           functionDeclarations,
           allowTools,
           timeoutMs,
+          responseMimeType,
+          responseSchema,
         });
         this._rateLimitedUntil.delete(model);
         return result;
@@ -132,7 +144,11 @@ export class GeminiAdapter {
   }
 
   /** @private */
-  async _generate(client, model, { systemInstruction, contents, functionDeclarations, allowTools, timeoutMs }) {
+  async _generate(
+    client,
+    model,
+    { systemInstruction, contents, functionDeclarations, allowTools, timeoutMs, responseMimeType, responseSchema }
+  ) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -144,6 +160,8 @@ export class GeminiAdapter {
           ...GENERATION_DEFAULTS,
           systemInstruction,
           abortSignal: controller.signal,
+          ...(responseMimeType ? { responseMimeType } : {}),
+          ...(responseSchema ? { responseSchema } : {}),
           ...(hasTools
             ? {
                 tools: [{ functionDeclarations }],
@@ -196,14 +214,14 @@ export class GeminiAdapter {
 export const geminiAdapter = new GeminiAdapter(
   () => env.AI.GEMINI_API_KEY,
   'GeminiAdapter',
-  'AI assistant is not configured. Please set GEMINI_API_KEY in .env',
-  'GEMINI_API_KEY_REQUIRED'
+  'AI assistant is not configured',
+  'AI_UNAVAILABLE'
 );
 
 export const sentinelGeminiAdapter = new GeminiAdapter(
   () => env.AI.SENTINEL_GEMINI_API_KEY,
   'SentinelGeminiAdapter',
-  'Chưa cấu hình SENTINEL_GEMINI_API_KEY cho Sentinel AI. Vui lòng điền API key riêng cho phần kiểm duyệt báo cáo trong file .env.',
+  'Sentinel AI is not configured. Please set SENTINEL_GEMINI_API_KEY in .env',
   'SENTINEL_API_KEY_REQUIRED'
 );
 export default geminiAdapter;
