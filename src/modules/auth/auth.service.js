@@ -255,8 +255,10 @@ class AuthService {
   /**
    * Google OAuth Login / Registration
    */
-  async loginWithGoogle({ idToken }) {
-    const googleUser = await googleAuthAdapter.verifyIdToken(idToken);
+  async loginWithGoogle({ idToken, accessToken }) {
+    const googleUser = idToken
+      ? await googleAuthAdapter.verifyIdToken(idToken)
+      : await googleAuthAdapter.verifyAccessToken(accessToken);
 
     // Only a Google-verified email proves ownership of the address we link or create
     if (!googleUser.isEmailVerified) {

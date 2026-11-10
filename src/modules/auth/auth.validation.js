@@ -34,8 +34,16 @@ export const loginValidation = [
   body("password").notEmpty().withMessage("Password is required"),
 ];
 
+// The Google One Tap / GSI button sends an ID token, the web app's own button an OAuth access token
 export const googleAuthValidation = [
-  body("idToken").trim().notEmpty().withMessage("Google idToken is required"),
+  body("idToken").optional().isString().trim(),
+  body("accessToken").optional().isString().trim(),
+  body().custom((value) => {
+    if (!value?.idToken && !value?.accessToken) {
+      throw new Error("Google idToken or accessToken is required");
+    }
+    return true;
+  }),
 ];
 
 export const sendPhoneOtpValidation = [

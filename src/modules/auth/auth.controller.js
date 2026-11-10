@@ -20,8 +20,8 @@ class AuthController {
 
   async googleAuth(req, res, next) {
     try {
-      const { idToken } = req.body;
-      const { dto } = await authService.loginWithGoogle({ idToken });
+      const { idToken, accessToken } = req.body;
+      const { dto } = await authService.loginWithGoogle({ idToken, accessToken });
 
       return successResponse(res, dto, 'Google authentication successful', 200);
     } catch (error) {
