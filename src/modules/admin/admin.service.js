@@ -247,7 +247,7 @@ class AdminService {
       throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
 
-    const [children, lockedChildIds, subscription, connections, playdates, reports] = await Promise.all([
+    const [children, lockedChildIds, subscription, connections, playdates, reports, reliability] = await Promise.all([
       childService.getAllChildrenByParentId(parent._id),
       childService.getLockedChildIds([parent._id]),
       // Same read as the parent app: an expired paid plan is moved to Free here (creates the Free row if missing)
@@ -255,6 +255,7 @@ class AdminService {
       connectionService.countAcceptedConnections(parent._id),
       playdateService.getPlaydateCountsForParent(parent._id),
       safetyService.countReportsAgainstParent(parent._id),
+      playdateService.getReliabilityForParent(parent._id),
     ]);
 
     const loginMethods = [
@@ -269,7 +270,7 @@ class AdminService {
       lockedChildIds,
       plan: subscriptionService.getEffectivePlan(subscription),
       loginMethods,
-      activity: { connections, playdates, reports },
+      activity: { connections, playdates, reports, reliability },
     });
   }
 

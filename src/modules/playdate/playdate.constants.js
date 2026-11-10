@@ -25,6 +25,26 @@ export const RESCHEDULE_STATUS = Object.freeze({
   CANCELLED: 'cancelled',
 });
 
+// A joined family leaving an upcoming playdate (POST /playdates/:id/leave)
+export const LEAVE_RULES = Object.freeze({
+  // Leaving less than this many hours before the start is a late leave (counted in the reliability)
+  LATE_HOURS: 24,
+  REASON_MAX_LENGTH: 300,
+});
+
+// Reliability of a parent: late leaves over a rolling window (own profile and admin)
+export const RELIABILITY_RULES = Object.freeze({
+  WINDOW_DAYS: 90,
+  // From this many late leaves in the window: at risk (admins get a notification when it is reached)
+  AT_RISK_LATE_LEAVES: 3,
+});
+
+export const RELIABILITY_LEVELS = Object.freeze({
+  GOOD: 'good', // no late leave in the window
+  FAIR: 'fair', // some, below the at-risk threshold
+  AT_RISK: 'at_risk',
+});
+
 // Friends returned by GET /playdates/friends (narrow the list with ?search=)
 export const INVITABLE_FRIENDS_LIMIT = 50;
 

@@ -202,37 +202,32 @@ describe('Inviting more friends to a playdate (POST /playdates/:id/participants)
     expect((await as(family).respond(second.body.data.id, 'declined')).status).toBe(200);
   }, 20000);
 
-  it('offers canLeave only to a family who joined and blocked the host or another joined family', async () => {
+  it('offers canLeave to every family who joined, until the start, and never to the host or an invitee', async () => {
     const lHost = await registerParent('leave-host');
-    const blocker = await registerParent('leave-blocker');
     const joined = await registerParent('leave-joined');
     const invited = await registerParent('leave-invited');
-    await Promise.all([connect(lHost, blocker), connect(lHost, joined), connect(lHost, invited)]);
-    const created = await as(lHost).create([blocker, joined, invited], { scheduledDate: isoDay(22) });
+    await Promise.all([connect(lHost, joined), connect(lHost, invited)]);
+    const created = await as(lHost).create([joined, invited], { scheduledDate: isoDay(22) });
     const id = created.body.data.id;
-    const canLeave = async (parent) => (await as(parent).get(id)).body.data.canLeave;
-    const block = (from, to) =>
-      Block.create({ blockerId: from.parentId, blockedId: to.parentId });
+    const viewOf = async (parent) => (await as(parent).get(id)).body.data;
 
-    await as(blocker).respond(id, 'accepted');
-    await as(joined).respond(id, 'accepted');
-    expect(await canLeave(blocker)).toBe(false);
-
-    // A family still invited does not count: who was invited stays private
-    await block(blocker, invited);
-    expect(await canLeave(blocker)).toBe(false);
-
-    await block(blocker, joined);
-    expect(await canLeave(blocker)).toBe(true);
-    // Being blocked gives nothing away, and the host cancels instead of leaving
-    expect(await canLeave(joined)).toBe(false);
-    expect(await canLeave(lHost)).toBe(false);
     // Still invited: the invitation can simply be declined
-    expect(await canLeave(invited)).toBe(false);
+    expect((await viewOf(invited)).canLeave).toBe(false);
+    await as(joined).respond(id, 'accepted');
+    const joinedView = await viewOf(joined);
+    expect(joinedView.canLeave).toBe(true);
+    // Weeks away: not a late leave
+    expect(joinedView.isLateLeave).toBe(false);
+    // The host cancels instead of leaving
+    expect((await viewOf(lHost)).canLeave).toBe(false);
 
-    const left = await request(app).post(`/api/v1/playdates/${id}/leave`).set('Authorization', `Bearer ${blocker.token}`);
+    const left = await request(app).post(`/api/v1/playdates/${id}/leave`).set('Authorization', `Bearer ${joined.token}`);
     expect(left.status).toBe(200);
-    expect(await canLeave(blocker)).toBe(false);
+    expect(left.body.data.canLeave).toBe(false);
+    // The host tells "left" apart from "declined"
+    const hostView = await viewOf(lHost);
+    expect(hostView.participants.find((p) => p.parentId === joined.parentId).leftAt).toBeTruthy();
+    expect(hostView.participants.find((p) => p.parentId === invited.parentId).leftAt).toBeNull();
   }, 20000);
 
   it('invites again a family who declined or left, back to pending, but never one still in', async () => {

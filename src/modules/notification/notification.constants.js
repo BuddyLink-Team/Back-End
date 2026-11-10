@@ -3,6 +3,8 @@ export const NOTIFICATION_TYPES = Object.freeze({
   CONNECTION_ACCEPTED: 'connection_accepted',
   PLAYDATE_INVITE: 'playdate_invite',
   PLAYDATE_REMINDER: 'playdate_reminder',
+  // A family who joined left the host's playdate
+  PLAYDATE_LEFT: 'playdate_left',
   BADGE_UNLOCKED: 'badge_unlocked',
   STREAK_REMINDER: 'streak_reminder',
   // A plan prepared by the AI assistant (e.g. meeting the same friends again after a good playdate)

@@ -272,6 +272,16 @@ describe('Admin portal parent and child management (/api/v1/admin)', () => {
         connections: 0,
         playdates: { all: 0, upcoming: 0, completed: 0, cancelled: 0 },
         reports: { total: 0, open: 0 },
+        reliability: {
+          level: 'good',
+          windowDays: 90,
+          lateLeaveHours: 24,
+          atRiskLateLeaves: 3,
+          leaves: 0,
+          lateLeaves: 0,
+          totalLateLeaves: 0,
+          lastLateLeaveAt: null,
+        },
       });
       expect(data.loginMethods).toEqual(['password']);
       expect(data.activeChildrenCount).toBe(1);

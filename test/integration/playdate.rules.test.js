@@ -319,6 +319,12 @@ describe('Playdate rules', () => {
       const created = await createPlaydate(leaveHost, [leaverA], { scheduledDate: isoDay(27) });
       const playdateId = created.body.data.id;
 
+      // Not joined yet: the invitation is declined, not left
+      const pending = await leave(leaverA, playdateId);
+      expect(pending.status).toBe(400);
+      expect(pending.body.error.code).toBe('NOT_JOINED');
+
+      await respond(leaverA, playdateId, 'accepted');
       expect((await leave(leaverA, playdateId)).status).toBe(200);
       const again = await leave(leaverA, playdateId);
       expect(again.status).toBe(400);

@@ -113,12 +113,25 @@ class PlaydateController {
 
   /**
    * POST /api/v1/playdates/:id/leave
-   * Participant leaves an upcoming playdate
+   * Participant who joined leaves an upcoming playdate (optional body.reason, sent to the host)
    */
   async leavePlaydate(req, res, next) {
     try {
-      const playdate = await playdateService.leavePlaydate(req.userId, req.params.id);
+      const playdate = await playdateService.leavePlaydate(req.userId, req.params.id, req.body?.reason);
       return successResponse(res, playdate, 'Successfully left playdate', 200);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/playdates/reliability/me
+   * Late leaves of the signed-in parent over the reliability window
+   */
+  async getMyReliability(req, res, next) {
+    try {
+      const reliability = await playdateService.getMyReliability(req.userId);
+      return successResponse(res, reliability, 'Reliability retrieved successfully', 200);
     } catch (error) {
       return next(error);
     }

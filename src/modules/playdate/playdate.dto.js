@@ -124,6 +124,8 @@ export class PlaydateResponseDTO {
       status: p.status,
       invitedAt: p.invitedAt,
       respondedAt: p.respondedAt,
+      // Declined after joining: the family left (null for a declined invitation)
+      leftAt: p.leftAt || null,
     }));
 
     // Chaperones and chaperone requirement calculation (BUD-49 Part B5)

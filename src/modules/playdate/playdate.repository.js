@@ -433,20 +433,27 @@ class PlaydateRepository {
   }
 
   /**
-   * Mark a family who has not declined yet as declined, only while the playdate is upcoming
+   * Mark a family who joined (accepted) as left: declined with leftAt, only while the playdate is upcoming
    * (atomic: a concurrent cancel/complete or a double click cannot leave twice)
    * @param {string|ObjectId} id
    * @param {string|ObjectId} parentId
+   * @param {Date} [leftAt]
    * @returns {Promise<Object|null>} null when the playdate is no longer upcoming or the parent already left
    */
-  async markParticipantLeft(id, parentId) {
+  async markParticipantLeft(id, parentId, leftAt = new Date()) {
     return Playdate.findOneAndUpdate(
       {
         _id: id,
         status: PLAYDATE_STATUS.UPCOMING,
-        participants: { $elemMatch: { parentId, status: { $ne: PARTICIPANT_STATUS.DECLINED } } },
+        participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.ACCEPTED } },
       },
-      { $set: { 'participants.$[family].status': PARTICIPANT_STATUS.DECLINED, 'participants.$[family].respondedAt': new Date() } },
+      {
+        $set: {
+          'participants.$[family].status': PARTICIPANT_STATUS.DECLINED,
+          'participants.$[family].respondedAt': leftAt,
+          'participants.$[family].leftAt': leftAt,
+        },
+      },
       { new: true, arrayFilters: [{ 'family.parentId': parentId }] },
     ).lean();
   }

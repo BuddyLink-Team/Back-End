@@ -1,5 +1,6 @@
 import playdateRepository from './playdate.repository.js';
 import rescheduleRepository from './reschedule.repository.js';
+import playdateLeaveRepository from './playdate-leave.repository.js';
 import parentService from '../parent/parent.service.js';
 import userService from '../user/user.service.js';
 import childService from '../child/child.service.js';
@@ -26,18 +27,21 @@ import {
   PLAYDATE_REMINDER,
   REMINDER_KINDS,
   CHAPERONE_ACTIONS,
+  LEAVE_RULES,
+  RELIABILITY_RULES,
 } from './playdate.constants.js';
 import { calculateChildPairScore } from '../discovery/matching.rules.js';
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { PAGINATION } from '../../shared/constants/index.js';
 import { emitPlaydateEvent, PLAYDATE_EVENTS } from './playdate.events.js';
-import { hostChildIdsOf, computeChaperoneSummary } from './playdate.rules.js';
+import { hostChildIdsOf, computeChaperoneSummary, isLateLeave, reliabilityLevelOf } from './playdate.rules.js';
 import { checkPlaceOpeningHours } from './playdate-time.rules.js';
 import placesService from '../places/places.service.js';
 
 const toId = (ref) => (ref?._id || ref)?.toString();
 const MINUTE_MS = 60 * 1000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 // scheduledDate is the calendar day; the start can be up to a day later and lasts up to 8h
 const CONFLICT_WINDOW_MS = 2 * DAY_MS;
 
@@ -375,8 +379,9 @@ class PlaydateService {
   }
 
   /**
-   * Playdate for one parent, with canLeave: a family who joined and blocked the host or another joined
-   * family gets a way out. Who was blocked stays private, and only the blocker's own blocks count.
+   * Playdate for one parent, with canLeave: a family who joined can leave until the playdate starts.
+   * isLateLeave: leaving now would be a late leave (counted in the reliability), unless the family
+   * blocked the host or another joined family (who was blocked stays private).
    * @param {Object} playdate
    * @param {ObjectId} parentId
    * @returns {Promise<Object>}
@@ -384,12 +389,26 @@ class PlaydateService {
    */
   async _toViewerResponse(playdate, parentId) {
     const response = PlaydateResponseDTO.toResponse(playdate, parentId);
-    const hasJoined =
-      playdate.status === PLAYDATE_STATUS.UPCOMING && response.myParticipantStatus === PARTICIPANT_STATUS.ACCEPTED;
-    if (!hasJoined) return { ...response, canLeave: false };
+    const now = new Date();
+    const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+    const canLeave =
+      playdate.status === PLAYDATE_STATUS.UPCOMING &&
+      response.myParticipantStatus === PARTICIPANT_STATUS.ACCEPTED &&
+      now < start;
+    if (!canLeave) return { ...response, canLeave: false, isLateLeave: false };
 
+    const isLate = isLateLeave(start, now);
+    const safetyExempt = isLate && (await this._hasBlockedAnyMember(playdate, parentId));
+    return { ...response, canLeave: true, isLateLeave: isLate && !safetyExempt };
+  }
+
+  /**
+   * The parent blocked the host or another joined family (only the parent's own blocks count)
+   * @private
+   */
+  async _hasBlockedAnyMember(playdate, parentId) {
     const otherMemberIds = this.getAcceptedParentIds(playdate).filter((id) => id !== parentId.toString());
-    return { ...response, canLeave: await safetyService.hasBlockedAny(parentId, otherMemberIds) };
+    return safetyService.hasBlockedAny(parentId, otherMemberIds);
   }
 
   /**
@@ -1011,11 +1030,15 @@ class PlaydateService {
   }
 
   /**
-   * Leave an upcoming playdate (Participant only)
+   * Leave an upcoming playdate the family joined (Participant only), until it starts.
+   * Every leave is recorded for the reliability; a late one (< LEAVE_RULES.LATE_HOURS before the start)
+   * counts, except when the family blocked the host or another joined family (safety choice).
+   * The participation quota is not given back (the family's own choice).
    * @param {string} userId
    * @param {string} id - Playdate ID
+   * @param {string} [reason] - Optional, sent to the host
    */
-  async leavePlaydate(userId, id) {
+  async leavePlaydate(userId, id, reason = '') {
     const parentId = await this._getParentId(userId);
     const playdate = await this._findPlaydateOrFail(id);
 
@@ -1034,17 +1057,102 @@ class PlaydateService {
     if (participant.status === PARTICIPANT_STATUS.DECLINED) {
       throw new AppError('You have already left this playdate', 400, 'ALREADY_LEFT');
     }
+    if (participant.status === PARTICIPANT_STATUS.PENDING) {
+      throw new AppError('You have not joined this playdate yet. Decline the invitation instead.', 400, 'NOT_JOINED');
+    }
 
-    const left = await playdateRepository.markParticipantLeft(id, parentId);
+    const now = new Date();
+    const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+    if (now >= start) {
+      throw new AppError('The playdate has already started and can no longer be left', 400, 'PLAYDATE_ALREADY_STARTED');
+    }
+
+    // Checked before leaving: once out, the family is no longer a member
+    const safetyExempt = await this._hasBlockedAnyMember(playdate, parentId);
+    const isLate = !safetyExempt && isLateLeave(start, now);
+    const cleanReason = safetyExempt ? '' : String(reason || '').trim().slice(0, LEAVE_RULES.REASON_MAX_LENGTH);
+
+    const left = await playdateRepository.markParticipantLeft(id, parentId, now);
     if (!left) {
       throw new AppError('You have already left this playdate or it is no longer upcoming', 409, 'LEAVE_CONFLICT');
     }
 
     await this._removeVoterFromPendingReschedule(id, parentId);
     await this._notifyMembersChanged(id);
+    await this._recordLeave({ playdate, parentId, now, start, isLate, safetyExempt, reason: cleanReason });
 
     const populated = await playdateRepository.findById(id);
-    return PlaydateResponseDTO.toResponse(populated, parentId);
+    return this._toViewerResponse(populated, parentId);
+  }
+
+  /**
+   * Keep the leave in the reliability history, tell the host, and the admins when the parent
+   * just reached the at-risk threshold. Never fails the leave itself.
+   * @private
+   */
+  async _recordLeave({ playdate, parentId, now, start, isLate, safetyExempt, reason }) {
+    try {
+      await playdateLeaveRepository.create({
+        playdateId: playdate._id,
+        parentId,
+        leftAt: now,
+        scheduledStart: start,
+        hoursBeforeStart: Math.round(((start - now) / HOUR_MS) * 10) / 10,
+        isLate,
+        safetyExempt,
+        reason,
+      });
+    } catch (error) {
+      logger.error(`[Playdate] leave history failed for parent=${parentId}: ${error.message}`);
+    }
+
+    void emitPlaydateEvent(PLAYDATE_EVENTS.PARTICIPANT_LEFT, {
+      playdateId: toId(playdate._id),
+      hostParentId: toId(playdate.hostParentId),
+      leaverParentId: parentId.toString(),
+      activity: playdate.activity,
+      isLate,
+      safetyExempt,
+      reason,
+    });
+
+    if (!isLate) return;
+    const reliability = await this.getReliabilityForParent(parentId).catch(() => null);
+    if (reliability?.lateLeaves === RELIABILITY_RULES.AT_RISK_LATE_LEAVES) {
+      void emitPlaydateEvent(PLAYDATE_EVENTS.RELIABILITY_AT_RISK, {
+        parentId: parentId.toString(),
+        lateLeaves: reliability.lateLeaves,
+        windowDays: RELIABILITY_RULES.WINDOW_DAYS,
+      });
+    }
+  }
+
+  /**
+   * Reliability of a parent: leaves (safety ones left out) over the last RELIABILITY_RULES.WINDOW_DAYS days
+   * @param {string|ObjectId} parentId
+   * @param {Date} [now]
+   * @returns {Promise<{ level: string, windowDays: number, lateLeaveHours: number, atRiskLateLeaves: number,
+   *   leaves: number, lateLeaves: number, totalLateLeaves: number, lastLateLeaveAt: Date|null }>}
+   */
+  async getReliabilityForParent(parentId, now = new Date()) {
+    const since = new Date(now.getTime() - RELIABILITY_RULES.WINDOW_DAYS * DAY_MS);
+    const summary = await playdateLeaveRepository.summarizeForParent(parentId, since);
+    return {
+      level: reliabilityLevelOf(summary.lateLeaves),
+      windowDays: RELIABILITY_RULES.WINDOW_DAYS,
+      lateLeaveHours: LEAVE_RULES.LATE_HOURS,
+      atRiskLateLeaves: RELIABILITY_RULES.AT_RISK_LATE_LEAVES,
+      ...summary,
+    };
+  }
+
+  /**
+   * Reliability of the signed-in parent (GET /playdates/reliability/me)
+   * @param {string} userId
+   */
+  async getMyReliability(userId) {
+    const parentId = await this._getParentId(userId);
+    return this.getReliabilityForParent(parentId);
   }
 
   /**

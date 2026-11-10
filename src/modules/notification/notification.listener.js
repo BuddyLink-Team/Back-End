@@ -179,6 +179,27 @@ const notifyPlaydateReminder = async ({
     );
 };
 
+// A family who joined left -> tell the host, with the reason they gave. A leave after a block
+// carries no reason (safetyExempt) and is worded like any other: the host never learns about the block.
+const notifyPlaydateParticipantLeft = async ({ playdateId, hostParentId, leaverParentId, activity, isLate, reason }) => {
+  const [host, leaver] = await Promise.all([
+    parentService.getParentById(hostParentId),
+    parentService.getParentById(leaverParentId),
+  ]);
+  if (!host?.userId) return;
+
+  const leaverName = leaver?.fullName || DEFAULT_PARENT_NAME;
+  const latePart = isLate ? ' sát giờ' : '';
+  const reasonPart = reason ? ` Lý do: "${reason}".` : '';
+  await notificationService.createNotification({
+    recipientId: host.userId,
+    type: NOTIFICATION_TYPES.PLAYDATE_LEFT,
+    title: 'Một gia đình đã rời buổi hẹn',
+    body: `${leaverName} đã rời${latePart} buổi "${activity || 'hẹn chơi'}".${reasonPart} Bạn có thể mời thêm bạn bè khác.`,
+    data: { senderId: leaverParentId, playdateId },
+  });
+};
+
 // A playdate rated 4-5 stars -> a ready plan to meet the same friends again (BUD-49 D4), opened from the notification
 const notifyRebookingSuggestion = async ({ playdateId, raterParentId, rating }) => {
   if (!rating || rating < REBOOKING_MIN_RATING) return;
@@ -217,6 +238,9 @@ export const registerNotificationListeners = () => {
   );
   onPlaydateEvent(PLAYDATE_EVENTS.INVITED, (payload) =>
     runInBackground('Playdate invited notification', () => notifyPlaydateInvited(payload))
+  );
+  onPlaydateEvent(PLAYDATE_EVENTS.PARTICIPANT_LEFT, (payload) =>
+    runInBackground('Playdate participant left notification', () => notifyPlaydateParticipantLeft(payload))
   );
   onPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, (payload) =>
     runInBackground('Playdate reminder notification', () => notifyPlaydateReminder(payload))

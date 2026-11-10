@@ -72,7 +72,7 @@ export class AdminUserDetailDTO {
    * @param {Set<string>} data.lockedChildIds - Children over the Free plan limit
    * @param {Object} data.plan - subscriptionService.getEffectivePlan result
    * @param {string[]} data.loginMethods
-   * @param {{ connections: number, playdates: Object, reports: Object }} data.activity
+   * @param {{ connections: number, playdates: Object, reports: Object, reliability: Object }} data.activity
    */
   static toResponse({ user, parent, children = [], lockedChildIds = new Set(), plan, loginMethods, activity }) {
     const activeChildrenCount = children.filter((child) => !child.isArchived).length;
@@ -116,6 +116,8 @@ export class AdminUserDetailDTO {
         connections: activity.connections,
         playdates: activity.playdates,
         reports: activity.reports,
+        // Late leaves over the window (playdateService.getReliabilityForParent)
+        reliability: activity.reliability,
       },
       createdAt: user.createdAt,
     };
@@ -269,6 +271,8 @@ export class AdminPlaydateDTO {
       status: p.status,
       invitedAt: p.invitedAt || null,
       respondedAt: p.respondedAt || null,
+      // Declined after joining: the family left
+      leftAt: p.leftAt || null,
     }));
 
     const cancellation = playdate.cancellation

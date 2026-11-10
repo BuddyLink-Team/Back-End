@@ -1,5 +1,5 @@
 import { body, param, query } from 'express-validator';
-import { PLAYDATE_RULES, SUGGESTION_LIMITS, CHAPERONE_ACTIONS } from './playdate.constants.js';
+import { PLAYDATE_RULES, SUGGESTION_LIMITS, CHAPERONE_ACTIONS, LEAVE_RULES } from './playdate.constants.js';
 import { PLACE_TYPES } from '../places/places.constants.js';
 
 // A playdate starts at a 24-hour time 'HH:mm' and lasts durationMinutes
@@ -53,6 +53,22 @@ export const playdateIdParamValidation = [
   param('id')
     .isMongoId()
     .withMessage('Invalid playdate ID'),
+];
+
+/**
+ * Validation rules for POST /playdates/:id/leave (the reason is optional and sent to the host)
+ */
+export const leavePlaydateValidation = [
+  param('id')
+    .isMongoId()
+    .withMessage('Invalid playdate ID'),
+  body('reason')
+    .optional({ nullable: true })
+    .isString()
+    .withMessage('Leave reason must be a string')
+    .trim()
+    .isLength({ max: LEAVE_RULES.REASON_MAX_LENGTH })
+    .withMessage(`Leave reason must be at most ${LEAVE_RULES.REASON_MAX_LENGTH} characters`),
 ];
 
 /**

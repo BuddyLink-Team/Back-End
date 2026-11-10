@@ -20,7 +20,7 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 - Sơ đồ quan hệ thực thể (ERD) được phân tách chi tiết theo 7 Module nghiệp vụ độc lập bằng cú pháp **Mermaid ERD**, dễ dàng theo dõi và export hình ảnh.
 - Script khởi tạo toàn bộ 25 Collections, Indexes và Skeleton Documents nạp sẵn vào MongoDB được lưu độc lập tại file [`scripts/init-mongo.js`](scripts/init-mongo.js).
 
-### Bảng phân mục 25 Collections:
+### Bảng phân mục 26 Collections:
 
 | STT | Collection              | Mô tả & Mục tiêu nghiệp vụ                                              | Phân hệ tương ứng trong`PROJECT_OVERVIEW.md`          |
 | :-: | :---------------------- | :---------------------------------------------------------------------------- | :----------------------------------------------------------- |
@@ -49,6 +49,7 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 | 23 | `places_cache`        | Cache thông tin địa điểm vui chơi từ OpenStreetMap (Overpass API)      | Mục 7.2 (Nearby Places & Activity)                          |
 | 24 | `places_sync_tiles`   | Các ô lưới bản đồ đã nạp vào `places_cache` (sync tay & tự động)       | Mục 7.2 (Nearby Places & Activity)                          |
 | 25 | `admin_notifications` | Thông báo thời gian thực cho Admin Portal (6 nhóm sự kiện, TTL 90 ngày)| Mục 15 (Admin Portal & Real-time Notification Board)        |
+| 26 | `playdate_leaves`     | Lịch sử phụ huynh rời buổi hẹn đã tham gia, dùng tính độ tin cậy (rời sát giờ) | Mục 6.1 (Rời buổi hẹn), 15.1 (Admin User Mgmt)          |
 
 ---
 ## 2. Mermaid Entity Relationship Diagrams (Phân tách theo từng Module)
@@ -872,6 +873,9 @@ interface IPlaydateParticipant {
   status: "pending" | "accepted" | "declined";
   invitedAt: Date;
   respondedAt?: Date;
+  // Đặt khi gia đình đã tham gia rồi rời (status "declined"): phân biệt "Đã rời" với "Đã từ chối".
+  // Mất khi được mời lại (entry bị thay); lịch sử giữ ở playdate_leaves
+  leftAt?: Date | null;
   quotaConsumedAt?: Date | null; // Lần đầu chấp nhận đã dùng 1 lượt tham gia; rời rồi được mời lại và chấp nhận lại không trừ thêm. Chủ hủy buổi hẹn: hoàn lượt cho người còn tham gia nếu lượt thuộc tháng hiện tại
 }
 
@@ -935,6 +939,33 @@ _Indexes:_
 - `{ "participants.parentId": 1, status: 1 }`
 - `{ scheduledDate: 1, status: 1 }`
 - `{ "location.coordinates": "2dsphere" }` (sparse: địa điểm nhập tay có thể không có tọa độ, không gán mặc định `[0, 0]`)
+
+#### `playdate_leaves` Collection (Lịch sử rời buổi hẹn & độ tin cậy)
+
+Mỗi lần một gia đình **đã tham gia** (accepted) rời buổi hẹn còn `upcoming` và chưa bắt đầu (`POST /playdates/:id/leave`).
+Tách riêng khỏi `participants` vì entry bị thay khi gia đình được mời lại.
+
+```typescript
+interface IPlaydateLeave {
+  _id: ObjectId;
+  playdateId: ObjectId; // Tham chiếu playdates._id
+  parentId: ObjectId; // Tham chiếu parents._id (gia đình rời)
+  leftAt: Date;
+  scheduledStart: Date; // Giờ bắt đầu buổi hẹn lúc rời
+  hoursBeforeStart: number; // Làm tròn 0.1 giờ
+  isLate: boolean; // Rời khi còn < LEAVE_RULES.LATE_HOURS (24h); luôn false khi safetyExempt
+  safetyExempt: boolean; // Đã chặn host / gia đình khác trong buổi: không tính vào độ tin cậy, không gửi lý do cho host
+  reason: string; // Tùy chọn, tối đa 300 ký tự, gửi cho host
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+_Indexes:_ `{ parentId: 1, leftAt: -1 }`, `{ playdateId: 1 }`
+
+_Độ tin cậy_ (`GET /playdates/reliability/me`, `activity.reliability` của `GET /admin/users/:id`): đếm trong 90 ngày gần nhất
+(`RELIABILITY_RULES.WINDOW_DAYS`), bỏ qua `safetyExempt`. Mức: `good` (0 lần rời sát giờ), `fair` (1-2), `at_risk` (≥ 3).
+Lần đạt đúng 3 tạo một admin notification `reliability_at_risk` (nhóm `playdates`, mức `warning`).
 
 ---
 
@@ -1094,6 +1125,7 @@ interface INotification {
     | "connection_accepted"
     | "playdate_invite"
     | "playdate_reminder"
+    | "playdate_left" // Gửi host khi một gia đình đã tham gia rời buổi hẹn (kèm lý do nếu có)
     | "badge_unlocked"
     | "streak_reminder"
     | "ai_suggestion" // Kế hoạch AI chuẩn bị sẵn (hẹn lại sau buổi chơi được đánh giá 4-5 sao)

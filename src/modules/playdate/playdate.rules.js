@@ -1,5 +1,10 @@
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
-import { PARTICIPANT_STATUS } from './playdate.constants.js';
+import {
+  PARTICIPANT_STATUS,
+  LEAVE_RULES,
+  RELIABILITY_RULES,
+  RELIABILITY_LEVELS,
+} from './playdate.constants.js';
 
 /**
  * Pure domain rules for playdate operations.
@@ -97,3 +102,23 @@ export const computeChaperoneSummary = (playdate, parentIdStr = null) => {
   };
 };
 
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Leaving now is a late leave: less than LEAVE_RULES.LATE_HOURS before the start
+ * @param {Date} start - Start of the playdate
+ * @param {Date} [now]
+ * @returns {boolean}
+ */
+export const isLateLeave = (start, now = new Date()) => start.getTime() - now.getTime() < LEAVE_RULES.LATE_HOURS * HOUR_MS;
+
+/**
+ * Reliability level from the late leaves of the window
+ * @param {number} lateLeaves
+ * @returns {string} One of RELIABILITY_LEVELS
+ */
+export const reliabilityLevelOf = (lateLeaves) => {
+  if (lateLeaves >= RELIABILITY_RULES.AT_RISK_LATE_LEAVES) return RELIABILITY_LEVELS.AT_RISK;
+  if (lateLeaves > 0) return RELIABILITY_LEVELS.FAIR;
+  return RELIABILITY_LEVELS.GOOD;
+};

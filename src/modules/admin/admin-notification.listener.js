@@ -136,6 +136,21 @@ export const registerAdminNotificationListeners = () => {
     });
   });
 
+  // A parent just reached the at-risk number of late leaves (playdate reliability)
+  onPlaydateEvent(PLAYDATE_EVENTS.RELIABILITY_AT_RISK, async (payload) => {
+    const parent = await parentService.getParentById(payload.parentId).catch(() => null);
+    if (!parent?.userId) return;
+    await createAndBroadcast({
+      category: ADMIN_NOTIFICATION_CATEGORIES.PLAYDATES,
+      type: 'reliability_at_risk',
+      severity: ADMIN_NOTIFICATION_SEVERITY.WARNING,
+      title: 'Phụ huynh hay rời buổi hẹn sát giờ',
+      message: `${parent.fullName || 'Một phụ huynh'} đã rời sát giờ ${payload.lateLeaves} buổi hẹn trong ${payload.windowDays} ngày qua.`,
+      entityType: 'User',
+      entityId: parent.userId,
+    });
+  });
+
   // 4. Connections Category
   onConnectionEvent(CONNECTION_EVENTS.ACCEPTED, async (payload) => {
     await createAndBroadcast({

@@ -17,6 +17,13 @@ export const PLAYDATE_EVENTS = Object.freeze({
   COMPLETED: 'playdate.completed',
   // Playdate invitations sent to participants
   INVITED: 'playdate.invited',
+  // A family who joined left the playdate
+  // Payload: { playdateId, hostParentId, leaverParentId, activity, isLate, safetyExempt, reason }
+  // (reason is '' when safetyExempt: the host never learns about a block)
+  PARTICIPANT_LEFT: 'playdate.participantLeft',
+  // A parent just reached RELIABILITY_RULES.AT_RISK_LATE_LEAVES late leaves in the window
+  // Payload: { parentId, lateLeaves, windowDays }
+  RELIABILITY_AT_RISK: 'playdate.reliabilityAtRisk',
   // A reminder (24h or 1h before the start) is due
   // Payload: { playdateId, kind: 'h24'|'h1', activity, time, date: 'dd/MM', placeName, recipientParentIds }
   REMINDER_DUE: 'playdate.reminderDue',

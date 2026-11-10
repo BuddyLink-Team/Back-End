@@ -21,6 +21,7 @@ import {
   busyTimesValidation,
   chaperoneValidation,
   timeCheckValidation,
+  leavePlaydateValidation,
 } from './playdate.validation.js';
 
 const router = Router();
@@ -45,6 +46,8 @@ router.get('/suggestions/places', validate(placeSuggestionsValidation), playdate
 router.get('/suggestions/activities', validate(activitySuggestionsValidation), playdateController.getActivitySuggestions);
 // GET /api/v1/playdates/busy-times (children's other playdates on a day; before /:id)
 router.get('/busy-times', validate(busyTimesValidation), playdateController.getBusyTimes);
+// GET /api/v1/playdates/reliability/me (own late leaves; before /:id)
+router.get('/reliability/me', playdateController.getMyReliability);
 
 // GET /api/v1/playdates/:id
 router.get('/:id', validate(playdateIdParamValidation), playdateController.getPlaydateById);
@@ -57,7 +60,7 @@ router.put('/:id/respond', validate(respondPlaydateValidation), playdateControll
 router.patch('/:id/respond', validate(respondPlaydateValidation), playdateController.respondToPlaydate);
 
 // POST /api/v1/playdates/:id/leave (Participant leaves)
-router.post('/:id/leave', validate(playdateIdParamValidation), playdateController.leavePlaydate);
+router.post('/:id/leave', validate(leavePlaydateValidation), playdateController.leavePlaydate);
 
 // POST /api/v1/playdates/:id/reschedule (Propose reschedule)
 router.post('/:id/reschedule', validate(createRescheduleValidation), playdateController.createRescheduleRequest);
