@@ -14,7 +14,8 @@ const cooldownMs = (error) => {
 };
 const GENERATION_DEFAULTS = Object.freeze({
   temperature: 0.4,
-  maxOutputTokens: 1024,
+  // Thoughts count in this budget too: room for a full answer to a parenting question
+  maxOutputTokens: 2048,
   // Picking a tool and writing 2-4 sentences needs little reasoning; the default level adds seconds per call
   thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
 });
@@ -26,6 +27,12 @@ const toUsage = (metadata = {}) => ({
   completionTokens: (metadata.candidatesTokenCount || 0) + (metadata.thoughtsTokenCount || 0),
   totalTokens: metadata.totalTokenCount || 0,
 });
+
+// "Câu một. Câu hai bị cắt gi" -> "Câu một."
+const toLastSentence = (text) => {
+  const end = Math.max(...['.', '!', '?', '…', String.fromCharCode(10)].map((mark) => text.lastIndexOf(mark)));
+  return end > text.length / 3 ? text.slice(0, end + 1).trim() : `${text.trim()}…`;
+};
 
 const providerError = () => new AppError('AI assistant is temporarily unavailable', 502, 'AI_PROVIDER_ERROR');
 
@@ -97,6 +104,7 @@ export class GeminiAdapter {
     deadline = Infinity,
     responseMimeType,
     responseSchema,
+    allowEmpty = false,
   }) {
     const client = this._getClient();
     const configured = [env.AI.GEMINI_MODEL, env.AI.GEMINI_FALLBACK_MODEL].filter(
@@ -123,6 +131,7 @@ export class GeminiAdapter {
           timeoutMs,
           responseMimeType,
           responseSchema,
+          allowEmpty,
         });
         this._rateLimitedUntil.delete(model);
         return result;
@@ -147,7 +156,7 @@ export class GeminiAdapter {
   async _generate(
     client,
     model,
-    { systemInstruction, contents, functionDeclarations, allowTools, timeoutMs, responseMimeType, responseSchema }
+    { systemInstruction, contents, functionDeclarations, allowTools, timeoutMs, responseMimeType, responseSchema, allowEmpty }
   ) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -182,15 +191,22 @@ export class GeminiAdapter {
         args: call.args || {},
       }));
       // Text parts only (response.text warns when the turn also has function calls); thoughts are internal
-      const text = (content?.parts || [])
+      const finishReason = response.candidates?.[0]?.finishReason || null;
+      let text = (content?.parts || [])
         .filter((part) => typeof part.text === 'string' && !part.thought)
         .map((part) => part.text)
         .join('')
         .trim();
-      if (!text && functionCalls.length === 0) {
-        throw Object.assign(new Error('Empty response from Gemini'), { status: 502 });
+      // Cut by the token budget: end on the last full sentence rather than mid-word
+      if (finishReason === 'MAX_TOKENS' && text) {
+        logger.warn(`[GeminiAdapter] ${model} reply cut by maxOutputTokens`);
+        text = toLastSentence(text);
       }
-      return { text, functionCalls, content, usage: toUsage(response.usageMetadata), model };
+      // The caller has a fallback reply (e.g. the cards already answer): an empty turn is not an error
+      if (!text && functionCalls.length === 0 && !allowEmpty) {
+        throw Object.assign(new Error(`Empty response from Gemini (${finishReason || 'no reason'})`), { status: 502 });
+      }
+      return { text, functionCalls, content, usage: toUsage(response.usageMetadata), model, finishReason };
     } finally {
       clearTimeout(timer);
     }

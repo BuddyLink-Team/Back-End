@@ -20,7 +20,7 @@ import {
 import { PLAYDATE_RULES } from '../../playdate/playdate.constants.js';
 import { advancePlan, resolveActivity } from './plan-steps.js';
 import { toPlaceItem, toPlaymateItem } from './tool-sanitizer.js';
-import { PLAYDATE_ACTIVITIES, GENERIC_GAMES, pickAttractions } from '../../playdate/playdate.activities.js';
+import { PLAYDATE_ACTIVITIES, GENERIC_GAMES, pickAttractions, activityGamesFor } from '../../playdate/playdate.activities.js';
 
 // Accent and case insensitive, so "bin" matches "Bin" and "an" matches "Ân"
 export const normalizeName = (value) =>
@@ -84,7 +84,7 @@ const setHostChildren = async (ctx, childIds) => {
  * Invitees by child id or by name, among the children of accepted friends only
  * @returns {Promise<string[]>} Names that matched several children (left for the playmates step)
  */
-const setParticipants = async (ctx, { childIds = [], names = [] }) => {
+const setParticipants = async (ctx, { childIds = [], names = [], mode = 'replace' }) => {
   const { draft } = ctx;
   const { matched, others } = await playdateService.getInvitableFriends(ctx.userId, { childId: draft.hostChild.childId });
   const friends = [...matched, ...others].map((entry) => toPlaymateItem(entry));
@@ -106,7 +106,31 @@ const setParticipants = async (ctx, { childIds = [], names = [] }) => {
     else notFriends.push(name);
   });
 
-  if (picked.size) {
+  const toParticipant = (friend) => ({
+    parentId: friend.parent.parentId,
+    childId: friend.childId,
+    childName: friend.displayName,
+    parentName: friend.parent.fullName,
+    age: friend.age ?? null,
+    interests: friend.interests || [],
+    warnings: friend.warnings,
+  });
+  if (mode === 'remove') {
+    // Taken out of the list: by id or name, friends or not
+    const removedIds = new Set([...picked.keys()]);
+    const removedNames = new Set(names.map(normalizeName));
+    draft.participants = draft.participants.filter(
+      (participant) => !removedIds.has(participant.childId) && !removedNames.has(normalizeName(participant.childName))
+    );
+    if (!draft.participants.length) draft.playmatesSkipped = true;
+    return [];
+  }
+  if (picked.size && mode === 'add') {
+    const current = new Map(draft.participants.map((participant) => [participant.childId, participant]));
+    [...picked.values()].forEach((friend) => current.has(friend.childId) || current.set(friend.childId, toParticipant(friend)));
+    draft.participants = [...current.values()];
+    draft.playmatesSkipped = false;
+  } else if (picked.size) {
     draft.participants = [...picked.values()].map((friend) => ({
       parentId: friend.parent.parentId,
       childId: friend.childId,
@@ -200,6 +224,38 @@ export const setLocation = (draft, place) => {
   };
 };
 
+// Words of an activity that say nothing about the game
+const ACTIVITY_STOP_WORDS = new Set(['choi', 'cung', 'cac', 'be', 'va', 'tai', 'buoi', 'giao', 'luu', 'cho', 'nhau', 'ban', 'tro', 'voi']);
+const wordsOf = (text) =>
+  normalizeName(text)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((word) => word.length >= 3 && !ACTIVITY_STOP_WORDS.has(word));
+
+/**
+ * Whether a game written by the model belongs to the chosen activity (it shares a meaningful word with its
+ * title, key or tags): "Trang trí cupcake" for "Làm bánh", "Thử thách xây cầu Lego" for Lego
+ * @param {string} item
+ * @param {{ key?: string|null, title?: string }|null} activity
+ * @returns {boolean}
+ */
+export const relatesToActivity = (item, activity) => {
+  if (!activity?.title) return false;
+  const known = PLAYDATE_ACTIVITIES.find((entry) => entry.key === activity.key);
+  const activityWords = new Set([activity.title, activity.key, ...(known?.tags || [])].filter(Boolean).flatMap(wordsOf));
+  return wordsOf(item).some((word) => activityWords.has(word));
+};
+
+/**
+ * A new place: the games written for the previous one may not fit, they are suggested again
+ * (unless this same call brings its own agenda)
+ */
+const resetAgendaOnNewPlace = (draft, previousPlace, fields) => {
+  if (!previousPlace || !draft.location || draft.location.name === previousPlace || fields.agenda) return;
+  draft.agenda = [];
+  draft.agendaConfirmed = false;
+};
+
 /**
  * Merge fields into the draft (from the model's arguments or a tapped option)
  * @param {Object} ctx
@@ -220,7 +276,11 @@ export const applyPlanFields = async (ctx, fields) => {
     if (children.length === 1) await setHostChildren(ctx, [children[0].childId]);
   }
 
-  if (fields.durationMinutes) draft.durationMinutes = clampDuration(fields.durationMinutes);
+  if (fields.durationMinutes) {
+    draft.durationMinutes = clampDuration(fields.durationMinutes);
+    // Chosen by the parent (typed, or picked with a time): it no longer follows the children's ages
+    draft.durationSource = 'parent';
+  }
   const previousDate = draft.date;
   if (isValidDate(fields.date) && isValidTime(fields.time)) {
     draft.date = fields.date;
@@ -245,7 +305,11 @@ export const applyPlanFields = async (ctx, fields) => {
   const names = (fields.participantNames || []).map(String).filter(Boolean);
   if (childIds.length || names.length) {
     // Friends are ranked for the host child: keep them until the child is picked
-    draft.pendingParticipants = { childIds, names };
+    draft.pendingParticipants = {
+      childIds,
+      names,
+      mode: ['add', 'remove'].includes(fields.participantsMode) ? fields.participantsMode : 'replace',
+    };
   }
   if (draft.pendingParticipants && draft.hostChild) {
     ambiguousNames = await setParticipants(ctx, draft.pendingParticipants);
@@ -266,23 +330,27 @@ export const applyPlanFields = async (ctx, fields) => {
     draft.activity = activity;
   }
 
+  const previousPlace = draft.location?.name || null;
   if (fields.placeId) {
     await applyPlace(ctx, await resolvePlace(ctx, fields.placeId));
   } else if (fields.locationName) {
     setLocation(draft, { name: fields.locationName, address: fields.locationAddress || '' });
   }
+  resetAgendaOnNewPlace(draft, previousPlace, fields);
 
   if (fields.agenda) {
     let agenda = normalizeAgenda(fields.agenda);
-    if (agenda.length) {
-      // Catalog games, the place's real attractions and the chosen activity: the model only rewords them
+    if (agenda.length && !fields.agendaFromParent) {
+      // Games written by the model: catalog games, the place's real attractions or games of the chosen
+      // activity, reworded as it likes; an unrelated invented item is replaced by a suited game
+      const activityGames = activityGamesFor(draft.activity);
       const references = [
         ...PLAYDATE_ACTIVITIES,
         ...GENERIC_GAMES,
+        ...activityGames,
         ...(draft.location?.attractions || []),
         ...(draft.activity ? [draft.activity] : []),
       ];
-
       const suited = pickAttractions({
         children: [
           ...draftHostChildren(draft).map((child) => ({ age: child.age, displayName: child.displayName, interests: child.interests })),
@@ -291,22 +359,28 @@ export const applyPlanFields = async (ctx, fields) => {
         durationMinutes: draft.durationMinutes,
         availableAttractions: draft.location?.attractions || [],
         placeType: draft.location?.placeType || null,
+        activity: draft.activity,
       });
       const fallbackList = suited.filter((title) => !agenda.includes(title));
 
-      // An unknown item is replaced by the next suited game not already in the list, or dropped
       let fallbackIndex = 0;
       agenda = agenda
         .map((item) => {
-          if (isKnownAgendaItem(item, references)) return item;
+          if (isKnownAgendaItem(item, references) || relatesToActivity(item, draft.activity)) return item;
           const replacement = fallbackList[fallbackIndex] || null;
           fallbackIndex += 1;
           return replacement;
         })
         .filter(Boolean);
       agenda = agenda.length ? [...new Set(agenda)] : suited;
-      // As many games as the playdate holds (A2), the real attractions written with their source (A4)
-      agenda = agenda.slice(0, draftAgendaSize(draft).max).map((item) => withAttractionSource(item, draft.location));
+    }
+    if (agenda.length) {
+      // As many games as the playdate holds (A2; the parent's own list is kept whole), the real attractions
+      // written with their source (A4)
+      const max = fields.agendaFromParent ? AI_LIMITS.MAX_AGENDA_ITEMS : draftAgendaSize(draft).max;
+      agenda = agenda.slice(0, max).map((item) => withAttractionSource(item, draft.location));
+      // The parent's own games are their review of the list
+      if (fields.agendaFromParent) draft.agendaConfirmed = true;
     }
     draft.agenda = agenda;
   }
@@ -341,9 +415,21 @@ export const proposePlaydateTool = {
         },
         date: { type: 'string', description: 'YYYY-MM-DD (alone: only that day is offered for the time step)' },
         time: { type: 'string', description: 'HH:mm, 24h' },
-        durationMinutes: { type: 'integer', minimum: 30, maximum: 480 },
+        durationMinutes: {
+          type: 'integer',
+          minimum: 30,
+          maximum: 480,
+          description: 'Only when the parent asked for a length ("2 tiếng", "ngắn thôi 1 tiếng")',
+        },
         participantNames: { type: 'array', items: { type: 'string' }, description: "Names of friends' children to invite" },
         participantChildIds: { type: 'array', items: { type: 'string' } },
+        participantsMode: {
+          type: 'string',
+          enum: ['replace', 'add', 'remove'],
+          description:
+            'How the named friends change the invited list: add = invite them too ("mời thêm"), remove = take them out ' +
+            '("bỏ bé A"), replace (default) = they are the whole list',
+        },
         noPlaymates: { type: 'boolean', description: 'The parent does not want to invite anyone yet' },
         activity: { type: 'string' },
         placeId: { type: 'string', description: 'id of a place shown earlier' },
@@ -357,7 +443,14 @@ export const proposePlaydateTool = {
             'Concrete games or activities of the playdate (what the children play or make; about 3-4 for one hour), a few words each, ' +
             'no times, no warm-up / getting to know each other / goodbye items',
         },
-        note: { type: 'string', description: 'Extra request of the parent that is not a field (e.g. what to bring)' },
+        agendaFromParent: {
+          type: 'boolean',
+          description: 'true when the agenda is the games the parent listed themself: they are kept as written',
+        },
+        note: {
+          type: 'string',
+          description: 'Extra request of the parent that is not a field (e.g. what to bring). Send the whole note: it replaces the previous one',
+        },
         safetyNotes: {
           type: 'array',
           items: { type: 'string' },

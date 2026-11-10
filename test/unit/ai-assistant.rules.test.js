@@ -20,9 +20,14 @@ import {
   isKnownAgendaItem,
   blockingWarnings,
   groupKeyOf,
+  defaultDurationFor,
+  durationChoicesFor,
+  describeWarning,
 } from '../../src/modules/ai-assistant/plan-draft.rules.js';
+import { calendarText } from '../../src/modules/ai-assistant/ai-assistant.prompt.js';
+import { relatesToActivity } from '../../src/modules/ai-assistant/tools/propose-playdate.tool.js';
 import { evaluateSafetyRules } from '../../src/modules/ai-assistant/safety-rules.js';
-import { pickAttractions, PLAYDATE_ACTIVITIES, GENERIC_GAMES } from '../../src/modules/playdate/playdate.activities.js';
+import { pickAttractions, PLAYDATE_ACTIVITIES, GENERIC_GAMES, ACTIVITY_GAMES } from '../../src/modules/playdate/playdate.activities.js';
 import {
   shouldSearchAttractions,
   checkPlaceOpeningHours,
@@ -419,10 +424,10 @@ describe('BUD-49 review fixes', () => {
   });
 
   it('counts the host and every invited family in the fit of a time option', () => {
-    expect(slotFitText({ matchedParents: 2, totalParents: 2 })).toBe('Hợp lịch ưu tiên của các gia đình');
-    expect(slotFitText({ matchedParents: 1, totalParents: 1 })).toBe('Hợp lịch ưu tiên của bạn');
-    expect(slotFitText({ matchedParents: 1, totalParents: 3 })).toBe('Hợp với 1/3 gia đình');
-    expect(slotFitText({ matchedParents: 0, totalParents: 3 })).toBe('Chưa ai đặt lịch ưu tiên');
+    expect(slotFitText({ matchedParents: 2, totalParents: 2 })).toBe('Đúng buổi rảnh của các gia đình');
+    expect(slotFitText({ matchedParents: 1, totalParents: 1 })).toBe('Đúng buổi bạn thường rảnh');
+    expect(slotFitText({ matchedParents: 1, totalParents: 3 })).toBe('Hợp buổi rảnh của 1/3 gia đình');
+    expect(slotFitText({ matchedParents: 0, totalParents: 3 })).toBe('Ngoài buổi rảnh trong hồ sơ');
   });
 
   it('warns NOT_PREFERRED_TIME only with a fit of the current time and invitees', () => {
@@ -563,5 +568,86 @@ describe('BUD-49 Jira follow-up rules', () => {
       limit: 10,
     });
     expect(weekend.map((slot) => slot.time)).toEqual(['09:00', '15:00']);
+  });
+});
+
+describe('AI planning upgrade (duration, agenda, warnings, calendar)', () => {
+  it('defaults the playdate length to the youngest child and offers lengths that fit them', () => {
+    expect(defaultDurationFor(2)).toBe(60);
+    expect(defaultDurationFor(4)).toBe(90);
+    expect(defaultDurationFor(8)).toBe(120);
+    expect(defaultDurationFor(null)).toBe(120);
+    // Under 3: at most 90 minutes, the current length is kept selectable
+    expect(durationChoicesFor(60, 2)).toEqual([60, 90]);
+    expect(durationChoicesFor(120, 2)).toEqual([60, 90, 120]);
+    expect(durationChoicesFor(90, 8)).toEqual([60, 90, 120, 180]);
+  });
+
+  it('picks the games of the chosen activity, not only generic ones', () => {
+    const picked = pickAttractions({
+      childAges: [6],
+      durationMinutes: 90,
+      activity: { key: 'Làm bánh & Nấu ăn', title: 'Lớp học làm bánh mini cho các bé' },
+    });
+    const bakingGames = ACTIVITY_GAMES['Làm bánh & Nấu ăn'].map((game) => game.title);
+    expect(picked.length).toBeGreaterThanOrEqual(2);
+    expect(picked.every((title) => bakingGames.includes(title))).toBe(true);
+  });
+
+  it('gives another set of games when asked again', () => {
+    const activity = { key: 'Xếp hình Lego', title: 'Buổi chơi xếp hình Lego & giao lưu' };
+    const first = pickAttractions({ childAges: [6], durationMinutes: 60, activity });
+    const second = pickAttractions({ childAges: [6], durationMinutes: 60, activity, exclude: first, variant: 1 });
+    expect(second.some((title) => !first.includes(title))).toBe(true);
+  });
+
+  it('keeps model games of the chosen activity and recognizes unrelated ones', () => {
+    const baking = { key: 'Làm bánh & Nấu ăn', title: 'Lớp học làm bánh mini cho các bé' };
+    expect(relatesToActivity('Trang trí bánh cupcake theo chủ đề', baking)).toBe(true);
+    expect(relatesToActivity('Bắn súng sơn', baking)).toBe(false);
+  });
+
+  it('describes warnings with their details, never a bare code', () => {
+    const draft = {
+      ...emptyDraft(),
+      hostChild: { childId: 'c1', displayName: 'Na', age: 4 },
+      date: '2099-03-07',
+      time: '09:00',
+      durationMinutes: 240,
+      location: { name: 'Công viên Lê Văn Tám' },
+    };
+    expect(
+      describeWarning({ code: 'SCHEDULE_CONFLICT', childName: 'Bin', start: '08:00', end: '10:00', severity: 'warn' }, draft)
+    ).toBe('Bé Bin đã có hẹn khác lúc 08:00–10:00, có thể chưa nhận lời được');
+    expect(describeWarning({ code: 'TOO_LONG_FOR_AGE', params: { maxMinutes: 180 } }, draft)).toContain('tối đa 3 giờ');
+    expect(describeWarning({ code: 'FAR_PLACE', distanceKm: 18 }, draft)).toBe('Công viên Lê Văn Tám cách nhà bạn khoảng 18 km');
+    expect(toDraftResponse(draft).durationChoices).toContain(240);
+  });
+
+  it('gives the model a calendar of the next days', () => {
+    // Tuesday 10/11/2026
+    const text = calendarText({ year: 2026, month: 11, day: 10 });
+    expect(text).toContain('Thứ ba 10/11 = 2026-11-10 (hôm nay)');
+    expect(text).toContain('Thứ bảy 14/11 = 2026-11-14 (tuần này)');
+    expect(text).toContain('Thứ bảy 21/11 = 2026-11-21 (tuần sau)');
+  });
+
+  it('lets the latest card of a step win when the model improved it', () => {
+    const first = { ...choiceCard('agenda'), options: [{ id: 'a', label: 'old' }] };
+    const second = { ...choiceCard('agenda'), options: [{ id: 'b', label: 'new' }] };
+    expect(selectCards([first, second])).toEqual([second]);
+  });
+
+  it('replays earlier playdate lookups so their ids stay known', () => {
+    const contents = toGeminiContents(
+      [
+        { role: 'user', content: 'Tuần này bé có hẹn gì?' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'x' }] },
+        { role: 'tool', toolName: 'listMyPlaydates', content: '{"playdates":[{"id":"p1"}]}' },
+        { role: 'assistant', content: 'Bé có 1 buổi hẹn.' },
+      ],
+      'Hủy buổi đó giúp mình'
+    );
+    expect(contents[0].parts.map((part) => part.text).join(' ')).toContain('"id":"p1"');
   });
 });

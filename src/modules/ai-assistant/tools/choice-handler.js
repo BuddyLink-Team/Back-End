@@ -1,6 +1,5 @@
 import playdateService from '../../playdate/playdate.service.js';
 import placeAttractionsService from '../../places/place-attractions.service.js';
-import { pickAttractions } from '../../playdate/playdate.activities.js';
 import AppError from '../../../shared/exceptions/app-error.js';
 import {
   AI_CARD_TYPES,
@@ -21,10 +20,12 @@ import {
   toDraftResponse,
   refreshDraft,
   blockingWarnings,
-  draftHostChildren,
-  withAttractionSource,
+  draftAgendaSize,
+  describeWarning,
+  formatDurationVi,
 } from '../plan-draft.rules.js';
-import { advancePlan } from './plan-steps.js';
+import { advancePlan, showStep, suggestAgenda, ownScheduleConflict } from './plan-steps.js';
+import { PLAYDATE_RULES } from '../../playdate/playdate.constants.js';
 import { applyPlanFields, applyPlace } from './propose-playdate.tool.js';
 import { buildCriteria, searchMatches } from './find-matches.tool.js';
 import { sendConnectionRequests } from './send-connection-requests.tool.js';
@@ -242,13 +243,50 @@ export const applyChoice = async (ctx, session, choice) => {
       break;
     }
     case AI_STEPS.TIME: {
-      requirePlan(ctx);
+      const draft = requirePlan(ctx);
+      // Another length on the card: the slots are checked again for it
+      if (custom && custom.durationMinutes && !custom.date && !custom.time) {
+        const minutes = Number(custom.durationMinutes);
+        if (!Number.isInteger(minutes) || minutes < PLAYDATE_RULES.MIN_DURATION_MINUTES || minutes > PLAYDATE_RULES.MAX_DURATION_MINUTES) {
+          throw invalidChoice('Pick a length between 30 minutes and 8 hours');
+        }
+        await applyPlanFields(ctx, { durationMinutes: minutes });
+        answered = { customAnswer: { text: `Đổi thời lượng: ${formatDurationVi(draft.durationMinutes)}` } };
+        result = await advancePlan(ctx);
+        instruction =
+          'The parent changed the length of the playdate; the time options were checked again for it. Say so in one ' +
+          'short sentence (mention the new length) and ask them to pick a time. Do not call tools.';
+        allowTools = false;
+        break;
+      }
       const slot = custom || options[0].data;
       if (!isValidDate(slot.date) || !isValidTime(slot.time) || isPastSlot(slot.date, slot.time)) {
         throw new AppError('Pick a time in the future', 400, 'AI_INVALID_CHOICE');
       }
-      await applyPlanFields(ctx, { date: slot.date, time: slot.time, durationMinutes: slot.durationMinutes });
+      await applyPlanFields(ctx, {
+        date: slot.date,
+        time: slot.time,
+        durationMinutes: custom?.durationMinutes || slot.durationMinutes || draft.durationMinutes,
+      });
+      const cardsBefore = ctx.turn.cards.length;
       result = await advancePlan(ctx);
+      // A typed time when one of the parent's own children already has a playdate: ask for another time
+      const conflict = ownScheduleConflict(ctx.draft);
+      if (custom && conflict) {
+        const message = describeWarning(conflict, ctx.draft);
+        ctx.draft.date = null;
+        ctx.draft.time = null;
+        ctx.draft.slotFit = null;
+        ctx.draft.warnings = (ctx.draft.warnings || []).filter((warning) => warning.code !== conflict.code);
+        // The next step is not shown yet: only the time card of this new ask
+        ctx.turn.cards.splice(cardsBefore);
+        const shown = await showStep(AI_STEPS.TIME, ctx, { conflict: `${message}.` });
+        result = { conflict: message, ...shown };
+        instruction =
+          'The typed time clashes with another playdate of the own child of the parent, so it was not kept. Say which child ' +
+          'is busy and when, in one short sentence, and ask them to pick another time on the card. Do not call tools.';
+        allowTools = false;
+      }
       break;
     }
     case AI_STEPS.ACTIVITY:
@@ -268,6 +306,19 @@ export const applyChoice = async (ctx, session, choice) => {
     }
     case AI_STEPS.AGENDA: {
       const draft = requirePlan(ctx);
+      // "Other games": another set of games of the activity, without the ones shown
+      if (custom?.regenerate) {
+        draft.agendaVariant = (draft.agendaVariant || 0) + 1;
+        const next = suggestAgenda(draft, { exclude: draft.agenda, variant: draft.agendaVariant });
+        draft.agenda = next.length ? next : suggestAgenda(draft, { variant: draft.agendaVariant });
+        draft.agendaConfirmed = false;
+        answered = { customAnswer: { text: 'Xin gợi ý trò chơi khác' } };
+        result = await advancePlan(ctx);
+        instruction =
+          'The parent asked for other games: a new set is shown on the card. In 1-2 short sentences, say what is new ' +
+          '(you may call proposePlaydate once with an even better agenda for these children, otherwise do not call tools).';
+        break;
+      }
       if (custom?.searchAttractions) {
         const placeId = draft.location?.id || draft.location?.placeId;
         if (placeId) {
@@ -275,21 +326,14 @@ export const applyChoice = async (ctx, session, choice) => {
             const attractions = await placeAttractionsService.getOrFetchAttractions(placeId, draft.location);
             if (attractions && attractions.length) {
               draft.location.attractions = attractions;
-              const picked = pickAttractions({
-                children: [
-                  ...draftHostChildren(draft).map((child) => ({ age: child.age, displayName: child.displayName })),
-                  ...draft.participants.map((p) => ({ age: p.age, displayName: p.childName })),
-                ],
-                durationMinutes: draft.durationMinutes,
-                availableAttractions: attractions,
-              });
-              draft.agenda = picked.map((title) => withAttractionSource(title, draft.location));
+              draft.agenda = suggestAgenda(draft);
             }
           } catch (_e) {
             // Ignore attraction search error
           }
         }
         draft.agendaConfirmed = false;
+        answered = { customAnswer: { text: 'Tìm trò chơi tại địa điểm' } };
         result = await advancePlan(ctx);
         break;
       }
@@ -321,6 +365,28 @@ export const applyChoice = async (ctx, session, choice) => {
       break;
     }
     case AI_CONFIRM_STEP: {
+      // Another length from the summary card: a new summary is shown, nothing is created
+      if (custom?.durationMinutes) {
+        const draft = requirePlan(ctx);
+        const minutes = Number(custom.durationMinutes);
+        if (!Number.isInteger(minutes) || minutes < PLAYDATE_RULES.MIN_DURATION_MINUTES || minutes > PLAYDATE_RULES.MAX_DURATION_MINUTES) {
+          throw invalidChoice('Pick a length between 30 minutes and 8 hours');
+        }
+        await applyPlanFields(ctx, { durationMinutes: minutes });
+        // The games were sized for the previous length
+        if (!draft.agendaConfirmed || draft.agenda.length > draftAgendaSize(draft).max) {
+          draft.agenda = suggestAgenda(draft);
+        }
+        const outcome = await advancePlan(ctx);
+        return {
+          answeredCard: null,
+          note:
+            `[System] The parent changed the length to ${minutes} minutes on the summary card. Result: ${JSON.stringify(outcome)}. ` +
+            'Say in one short sentence that the summary was updated (mention the new end time and any new warning) ' +
+            'and ask them to check it and confirm. Do not call tools.',
+          allowTools: false,
+        };
+      }
       if (custom?.safetyAcknowledged != null) {
         ctx.draft.safetyAcknowledged = Boolean(custom.safetyAcknowledged);
       }

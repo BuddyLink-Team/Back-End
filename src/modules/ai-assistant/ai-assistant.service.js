@@ -17,6 +17,7 @@ import {
   AI_DEFAULT_SESSION_TITLE,
   AI_FALLBACK_REPLY,
   AI_CHOICE_FALLBACK_REPLY,
+  AI_EMPTY_REPLY,
   AI_DRAFT_WARNING_CODES,
 } from './ai-assistant.constants.js';
 import { AIMessageDTO, AISessionDTO } from './ai-assistant.dto.js';
@@ -321,6 +322,7 @@ class AIAssistantService {
     const children = await ctx.getChildren().catch(() => null);
     const systemInstruction = buildSystemPrompt({
       parentName: ctx.parent.fullName,
+      preferences: ctx.parent.preferences,
       area: [ctx.parent.location?.area, ctx.parent.location?.city].filter(Boolean).join(', '),
       children,
       planDraft: ctx.draft,
@@ -342,6 +344,8 @@ class AIAssistantService {
         functionDeclarations,
         allowTools,
         deadline,
+        // An empty answer gets the fallback reply below instead of failing the whole turn
+        allowEmpty: true,
       });
       tokenDelta = addUsage(tokenDelta, response.usage);
       model = response.model;
@@ -393,7 +397,9 @@ class AIAssistantService {
       contents.push({ role: 'user', parts: responseParts });
     }
 
-    return { text: cleanReply(text) || AI_FALLBACK_REPLY, toolMessages, tokenDelta, rounds, model };
+    // Nothing to say: the cards speak for themselves, or the parent is asked to rephrase
+    const fallback = ctx.turn.cards.length ? AI_FALLBACK_REPLY : AI_EMPTY_REPLY;
+    return { text: cleanReply(text) || fallback, toolMessages, tokenDelta, rounds, model };
   }
 
   /**

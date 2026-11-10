@@ -1,3 +1,7 @@
+import { gamesOfActivity, ACTIVITY_GAMES, ALL_ACTIVITY_GAMES } from './playdate-activity-games.js';
+
+export { ACTIVITY_GAMES, ALL_ACTIVITY_GAMES };
+
 /**
  * Activity catalog for playdate activity suggestions (GET /playdates/suggestions/activities).
  *
@@ -128,6 +132,8 @@ export const isKnownAgendaItem = (item, references = []) => references.some((ref
  * @param {string} text
  * @returns {Array<Object>}
  */
+export const activityGamesFor = (activity) => gamesOfActivity(activity, namesGame, PLAYDATE_ACTIVITIES);
+
 export const catalogGamesNamedBy = (text) => [...PLAYDATE_ACTIVITIES, ...GENERIC_GAMES].filter((game) => namesGame(text, game));
 
 /**
@@ -140,6 +146,9 @@ export const catalogGamesNamedBy = (text) => [...PLAYDATE_ACTIVITIES, ...GENERIC
  * @param {number} [input.durationMinutes=60]
  * @param {Array<{ title: string, minAge?: number, maxAge?: number, durationMinutes?: number }>} [input.availableAttractions]
  * @param {string|null} [input.placeType] - Generic games of this place type only
+ * @param {{ key?: string|null, title?: string }|null} [input.activity] - The chosen activity: its games come first
+ * @param {string[]} [input.exclude] - Games not to pick again (e.g. "other games")
+ * @param {number} [input.variant=0] - Rotates games of equal score, for another set
  * @returns {string[]}
  */
 export const pickAttractions = ({
@@ -149,6 +158,9 @@ export const pickAttractions = ({
   availableAttractions = [],
   attractions = [],
   placeType = null,
+  activity = null,
+  exclude = [],
+  variant = 0,
 } = {}) => {
   const effectiveChildren = children.length > 0
     ? children
@@ -167,45 +179,61 @@ export const pickAttractions = ({
   const allTags = effectiveChildren.flatMap((c) => [...(c.interests || []), ...(c.favoriteActivities || [])].map((t) => String(t).toLowerCase()));
 
   const generic = GENERIC_GAMES.filter((game) => !placeType || !game.placeTypes?.length || game.placeTypes.includes(placeType));
-  const candidates = effectiveAttractions.length > 0
-    ? effectiveAttractions.map((a) => ({
-        title: a.title || a.name,
-        minAge: a.minAge ?? 0,
-        maxAge: a.maxAge ?? 18,
-        durationMinutes: Math.min(a.durationMinutes || itemDuration, maxMinutes),
-      }))
-    : (generic.length ? generic : GENERIC_GAMES).map((g) => ({
-        ...g,
-        durationMinutes: Math.min(g.defaultMinutes || itemDuration, maxMinutes),
-      }));
+  const placeGames = effectiveAttractions.map((a) => ({
+    title: a.title || a.name,
+    minAge: a.minAge ?? 0,
+    maxAge: a.maxAge ?? 18,
+    durationMinutes: Math.min(a.durationMinutes || itemDuration, maxMinutes),
+  }));
+  // The games of the chosen activity come first: the agenda follows what the children will do
+  const activityGames = gamesOfActivity(activity, namesGame, PLAYDATE_ACTIVITIES).map((g) => ({
+    ...g,
+    durationMinutes: Math.min(g.minutes || itemDuration, maxMinutes),
+  }));
+  const genericGames = (generic.length ? generic : GENERIC_GAMES).map((g) => ({
+    ...g,
+    durationMinutes: Math.min(g.defaultMinutes || itemDuration, maxMinutes),
+  }));
 
-  // Filter age
-  const ageAppropriate = candidates.filter(
-    (item) => (youngestAge === null || item.maxAge >= youngestAge) && (oldestAge === null || item.minAge <= oldestAge)
-  );
-
-  const list = ageAppropriate.length ? ageAppropriate : candidates;
-
-  // Score candidates by tags
-  const scored = list.map((item) => {
+  const excluded = new Set(exclude.map(normalizeText));
+  const fitsAge = (item) => (youngestAge === null || item.maxAge >= youngestAge) && (oldestAge === null || item.minAge <= oldestAge);
+  const scoreOf = (item) => {
     const text = item.title.toLowerCase();
     const matches = (item.tags || []).filter((tag) => allTags.some((t) => t.includes(tag) || tag.includes(t))).length;
-    const nameMatch = allTags.some((t) => text.includes(t)) ? 1 : 0;
-    return { item, score: matches + nameMatch };
-  });
+    const nameMatch = allTags.some((t) => t && text.includes(t)) ? 1 : 0;
+    return matches + nameMatch;
+  };
+  // Age-appropriate games first, the children's interests first; `variant` rotates the games of equal score,
+  // so asking again gives other games
+  const rank = (list) => {
+    const usable = list.filter((item) => item.title && !excluded.has(normalizeText(item.title)));
+    const fitting = usable.filter(fitsAge);
+    const pool = fitting.length ? fitting : usable;
+    const offset = pool.length ? variant % pool.length : 0;
+    return pool
+      .map((item, index) => ({ item, score: scoreOf(item), order: (index - offset + pool.length) % pool.length }))
+      .sort((a, b) => b.score - a.score || a.order - b.order)
+      .map(({ item }) => item);
+  };
 
-  scored.sort((a, b) => b.score - a.score);
+  // Up to two real attractions of the place, then the activity's games, then the games of this type of place
+  const ordered = activityGames.length
+    ? [...rank(placeGames).slice(0, 2), ...rank(activityGames), ...rank(placeGames).slice(2), ...rank(genericGames)]
+    : placeGames.length
+      ? [...rank(placeGames), ...rank(genericGames)]
+      : rank(genericGames);
 
   const picked = [];
   let currentMinutes = 0;
-  for (const { item } of scored) {
+  for (const item of ordered) {
     if (picked.length >= size.max) break;
+    if (picked.some((title) => normalizeText(title) === normalizeText(item.title))) continue;
     picked.push(item.title);
     currentMinutes += item.durationMinutes;
     if (currentMinutes >= playMinutes && picked.length >= size.min) break;
   }
 
-  return picked.length ? picked : [candidates[0]?.title || 'Vui chơi tự do theo sở thích'];
+  return picked.length ? picked : [ordered[0]?.title || 'Vui chơi tự do theo sở thích'];
 };
 
 export default PLAYDATE_ACTIVITIES;

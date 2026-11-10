@@ -58,6 +58,11 @@ export const summarizeCards = (cards = []) =>
     .filter(Boolean)
     .join('\n');
 
+// Tool results replayed in the history (the others are summarized by their cards or the plan)
+const REPLAYED_TOOLS = new Set(['listMyPlaydates', 'findMatches']);
+const REPLAYED_TOOL_MAX_LENGTH = 1500;
+const truncateText = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
 /**
  * Stored messages + the current turn -> Gemini contents. Only the text of user and assistant messages is
  * replayed: tool calls of earlier turns are not, which keeps the context short and avoids replaying
@@ -77,8 +82,21 @@ export const toGeminiContents = (messages = [], currentText = '') => {
   };
 
   messages
-    .filter((message) => message.role === AI_MESSAGE_ROLES.USER || message.role === AI_MESSAGE_ROLES.ASSISTANT)
+    .filter(
+      (message) =>
+        message.role === AI_MESSAGE_ROLES.USER ||
+        message.role === AI_MESSAGE_ROLES.ASSISTANT ||
+        (message.role === AI_MESSAGE_ROLES.TOOL && REPLAYED_TOOLS.has(message.toolName))
+    )
     .forEach((message) => {
+      // Lookups the parent may refer to later ("hủy buổi thứ hai", "bé thứ 3"): their data stays known,
+      // short, as a note before the reply that used them
+      if (message.role === AI_MESSAGE_ROLES.TOOL) {
+        if (message.content) {
+          push('user', `[System] Data of your earlier ${message.toolName} lookup (ids for later tools, never quote): ${truncateText(message.content, REPLAYED_TOOL_MAX_LENGTH)}`);
+        }
+        return;
+      }
       if (message.role === AI_MESSAGE_ROLES.USER) {
         if (message.content) push('user', message.content);
         return;
@@ -134,6 +152,7 @@ export const selectCards = (cards = []) => {
     const index = AI_STEP_PRIORITY.indexOf(card.stepId);
     return index === -1 ? AI_STEP_PRIORITY.length : index;
   };
-  const choice = choices.reduce((best, card) => (!best || rank(card) < rank(best) ? card : best), null);
+  // Same step twice (the model improved what a tool showed): the latest one wins
+  const choice = choices.reduce((best, card) => (!best || rank(card) <= rank(best) ? card : best), null);
   return choice ? [choice, ...others.values()] : [...others.values()];
 };

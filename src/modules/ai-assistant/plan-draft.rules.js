@@ -1,5 +1,11 @@
 import { getScheduledStart } from '../../shared/helpers/date.helper.js';
-import { PLAYDATE_RULES, PLACE_TYPE_MIN_AGE, HOURS_EXPECTED_PLACE_TYPES } from '../playdate/playdate.constants.js';
+import {
+  PLAYDATE_RULES,
+  PLAYDATE_TIME_RULES,
+  PLACE_TYPE_MIN_AGE,
+  HOURS_EXPECTED_PLACE_TYPES,
+  INDOOR_PLACE_TYPES,
+} from '../playdate/playdate.constants.js';
 import { evaluateTimeIssues, isUnusualHour } from '../playdate/playdate-time.rules.js';
 import {
   PLAYDATE_ACTIVITIES,
@@ -9,6 +15,7 @@ import {
   gameMinutesFor,
   namesGame,
   agendaSizeFor,
+  activityGamesFor,
 } from '../playdate/playdate.activities.js';
 import { evaluateSafetyRules, isBadWeather } from './safety-rules.js';
 import {
@@ -71,6 +78,8 @@ export const emptyDraft = () => ({
   date: null,
   time: null,
   durationMinutes: PLAYDATE_RULES.DEFAULT_DURATION_MINUTES,
+  // Who set the duration: 'default' (not chosen yet, follows the children's ages), 'parent'
+  durationSource: 'default',
   participants: [], // { parentId, childId, childName, parentName, warnings }
   pendingParticipants: null, // { childIds, names } given before the host child was known
   playmatesSkipped: false,
@@ -96,6 +105,51 @@ export const clampDuration = (minutes) => {
   const value = parseInt(minutes, 10);
   if (!Number.isFinite(value)) return PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
   return Math.min(PLAYDATE_RULES.MAX_DURATION_MINUTES, Math.max(PLAYDATE_RULES.MIN_DURATION_MINUTES, value));
+};
+
+// Default length of a playdate by the youngest child: toddlers tire quickly
+const DEFAULT_DURATION_BY_AGE = Object.freeze([
+  { underAge: 3, minutes: 60 },
+  { underAge: 6, minutes: 90 },
+]);
+
+/**
+ * Playdate length offered first, from the youngest child of the plan
+ * @param {number|null} youngestAge
+ * @returns {number}
+ */
+export const defaultDurationFor = (youngestAge) =>
+  (youngestAge === null || youngestAge === undefined
+    ? null
+    : DEFAULT_DURATION_BY_AGE.find((band) => youngestAge < band.underAge)?.minutes) ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
+
+// Lengths offered on the time card, the longest one still fitting the youngest child
+const DURATION_CHOICES = Object.freeze([60, 90, 120, 180]);
+
+/**
+ * Durations the parent can pick on the time card (the current one always included)
+ * @param {number} current
+ * @param {number|null} youngestAge
+ * @returns {number[]}
+ */
+export const durationChoicesFor = (current, youngestAge) => {
+  const cap = youngestAge === null || youngestAge === undefined
+    ? null
+    : PLAYDATE_TIME_RULES.MAX_LENGTH_BY_AGE.find((band) => youngestAge < band.underAge)?.maxMinutes ?? null;
+  const fitting = DURATION_CHOICES.filter((minutes) => cap === null || minutes <= cap);
+  return [...new Set([...(fitting.length ? fitting : [DURATION_CHOICES[0]]), current].filter(Boolean))].sort((a, b) => a - b);
+};
+
+/**
+ * "45 phút", "1 giờ", "1 giờ 30 phút"
+ * @param {number} minutes
+ * @returns {string}
+ */
+export const formatDurationVi = (minutes) => {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!hours) return `${rest} phút`;
+  return rest ? `${hours} giờ ${rest} phút` : `${hours} giờ`;
 };
 
 /**
@@ -125,6 +179,16 @@ export const draftAges = (draft) =>
   [...draftHostChildren(draft), ...(draft?.participants || [])]
     .map((child) => child.age)
     .filter((age) => typeof age === 'number' && !Number.isNaN(age));
+
+/**
+ * Age of the youngest child of the plan
+ * @param {Object} draft
+ * @returns {number|null}
+ */
+export const youngestOf = (draft) => {
+  const ages = draftAges(draft);
+  return ages.length ? Math.min(...ages) : null;
+};
 
 /**
  * Games that fit the plan (BUD-49 A2): the range of games for its duration and youngest child
@@ -287,7 +351,9 @@ export const evaluateDraftWarnings = (
     }
 
     // ACTIVITY_PLACE_MISMATCH
-    if (draft.activity?.placeTypes?.length && placeType) {
+    // At home: fine for the indoor activities (Lego, drawing, baking…), not for a park or a pool
+    const fitsHome = placeType === 'home' && draft.activity?.placeTypes?.some((type) => INDOOR_PLACE_TYPES.includes(type));
+    if (draft.activity?.placeTypes?.length && placeType && !fitsHome) {
       if (!draft.activity.placeTypes.includes(placeType)) {
         warnings.push({ code: AI_DRAFT_WARNING_CODES.ACTIVITY_PLACE_MISMATCH, severity: AI_WARNING_SEVERITY.WARN });
       }
@@ -314,6 +380,7 @@ export const evaluateDraftWarnings = (
     const placeType = draft.location?.placeType || draft.location?.type;
     const allKnown = [
       ...(draft.location?.attractions || []),
+      ...activityGamesFor(draft.activity),
       ...PLAYDATE_ACTIVITIES,
       ...GENERIC_GAMES,
     ];
@@ -324,7 +391,10 @@ export const evaluateDraftWarnings = (
 
     for (const agendaItem of draft.agenda) {
       // The attractions of the place first: an item there is never "not at this place"
-      const matched = allKnown.find((k) => namesGame(agendaItem, k));
+      // The game with this very name first, then any game it names
+      const exact = normalizeText(agendaItem);
+      const matched =
+        allKnown.find((k) => normalizeText(k.title || k.name) === exact) || allKnown.find((k) => namesGame(agendaItem, k));
 
       // One game, not the whole playdate: catalog activities carry the usual length of a playdate
       const game = gameMinutesFor(youngestAge);
@@ -462,6 +532,106 @@ export const highestSeverityWarning = (warnings = []) => {
   return [...warnings].sort((a, b) => (priority[b.severity] || 0) - (priority[a.severity] || 0))[0] || null;
 };
 
+const PLACE_TYPE_TEXT = Object.freeze({
+  park: 'công viên',
+  kids_cafe: 'khu vui chơi trong nhà',
+  playground: 'sân chơi',
+  library: 'thư viện',
+  sports_center: 'trung tâm thể thao',
+  workshop: 'xưởng sáng tạo',
+  home: 'nhà riêng',
+});
+
+/**
+ * One warning in plain Vietnamese with its details (who, when, how far), shown on the summary card and
+ * given to the model, which must never read out a code
+ * @param {Object} warning
+ * @param {Object} draft
+ * @returns {string}
+ */
+export const describeWarning = (warning, draft) => {
+  const params = warning.params || {};
+  const place = draft?.location?.name || 'Địa điểm';
+  const duration = draft?.durationMinutes;
+  const opening = draft?.location?.openingHours ? ` (giờ mở cửa: ${draft.location.openingHours})` : '';
+  switch (warning.code) {
+    case AI_DRAFT_WARNING_CODES.PAST_DATE:
+      return 'Thời gian này đã qua, bạn chọn giờ khác nhé';
+    case AI_DRAFT_WARNING_CODES.UNUSUAL_HOUR:
+      return `Khung ${draft?.time || ''}–${endTimeOf(draft?.time, duration) || ''} khá sớm hoặc khá muộn với các bé`;
+    case AI_DRAFT_WARNING_CODES.NAP_TIME:
+      return 'Trùng giờ ngủ trưa của bé nhỏ (12:00–14:00)';
+    case AI_DRAFT_WARNING_CODES.SCHOOL_HOURS:
+      return 'Trùng giờ học ngày thường của các bé';
+    case AI_DRAFT_WARNING_CODES.TOO_LONG_FOR_AGE:
+      return `Buổi chơi ${formatDurationVi(duration)} hơi dài với bé nhỏ nhất, nên tối đa ${formatDurationVi(params.maxMinutes)}`;
+    case AI_DRAFT_WARNING_CODES.MEAL_TIME:
+      return 'Trùng giờ ăn, nhớ chuẩn bị đồ ăn nhẹ cho các bé';
+    case AI_DRAFT_WARNING_CODES.SHORT_NOTICE:
+      return 'Hẹn gấp, các gia đình có thể chưa kịp sắp xếp';
+    case AI_DRAFT_WARNING_CODES.HOLIDAY:
+      return 'Ngày lễ, địa điểm có thể rất đông';
+    case AI_DRAFT_WARNING_CODES.PLACE_CLOSED:
+      return `${place} đóng cửa vào giờ này${opening}`;
+    case AI_DRAFT_WARNING_CODES.PLACE_CLOSES_EARLY:
+      return `${place} đóng cửa trước khi buổi chơi kết thúc${opening}`;
+    case AI_DRAFT_WARNING_CODES.OUTDOOR_AFTER_DARK:
+      return 'Buổi chơi ngoài trời kết thúc sau khi trời tối';
+    case AI_DRAFT_WARNING_CODES.HOURS_UNKNOWN:
+      return `Chưa rõ giờ mở cửa của ${place}, bạn nên gọi hỏi trước`;
+    case AI_DRAFT_WARNING_CODES.PLACE_AGE:
+      return `${place} thường dành cho bé từ ${params.requiredAge} tuổi`;
+    case AI_DRAFT_WARNING_CODES.ACTIVITY_PLACE_MISMATCH:
+      return `Hoạt động "${draft?.activity?.title || ''}" có thể không hợp với ${PLACE_TYPE_TEXT[draft?.location?.placeType] || 'địa điểm này'}`;
+    case AI_DRAFT_WARNING_CODES.FAR_PLACE: {
+      const km = params.distanceKm ?? warning.distanceKm;
+      const who = params.familyLabel && params.familyLabel !== 'Nhà bạn' ? `nhà ${params.familyLabel}` : 'nhà bạn';
+      return `${place} cách ${who} khoảng ${km} km`;
+    }
+    case AI_DRAFT_WARNING_CODES.AGENDA_OVER_TIME:
+      return `Các trò chơi cần khoảng ${params.totalMinutes} phút, dài hơn buổi hẹn ${duration} phút`;
+    case AI_DRAFT_WARNING_CODES.ITEM_AGE:
+      return 'Có trò chơi chưa hợp độ tuổi của tất cả các bé';
+    case AI_DRAFT_WARNING_CODES.ITEM_NOT_AT_PLACE:
+      return `Có trò chơi khó chơi ở ${PLACE_TYPE_TEXT[draft?.location?.placeType] || 'địa điểm này'}`;
+    case AI_DRAFT_WARNING_CODES.SAFETY_HIGH_RISK:
+      return 'Hoạt động có rủi ro cao, cần người lớn giám sát sát sao';
+    case AI_DRAFT_WARNING_CODES.AGENDA_TOO_THIN:
+      return 'Buổi chơi dài nhưng mới có ít hoạt động';
+    case AI_DRAFT_WARNING_CODES.SCHEDULE_CONFLICT: {
+      const name = warning.childName ? `Bé ${warning.childName}` : 'Một bé';
+      const when = warning.start && warning.end ? ` lúc ${warning.start}–${warning.end}` : ' trùng giờ này';
+      return warning.severity === AI_WARNING_SEVERITY.BLOCK
+        ? `${name} đã có hẹn khác${when}, bạn cần đổi giờ`
+        : `${name} đã có hẹn khác${when}, có thể chưa nhận lời được`;
+    }
+    case AI_DRAFT_WARNING_CODES.INVITEE_NOT_FRIEND:
+      return `"${warning.value}" chưa phải bạn bè đã kết nối nên chưa mời được`;
+    case AI_DRAFT_WARNING_CODES.AGE_GAP: {
+      const gap = params.gap ?? warning.gap;
+      return gap ? `Các bé chênh nhau ${gap} tuổi, nên chọn trò hợp cả nhóm` : 'Các bé chênh tuổi khá nhiều';
+    }
+    case AI_DRAFT_WARNING_CODES.GROUP_TOO_LARGE:
+      return `Nhóm ${params.count} bé khá đông, cần thêm người lớn hỗ trợ`;
+    case AI_DRAFT_WARNING_CODES.NOT_PREFERRED_TIME:
+      return `Giờ này hợp buổi rảnh (trong hồ sơ) của ${params.matchedParents}/${params.totalParents} gia đình`;
+    case AI_DRAFT_WARNING_CODES.NO_SHARED_INTEREST:
+      return 'Các bé chưa có sở thích chung nào trong hồ sơ';
+    case AI_DRAFT_WARNING_CODES.BAD_WEATHER:
+      return 'Dự báo ngày này có mưa, nên ưu tiên chỗ trong nhà';
+    default:
+      return '';
+  }
+};
+
+/**
+ * Warnings with their text, for the client and the model
+ * @param {Object} draft
+ * @returns {Array<Object>}
+ */
+export const describedWarnings = (draft) =>
+  (draft?.warnings || []).map((warning) => ({ ...warning, message: describeWarning(warning, draft) }));
+
 /**
  * Status and warnings derived from the current fields
  * @param {Object} draft
@@ -539,16 +709,20 @@ export const refreshDraft = (draft, now = new Date()) => {
 export const summarizeDraft = (draft) => {
   if (!draft) return 'No playdate is being planned.';
   const highest = highestSeverityWarning(draft.warnings || []);
+  const severityText = { block: 'must fix', warn: 'warning', info: 'info' };
+  const warningLines = describedWarnings(draft)
+    .filter((warning) => warning.message)
+    .map((warning) => `  - [${severityText[warning.severity] || 'warning'}] ${warning.message}`);
   const lines = [
-    `Children: ${draft.hostChild ? draftHostChildren(draft).map((child) => child.displayName).join(', ') : '(missing)'}`,
-    `Time: ${draft.date && draft.time ? `${draft.date} ${draft.time}, ${draft.durationMinutes} min` : draft.preferredDate ? `(day ${draft.preferredDate}, time missing)` : '(missing)'}`,
+    `Children: ${draft.hostChild ? draftHostChildren(draft).map((child) => `${child.displayName}${child.age != null ? ` (${child.age} tuổi)` : ''}`).join(', ') : '(missing)'}`,
+    `Time: ${draft.date && draft.time ? `${draft.date} ${draft.time}-${endTimeOf(draft.time, draft.durationMinutes)}, ${draft.durationMinutes} min${draft.durationSource === 'parent' ? ' (duration chosen by the parent)' : ''}` : draft.preferredDate ? `(day ${draft.preferredDate}, time missing; duration ${draft.durationMinutes} min)` : `(missing; duration ${draft.durationMinutes} min)`}`,
     `Playmates: ${draft.participants.length ? draft.participants.map((p) => p.childName).join(', ') : draft.playmatesSkipped ? '(none, skipped)' : '(missing)'}`,
     `Activity: ${draft.activity ? draft.activity.title : '(missing)'}`,
     `Place: ${draft.location ? draft.location.name : '(missing)'}`,
     `Agenda: ${draft.agenda.length ? draft.agenda.join(' | ') : '(none yet)'}${draft.agendaConfirmed ? ' (reviewed by the parent)' : ''}`,
     `Note: ${draft.note || '(none)'}`,
-    `Warnings: ${(draft.warnings || []).map((warning) => warning.code).join(', ') || '(none)'}`,
-    `Highest Warning: ${highest ? `${highest.code} (${highest.severity})` : 'none'}`,
+    `Warnings (say them in your own words, never the codes):${warningLines.length ? `\n${warningLines.join('\n')}` : ' (none)'}`,
+    `Most severe: ${highest ? describeWarning(highest, draft) || highest.code : 'none'}`,
     `Status: ${draft.status}, next step: ${nextMissingStep(draft)}`,
   ];
   return lines.join('\n');
@@ -608,6 +782,8 @@ export const toDraftResponse = (draft) => {
     hasHighRisk: Boolean(draft.hasHighRisk),
     extraNote: draft.note || '',
     note: buildNote(draft.agenda, draft.note, draft.safetyNotes, draft.itemsToBring),
-    warnings: draft.warnings,
+    warnings: describedWarnings(draft),
+    // Lengths the summary card can switch to
+    durationChoices: durationChoicesFor(draft.durationMinutes, youngestOf(draft)),
   };
 };

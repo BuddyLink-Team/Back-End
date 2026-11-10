@@ -14,7 +14,11 @@ import { grantPremium } from '../helpers/subscriptionHelper.js';
 import AIChatSession from '../../src/modules/ai-assistant/ai-assistant.model.js';
 import geminiAdapter from '../../src/integrations/ai/gemini.adapter.js';
 import AppError from '../../src/shared/exceptions/app-error.js';
-import { AI_FALLBACK_REPLY, AI_CHOICE_FALLBACK_REPLY, AI_AGENDA_NOTE_HEADER } from '../../src/modules/ai-assistant/ai-assistant.constants.js';
+import {
+  AI_EMPTY_REPLY,
+  AI_CHOICE_FALLBACK_REPLY,
+  AI_AGENDA_NOTE_HEADER,
+} from '../../src/modules/ai-assistant/ai-assistant.constants.js';
 import { geminiText, geminiToolCall } from '../mocks/geminiMock.js';
 
 const PASSWORD = 'Password123!';
@@ -285,7 +289,8 @@ describe('AI assistant (/api/v1/ai-assistant)', () => {
       expect(res.status).toBe(200);
       expect(spy).toHaveBeenCalledTimes(4);
       expect(spy.mock.calls[3][0].allowTools).toBe(false);
-      expect(res.body.data.reply.content).toBe(AI_FALLBACK_REPLY);
+      // No card was shown: the parent is asked to rephrase (the choices fallback would point to nothing)
+      expect(res.body.data.reply.content).toBe(AI_EMPTY_REPLY);
       expect(res.body.data.reply.toolsUsed).toEqual(['getMyChildren']);
 
       const stored = await AIChatSession.findById(sessionId).lean();

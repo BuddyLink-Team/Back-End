@@ -145,7 +145,7 @@ export const AI_LIMITS = Object.freeze({
   MAX_MESSAGE_LENGTH: 2000,
   HISTORY_WINDOW: 20, // stored text messages sent back to the model
   TITLE_MAX_LENGTH: 60,
-  MAX_OPTIONS: 5,
+  MAX_OPTIONS: 5, // time options: one more, spread over the days
   MAX_PLAYMATE_OPTIONS: 8,
   MAX_SEARCHED_INVITEES: 20, // friends' children picked in the search of the playmates card
   MAX_MATCHES: 5,
@@ -190,6 +190,8 @@ export const AI_SAFETY_NOTE_HEADER = 'Lưu ý an toàn:';
 export const AI_EXTRA_NOTE_HEADER = 'Lưu ý thêm:';
 // Reply text when the model produced cards but no sentence
 export const AI_FALLBACK_REPLY = 'Mình đã chuẩn bị các lựa chọn bên dưới, bạn xem nhé.';
+// Reply text when the model gave no answer and no card was shown
+export const AI_EMPTY_REPLY = 'Mình chưa trả lời được câu này. Bạn nói rõ hơn một chút giúp mình nhé?';
 // Reply text when a tapped option was applied but the model could not answer
 export const AI_CHOICE_FALLBACK_REPLY = 'Mình đã ghi nhận lựa chọn của bạn. Bạn xem tiếp bên dưới nhé.';
 

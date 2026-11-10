@@ -137,9 +137,9 @@ describe('AI assistant planning order and actions (BUD-49)', () => {
     expect(timeCard.options.length).toBeGreaterThan(0);
     // Both families are counted, and the best slot fits them all (weekend morning)
     expect(timeCard.options.every((option) => option.data.totalParents === 2)).toBe(true);
-    expect(timeCard.options[0].description).toBe('2 giờ · Hợp lịch ưu tiên của các gia đình');
+    expect(timeCard.options[0].description).toBe('Các bé đều rảnh · Đúng buổi rảnh của các gia đình');
     timeCard.options.forEach((option) =>
-      expect(option.description).toMatch(/ · (Hợp lịch ưu tiên của các gia đình|Hợp với \d\/2 gia đình|Chưa ai đặt lịch ưu tiên)$/)
+      expect(option.description).toMatch(/^Các bé đều rảnh · (Đúng buổi rảnh của các gia đình|Hợp buổi rảnh của \d\/2 gia đình|Ngoài buổi rảnh trong hồ sơ)$/)
     );
   });
 

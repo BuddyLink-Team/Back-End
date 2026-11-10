@@ -116,7 +116,10 @@ class PlaydateSuggestionService {
    * @param {string} userId
    * @param {{ childId: string, participantChildIds?: string, from?: string, to?: string, durationMinutes?: number, placeOpeningHours?: string, placeCoordinates?: number[], placeId?: string }} query
    */
-  async getTimeSlotSuggestions(userId, { childId, participantChildIds, from, to, durationMinutes, placeOpeningHours, placeCoordinates, placeId } = {}) {
+  async getTimeSlotSuggestions(
+    userId,
+    { childId, participantChildIds, from, to, durationMinutes, placeOpeningHours, placeCoordinates, placeId, startTimes, maxPerDay, limit, withBusy } = {}
+  ) {
     const tomorrow = new Date(getStartOfZonedDay().getTime() + DAY_MS);
     const rangeFrom = from ? new Date(from) : tomorrow;
     const rangeTo = to ? new Date(to) : new Date(rangeFrom.getTime() + (SUGGESTION_LIMITS.DEFAULT_RANGE_DAYS - 1) * DAY_MS);
@@ -146,7 +149,14 @@ class PlaydateSuggestionService {
         busy,
         ages: children.map((child) => calculateAgeYears(child.dateOfBirth)),
         place,
+        // Internal options of the AI time step (never read from the HTTP query)
+        ...(Array.isArray(startTimes) ? { startTimes } : {}),
+        ...(typeof maxPerDay === 'number' ? { maxPerDay } : {}),
+        ...(typeof limit === 'number' ? { limit } : {}),
       }),
+      // Internal callers only (the AI says which times were left out): the HTTP query cannot send a boolean,
+      // and the other families' playdates are never sent to the client
+      ...(withBusy === true ? { busy, range: { from: rangeFrom, to: rangeTo } } : {}),
     };
   }
 
@@ -210,7 +220,7 @@ class PlaydateSuggestionService {
    * @param {string} userId
    * @param {{ childId: string, participantChildIds?: string, type?: string, limit?: number, date?: string, time?: string, durationMinutes?: number }} query
    */
-  async getPlaceSuggestions(userId, { childId, participantChildIds, type, limit, date, time, durationMinutes } = {}) {
+  async getPlaceSuggestions(userId, { childId, participantChildIds, type, limit, date, time, durationMinutes, minRadiusMeters } = {}) {
     const { parents, children } = await this._loadGroup(userId, { childId, participantChildIds });
 
     // Saved locations are ward centers (geocoded from area + city), the same points Discovery measures from
@@ -229,12 +239,14 @@ class PlaydateSuggestionService {
 
     const [lng, lat] = midpointOf(familyPoints);
     const farthestKm = Math.max(...familyPoints.map((point) => distanceKmBetween(point, [lng, lat])));
+    // The AI widens the search when nothing is found nearby (internal option, a number only)
+    const minRadius = typeof minRadiusMeters === 'number' ? minRadiusMeters : PLACE_SUGGESTION_RADIUS.MIN_METERS;
     const radius = Math.min(
-      PLACE_SUGGESTION_RADIUS.MAX_METERS,
-      Math.max(PLACE_SUGGESTION_RADIUS.MIN_METERS, Math.round(farthestKm * 1000) + PLACE_SUGGESTION_RADIUS.MARGIN_METERS)
+      Math.max(PLACE_SUGGESTION_RADIUS.MAX_METERS, minRadius),
+      Math.max(minRadius, Math.round(farthestKm * 1000) + PLACE_SUGGESTION_RADIUS.MARGIN_METERS)
     );
 
-    const { places } = await placesService.getNearbyPlaces(userId, { lat, lng, radius, type, limit: 50 });
+    const { places, areaSyncing } = await placesService.getNearbyPlaces(userId, { lat, lng, radius, type, limit: 50 });
     const ages = children.map((child) => calculateAgeYears(child.dateOfBirth)).filter((age) => age !== null);
     const parsedLimit = Math.min(SUGGESTION_LIMITS.MAX_PLACES, Math.max(1, parseInt(limit, 10) || SUGGESTION_LIMITS.PLACES));
 
@@ -254,6 +266,8 @@ class PlaydateSuggestionService {
         targetEnd,
         limit: parsedLimit,
       }),
+      // The places of this area are still being fetched from OpenStreetMap
+      areaSyncing: Boolean(areaSyncing),
     };
   }
 

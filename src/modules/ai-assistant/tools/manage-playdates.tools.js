@@ -43,17 +43,35 @@ const pushConfirmCard = (ctx, { stepId, playdateId, title, description, confirmL
 const describePlaydate = (playdate) =>
   `"${playdate.activity}" lúc ${playdate.time} ngày ${toDay(playdate.scheduledDate).split('-').reverse().join('/')}`;
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const PARTICIPANT_STATUS_TEXT = Object.freeze({ accepted: 'đã nhận lời', pending: 'chưa trả lời', declined: 'đã từ chối' });
+const DISPLAY_STATUS_TEXT = Object.freeze({
+  pending: 'đang chờ trả lời',
+  confirmed: 'đã chốt',
+  declined: 'bạn đã từ chối',
+  completed: 'đã diễn ra',
+  cancelled: 'đã hủy',
+  upcoming: 'sắp diễn ra',
+});
+
 export const listMyPlaydatesTool = {
   declaration: {
     name: AI_TOOL_NAMES.LIST_MY_PLAYDATES,
     description:
-      "List the parent's playdates (upcoming, past, or all) with date, time, activity, venue, and participating children. " +
-      "Call this when the parent asks what playdates are scheduled, e.g. 'Tuần này bé có hẹn gì?', 'Lịch chơi sắp tới'.",
+      "List the parent's playdates with date, time, activity, place, the children and each family's answer. " +
+      "Call it for 'Tuần này bé có hẹn gì?', 'Lịch chơi sắp tới', 'Có lời mời nào chưa trả lời?', and before rescheduling, " +
+      'cancelling or answering a playdate whose id is not known yet.',
     parametersJsonSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['upcoming', 'completed', 'cancelled', 'all'], description: 'Default upcoming' },
-        childId: { type: 'string', description: 'Optional: filter for a specific child' },
+        status: {
+          type: 'string',
+          enum: ['upcoming', 'pending', 'confirmed', 'completed', 'cancelled', 'all'],
+          description: 'Default upcoming. pending = an answer is awaited (invitations to answer, or invitees not answered yet)',
+        },
+        fromDate: { type: 'string', description: 'YYYY-MM-DD, first day (from the calendar of the prompt)' },
+        toDate: { type: 'string', description: 'YYYY-MM-DD, last day included' },
+        childId: { type: 'string', description: 'Optional: only the playdates of one own child' },
       },
     },
   },
@@ -63,23 +81,43 @@ export const listMyPlaydatesTool = {
     const query = {
       ...(status !== 'all' ? { status } : {}),
       ...(args.childId ? { childId: args.childId } : {}),
+      ...(DATE_ONLY.test(String(args.fromDate || '')) ? { fromDate: args.fromDate } : {}),
+      ...(DATE_ONLY.test(String(args.toDate || '')) ? { toDate: args.toDate } : {}),
     };
     const { playdates } = await playdateService.getPlaydates(ctx.userId, query);
 
-    const formatted = (playdates || []).slice(0, 10).map((p) => ({
+    // The list query has no child filter: one own child's playdates are picked here
+    const childId = args.childId ? String(args.childId) : null;
+    const ofChild = (p) =>
+      !childId ||
+      (p.hostChildIds || []).includes(childId) ||
+      (p.myChildIds || []).includes(childId) ||
+      (p.participants || []).some((part) => part.childId === childId);
+    const formatted = (playdates || []).filter(ofChild).slice(0, 10).map((p) => ({
       id: p.id,
       activity: p.activity,
       date: toDay(p.scheduledDate),
-      time: p.time,
-      status: p.status,
+      time: p.endTime ? `${p.time}-${p.endTime}` : p.time,
+      status: DISPLAY_STATUS_TEXT[p.displayStatus] || DISPLAY_STATUS_TEXT[p.status] || p.status,
       placeName: p.location?.name || '',
-      placeAddress: p.location?.address || '',
-      hostChild: p.hostChild?.displayName || '',
-      participants: (p.participants || []).map((part) => part.child?.displayName || part.parent?.fullName || ''),
+      hostChildren: (p.hostChildren?.length ? p.hostChildren : [p.hostChild]).filter(Boolean).map((child) => child.displayName).join(', '),
+      hostParent: p.isHost ? 'bạn' : p.hostParent?.fullName || '',
       isHost: p.isHost,
+      // The viewer's own answer to an invitation
+      ...(p.isHost ? {} : { myAnswer: PARTICIPANT_STATUS_TEXT[p.myParticipantStatus] || p.myParticipantStatus || '' }),
+      participants: (p.participants || []).map((part) => ({
+        child: part.child?.displayName || '',
+        family: part.parent?.fullName || '',
+        answer: PARTICIPANT_STATUS_TEXT[part.status] || part.status,
+      })),
+      ...(p.otherPendingCount ? { otherFamiliesNotAnswered: p.otherPendingCount } : {}),
     }));
 
-    return { playdates: formatted, count: formatted.length };
+    return {
+      playdates: formatted,
+      count: formatted.length,
+      ...(formatted.length ? {} : { note: 'No playdate matches: say so and offer to plan one.' }),
+    };
   },
 };
 

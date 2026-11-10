@@ -138,11 +138,15 @@ export const suggestTimeSlots = ({
   // Older callers sent the opening hours alone
   placeOpeningHours = null,
   placeCoordinates = null,
+  // [timeSlot, "HH:mm"] pairs tried each day (the AI offers more start times than the form)
+  startTimes = Object.entries(TIME_SLOT_START),
+  // Most slots kept on one day, so the suggestions spread over several days
+  maxPerDay = Infinity,
 }) => {
   const placeOfSlots = place || (placeOpeningHours ? { openingHours: placeOpeningHours, coordinates: placeCoordinates } : null);
   const candidates = [];
   for (const day of listCalendarDays(from, to)) {
-    for (const [timeSlot, time] of Object.entries(TIME_SLOT_START)) {
+    for (const [timeSlot, time] of startTimes) {
       const start = getScheduledStart(day.noon, time);
       const end = new Date(start.getTime() + durationMinutes * MINUTE_MS);
       if (start <= now) continue;
@@ -175,7 +179,14 @@ export const suggestTimeSlots = ({
       a.start - b.start
   );
 
-  return candidates.slice(0, limit).map(({ start: _start, ...slot }) => slot);
+  const perDay = new Map();
+  const spread = candidates.filter((slot) => {
+    const count = perDay.get(slot.date) || 0;
+    if (count >= maxPerDay) return false;
+    perDay.set(slot.date, count + 1);
+    return true;
+  });
+  return spread.slice(0, limit).map(({ start: _start, ...slot }) => slot);
 };
 
 /**
