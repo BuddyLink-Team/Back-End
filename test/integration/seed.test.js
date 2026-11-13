@@ -10,6 +10,7 @@ import Conversation from '../../src/modules/chat/conversation.model.js';
 import Message from '../../src/modules/chat/message.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
 import RescheduleRequest from '../../src/modules/playdate/reschedule-request.model.js';
+import PlaydateLeave from '../../src/modules/playdate/playdate-leave.model.js';
 import RatingFeedback from '../../src/modules/rating-feedback/rating-feedback.model.js';
 import Badge from '../../src/modules/gamification/badge.model.js';
 import UserBadge from '../../src/modules/gamification/user-badge.model.js';
@@ -29,28 +30,54 @@ import PlacesSyncTile from '../../src/modules/places/places-sync-tile.model.js';
 import { seedDatabase, SEED_PASSWORD, SEED_PARENT_COUNT, SEED_UNVERIFIED_COUNT, EMAIL_DOMAIN } from '../../scripts/seed.js';
 import { migrateChildPairs } from '../../scripts/migrate-bud48-child-pairs.js';
 
-const WINDOW_START = new Date('2026-08-01T00:00:00+07:00');
-const WINDOW_END = new Date('2026-11-01T00:00:00+07:00');
+const WINDOW_START = new Date('2026-09-01T00:00:00+07:00');
+// A real account (deleted by the seed) and a seeded account (kept) are in the database before the seed runs
+const TOTAL_PARENTS = SEED_PARENT_COUNT;
 const ALL_MODELS = [
-  User, Parent, Child, Connection, Swipe, Conversation, Message, Playdate, RescheduleRequest, RatingFeedback, Badge,
+  User, Parent, Child, Connection, Swipe, Conversation, Message, Playdate, RescheduleRequest, PlaydateLeave, RatingFeedback, Badge,
   UserBadge, Notification, Block, Report, Subscription, SubscriptionPlan, Payment, UsageQuota, AIChatSession,
   AdminNotification, AuthToken, RefreshToken, PlacesCache, PlacesSyncTile,
 ];
 const idsOf = (docs, field = '_id') => new Set(docs.map((doc) => String(doc[field])));
 
 // Wipes the database: run it on its own database, not the one shared by the other suites
+// Every leaf path of a schema, sub-documents and arrays of sub-documents included
+const pathsOf = (schema, prefix = '') => {
+  const paths = [];
+  schema.eachPath((path, type) => {
+    if (path === '__v') return;
+    if (type.schema) paths.push(...pathsOf(type.schema, `${prefix}${path}.`));
+    else if (!path.endsWith('.$*')) paths.push(prefix + path);
+  });
+  return paths;
+};
+const valuesAt = (value, parts) => {
+  if (!parts.length) return [value];
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => valuesAt(item, parts));
+  return valuesAt(value[parts[0]], parts.slice(1));
+};
+const isFilled = (value) => {
+  if (value === null || value === undefined || value === '') return false;
+  if (Array.isArray(value)) return value.some(isFilled);
+  if (typeof value === 'object' && !(value instanceof Date) && !value._bsontype) return Object.keys(value).length > 0;
+  return true;
+};
+
 describe('Demo data seed', () => {
   let parents;
   let unverifiedIds;
   let realUser;
   let realParent;
+  let oldSeedParent;
+  let oldSeedChild;
 
   beforeAll(async () => {
     await mongoose.disconnect();
     await mongoose.connect('mongodb://127.0.0.1:27018/seed_data');
     await mongoose.connection.dropDatabase();
 
-    // A real account signed up before the seed runs, with a legacy phone format and no plan document issue
+    // A real account signed up before the seed runs: the seed deletes it
     realUser = await User.create({ email: 'real.parent@gmail.com', phone: '0901112233', passwordHash: 'real-hash', role: 'parent', createdAt: new Date('2026-10-19T08:00:00Z') });
     realParent = await Parent.create({
       userId: realUser._id,
@@ -61,6 +88,21 @@ describe('Demo data seed', () => {
       createdAt: new Date('2026-10-19T08:00:00Z'),
     });
     await Child.create({ parentId: realParent._id, displayName: 'Bé Thật', dateOfBirth: new Date('2021-01-01'), gender: 'girl', createdAt: new Date('2026-10-19T09:00:00Z') });
+
+    // A seeded account of a previous seed: its email was never verified there, and it has a child
+    const oldSeedUser = await User.create({ email: `old.parent@${EMAIL_DOMAIN}`, phone: '0901112233', passwordHash: 'old-hash', role: 'parent', strikeCount: 2, createdAt: new Date('2026-06-05T08:00:00Z') });
+    oldSeedParent = await Parent.create({
+      userId: oldSeedUser._id,
+      fullName: 'Trần Thị Cũ',
+      avatarUrl: 'https://example.com/old-avatar.jpg',
+      bio: 'Hồ sơ của lần seed trước.',
+      location: { area: 'Phường Tam Kỳ', city: 'Đà Nẵng', address: '12 Hùng Vương, Phường Tam Kỳ', coordinates: { type: 'Point', coordinates: [108.2013, 16.0153] } },
+      preferences: { maxDistanceKm: 20, preferredTimeSlots: ['evening'], preferredPlaydateDays: ['weekday'], preferredLocations: ['pool', 'home'], preferredAgeRange: { min: 3, max: 7 } },
+      privacySettings: { isProfileHidden: false, connectionPrivacy: 'everyone', messagePrivacy: 'connected_only' },
+      verification: { isEmailVerified: false, isPhoneVerified: true, isVerifiedParent: false },
+      createdAt: new Date('2026-06-05T08:00:00Z'),
+    });
+    oldSeedChild = await Child.create({ parentId: oldSeedParent._id, displayName: 'Bé Cũ', dateOfBirth: new Date('2020-03-04'), gender: 'boy', interests: ['Khủng long'], favoriteActivities: ['Thả diều'], personality: ['Hài hước & Vui vẻ'], createdAt: new Date('2026-06-05T09:00:00Z') });
 
     await seedDatabase({ log: () => {} });
     parents = await Parent.find({}).lean();
@@ -80,12 +122,29 @@ describe('Demo data seed', () => {
     }
   });
 
-  it('has the requested parents, 5 of them unverified, the others with a phone', async () => {
-    expect(parents).toHaveLength(SEED_PARENT_COUNT);
+  it('fills every field of every model', async () => {
+    const neverFilled = [];
+    for (const Model of ALL_MODELS) {
+      const docs = await Model.collection.find({}).toArray();
+      for (const path of pathsOf(Model.schema)) {
+        if (!docs.some((doc) => valuesAt(doc, path.split('.')).some(isFilled))) neverFilled.push(`${Model.collection.collectionName}.${path}`);
+      }
+    }
+    expect(neverFilled).toEqual([]);
+  });
+
+  it('has the requested seeded accounts, some of the new ones unverified, the others with a phone', async () => {
+    expect(parents).toHaveLength(TOTAL_PARENTS);
+    expect(await User.countDocuments({ email: new RegExp(`@${EMAIL_DOMAIN}$`) })).toBe(SEED_PARENT_COUNT);
     expect(unverifiedIds.size).toBe(SEED_UNVERIFIED_COUNT);
     const users = await User.find({ role: 'parent' }).lean();
-    expect(users).toHaveLength(SEED_PARENT_COUNT);
-    expect(users.every((user) => /^\+84\d{9}$/.test(user.phone))).toBe(true);
+    expect(users).toHaveLength(TOTAL_PARENTS);
+    const unverifiedUserIds = idsOf(parents.filter((p) => unverifiedIds.has(String(p._id))), 'userId');
+    expect(users.filter((user) => !unverifiedUserIds.has(String(user._id))).every((user) => /^\+84\d{9}$/.test(user.phone))).toBe(true);
+    // Every way of being unverified, and one removed account
+    const states = new Set(parents.filter((p) => unverifiedIds.has(String(p._id))).map((p) => `${p.verification.isEmailVerified}-${p.verification.isPhoneVerified}`));
+    expect([...states].sort()).toEqual(['false-false', 'false-true', 'true-false']);
+    expect(await User.countDocuments({ _id: { $in: [...unverifiedUserIds] }, isActive: false, deletedAt: { $ne: null } })).toBe(1);
     expect(parents.every((p) => p.verification.isVerifiedParent === (p.verification.isEmailVerified && p.verification.isPhoneVerified))).toBe(true);
   });
 
@@ -103,6 +162,7 @@ describe('Demo data seed', () => {
       [Message, { senderId: { $in: unverified } }],
       [Playdate, { $or: [{ hostParentId: { $in: unverified } }, { 'participants.parentId': { $in: unverified } }] }],
       [RatingFeedback, { parentId: { $in: unverified } }],
+      [PlaydateLeave, { parentId: { $in: unverified } }],
       [UserBadge, { parentId: { $in: unverified } }],
       [Block, { $or: [{ blockerId: { $in: unverified } }, { blockedId: { $in: unverified } }] }],
       [Report, { $or: [{ reporterId: { $in: unverified } }, { reportedUserId: { $in: unverified } }] }],
@@ -120,14 +180,44 @@ describe('Demo data seed', () => {
     }
   });
 
-  it('keeps the real account as it was, with the phone normalized', async () => {
-    const user = await User.findOne({ email: 'real.parent@gmail.com' }).lean();
-    expect(user.passwordHash).toBe('real-hash');
+  it('deletes the accounts outside the seed domain with everything they own', async () => {
+    expect(await User.countDocuments({ _id: realUser._id })).toBe(0);
+    expect(await User.countDocuments({ role: 'parent', email: { $not: new RegExp(`@${EMAIL_DOMAIN}$`) } })).toBe(0);
+    expect(await Parent.countDocuments({ _id: realParent._id })).toBe(0);
+    expect(await Child.countDocuments({ parentId: realParent._id })).toBe(0);
+    expect(await Subscription.countDocuments({ parentId: realParent._id })).toBe(0);
+    expect(await Connection.countDocuments({ parents: realParent._id })).toBe(0);
+  });
+
+  it('keeps the profile and the children of a seeded account already in the database', async () => {
+    const parent = await Parent.findById(oldSeedParent._id).lean();
+    const before = oldSeedParent.toObject();
+    for (const field of ['fullName', 'avatarUrl', 'bio', 'preferences', 'privacySettings']) {
+      expect({ field, value: parent[field] }).toEqual({ field, value: before[field] });
+    }
+    // Same ward, saved as the app saves it: "<ward>, <city>" at the real center of the ward
+    expect(parent.location).toEqual({
+      address: 'Phường Tam Kỳ, Đà Nẵng',
+      area: 'Phường Tam Kỳ',
+      city: 'Đà Nẵng',
+      coordinates: { type: 'Point', coordinates: [108.4821958, 15.5637942] },
+    });
+    // Signed up in June: moved into August, with its child one hour later as before
+    expect(parent.createdAt >= new Date('2026-08-01T00:00:00+07:00') && parent.createdAt < WINDOW_START).toBe(true);
+    const [child] = await Child.find({ parentId: oldSeedParent._id }).lean();
+    expect(child.createdAt.getTime() - parent.createdAt.getTime()).toBe(60 * 60 * 1000);
+    expect(await User.countDocuments({ role: 'parent', createdAt: { $lt: new Date('2026-08-01T00:00:00+07:00') } })).toBe(0);
+    // It owns a child profile: verified, with a phone, the new password and no sanction left
+    expect(parent.verification).toEqual({ isEmailVerified: true, isPhoneVerified: true, isVerifiedParent: true });
+    const user = await User.findById(oldSeedParent.userId).lean();
+    // Legacy phone format normalized to E.164
     expect(user.phone).toBe('+84901112233');
-    const parent = await Parent.findById(realParent._id).lean();
-    expect(parent.fullName).toBe('Phụ Huynh Thật');
-    expect(await Child.countDocuments({ parentId: realParent._id, displayName: 'Bé Thật' })).toBe(1);
-    expect(await Connection.countDocuments({ parents: realParent._id, status: 'accepted' })).toBeGreaterThan(0);
+    expect(user.strikeCount).toBeLessThanOrEqual(1);
+    expect(await bcrypt.compare(SEED_PASSWORD, user.passwordHash)).toBe(true);
+    const children = await Child.find({ parentId: oldSeedParent._id }).lean();
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({ _id: oldSeedChild._id, displayName: 'Bé Cũ', gender: 'boy', interests: ['Khủng long'], dateOfBirth: new Date('2020-03-04') });
+    expect(await Subscription.countDocuments({ parentId: oldSeedParent._id })).toBe(1);
   });
 
   it('sets the password on seeded accounts', async () => {
@@ -138,26 +228,38 @@ describe('Demo data seed', () => {
     expect(await User.countDocuments({ role: 'admin' })).toBe(1);
   });
 
-  it('places most parents in Đà Nẵng and Hội An', () => {
-    const outlying = parents.filter((p) => /Điện Bàn|An Thắng/.test(p.location.area));
-    const hoiAn = parents.filter((p) => /Hội An/.test(p.location.area));
-    expect(outlying.length).toBeLessThanOrEqual(SEED_PARENT_COUNT * 0.2);
-    expect(hoiAn.length).toBeGreaterThanOrEqual(SEED_PARENT_COUNT * 0.2);
-    expect(parents.every((p) => p.location.city === 'Đà Nẵng')).toBe(true);
+  it('places most parents in Đà Nẵng and Hội An, at real points', async () => {
+    // Unverified accounts have not filled their profile yet
+    const located = parents.filter((p) => !unverifiedIds.has(String(p._id)));
+    const outlying = located.filter((p) => /Điện Bàn|An Thắng/.test(p.location.area));
+    const hoiAn = located.filter((p) => /Hội An/.test(p.location.area));
+    expect(outlying.length).toBeLessThanOrEqual(located.length * 0.2);
+    expect(hoiAn.length).toBeGreaterThanOrEqual(located.length * 0.2);
+    expect(located.every((p) => p.location.city === 'Đà Nẵng')).toBe(true);
+    // No street in the profile form: the address is the ward and the city, the point is the ward center
+    expect(located.every((p) => p.location.address === `${p.location.area}, ${p.location.city}`)).toBe(true);
+    const points = new Map();
+    located.forEach((p) => points.set(p.location.area, new Set([...(points.get(p.location.area) || []), p.location.coordinates.coordinates.join()])));
+    expect([...points.values()].every((set) => set.size === 1)).toBe(true);
+    // Places are OpenStreetMap elements only
+    expect(await PlacesCache.countDocuments({ osmId: { $not: /^osm-(node|way|relation)-\d+$/ } })).toBe(0);
+    expect(parents.filter((p) => unverifiedIds.has(String(p._id))).every((p) => p.location.area === '' && p.bio === '')).toBe(true);
   });
 
-  it('spreads the data from August to October', async () => {
-    for (const Model of [Parent, Child, Connection, Swipe, Conversation, Message, Playdate, RescheduleRequest, RatingFeedback, UserBadge, Notification, Block, Report, Payment, AIChatSession, AdminNotification]) {
+  it('spreads the activity from September until now', async () => {
+    const now = new Date();
+    // Only the accounts kept from the database and their first child may be older than the window
+    for (const Model of [Payment, Connection, Swipe, Conversation, Message, Playdate, RescheduleRequest, PlaydateLeave, RatingFeedback, UserBadge, Notification, Block, Report, AIChatSession, AdminNotification]) {
       const [first] = await Model.find({}).sort({ createdAt: 1 }).limit(1).lean();
       const [last] = await Model.find({}).sort({ createdAt: -1 }).limit(1).lean();
-      expect({ collection: Model.collection.collectionName, ok: first.createdAt >= WINDOW_START && last.createdAt < WINDOW_END }).toEqual({
+      expect({ collection: Model.collection.collectionName, ok: first.createdAt >= WINDOW_START && last.createdAt <= now }).toEqual({
         collection: Model.collection.collectionName,
         ok: true,
       });
     }
-    for (const month of ['08', '09', '10']) {
+    for (const month of ['09', '10']) {
       const from = new Date(`2026-${month}-01T00:00:00+07:00`);
-      const to = month === '10' ? WINDOW_END : new Date(`2026-${Number(month) + 1 < 10 ? '0' : ''}${Number(month) + 1}-01T00:00:00+07:00`);
+      const to = month === '10' ? new Date('2026-11-01T00:00:00+07:00') : new Date(`2026-${Number(month) + 1 < 10 ? '0' : ''}${Number(month) + 1}-01T00:00:00+07:00`);
       for (const Model of [Parent, Connection, Message, Playdate, Payment, Notification, AIChatSession]) {
         expect(await Model.countDocuments({ createdAt: { $gte: from, $lt: to } })).toBeGreaterThan(0);
       }
@@ -236,8 +338,22 @@ describe('Demo data seed', () => {
     for (const report of reports) {
       expect(report.severity).toBeTruthy();
       if (report.status === 'resolved') expect(report.actions.length).toBeGreaterThan(0);
-      if (report.status === 'pending') expect(report.history).toHaveLength(0);
+      // Not claimed yet: only the Sentinel AI wrote on it
+      if (report.status === 'pending') expect(report.history.every((entry) => entry.actorType === 'system')).toBe(true);
+      expect(report.sentinelAssessment.assessedAt).toBeTruthy();
     }
+    // A family who left: declined with leftAt on the playdate, and kept in playdate_leaves
+    const leaves = await PlaydateLeave.find({}).lean();
+    for (const leave of leaves) {
+      const playdate = await Playdate.findById(leave.playdateId).lean();
+      const participant = playdate.participants.find((p) => String(p.parentId) === String(leave.parentId));
+      expect(participant).toMatchObject({ status: 'declined', leftAt: leave.leftAt });
+      expect(leave.leftAt < leave.scheduledStart).toBe(true);
+      expect(leave.isLate).toBe(!leave.safetyExempt && leave.hoursBeforeStart < 24);
+    }
+    expect(leaves.some((leave) => leave.isLate)).toBe(true);
+    expect(leaves.some((leave) => leave.safetyExempt && leave.reason === '')).toBe(true);
+    expect(leaves.some((leave) => !leave.isLate && !leave.safetyExempt && leave.reason)).toBe(true);
     expect(await User.countDocuments({ isActive: false, banReason: { $ne: null } })).toBeGreaterThan(0);
   });
 
@@ -258,21 +374,27 @@ describe('Demo data seed', () => {
 
   it('changes nothing when a kept document cannot be validated', async () => {
     const before = await Connection.countDocuments();
-    const { insertedId } = await Payment.collection.insertOne({ parentId: realParent._id, orderCode: 999001, status: 'unknown_status', amount: 1, expiresAt: new Date(), planSnapshot: { planCode: 'free', name: 'Free', price: 0, durationMonths: 0 } });
+    // A kept child profile without a name
+    const { insertedId } = await Child.collection.insertOne({ parentId: oldSeedParent._id, dateOfBirth: new Date('2021-01-01'), gender: 'girl', createdAt: new Date('2026-06-06T09:00:00Z') });
 
     await expect(seedDatabase({ log: () => {} })).rejects.toThrow('Nothing was changed');
 
     expect(await Connection.countDocuments()).toBe(before);
-    expect(await Parent.countDocuments()).toBe(SEED_PARENT_COUNT);
-    await Payment.collection.deleteOne({ _id: insertedId });
+    expect(await Parent.countDocuments()).toBe(TOTAL_PARENTS);
+    await Child.collection.deleteOne({ _id: insertedId });
   }, 60000);
 
   it('keeps the same parents when it runs again', async () => {
     const before = idsOf(parents);
     await seedDatabase({ log: () => {} });
-    const after = await Parent.find({}).select('_id').lean();
-    expect(after).toHaveLength(SEED_PARENT_COUNT);
+    const after = await Parent.find({}).select('_id verification').lean();
+    expect(after).toHaveLength(TOTAL_PARENTS);
     expect(after.every((p) => before.has(String(p._id)))).toBe(true);
-    expect((await User.findOne({ email: 'real.parent@gmail.com' }).lean()).passwordHash).toBe('real-hash');
+    // The unverified accounts are the same ones, still without any other data
+    const stillUnverified = after.filter((p) => !p.verification.isVerifiedParent).map((p) => String(p._id));
+    expect(stillUnverified.sort()).toEqual([...unverifiedIds].sort());
+    expect(await Child.countDocuments({ parentId: { $in: stillUnverified } })).toBe(0);
+    expect(await Subscription.countDocuments({ parentId: { $in: stillUnverified } })).toBe(0);
+    expect(await User.countDocuments({ deletedAt: { $ne: null } })).toBe(1);
   }, 180000);
 });

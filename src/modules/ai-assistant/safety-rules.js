@@ -5,14 +5,22 @@
 
 import { HIGH_RISK_WATER_REGEX, calculateChaperoneRequirement } from '../playdate/playdate.rules.js';
 import { catalogGamesNamedBy } from '../playdate/playdate.activities.js';
+import { OUTDOOR_PLACE_TYPES, INDOOR_PLACE_TYPES } from '../playdate/playdate.constants.js';
 
 /**
- * Rain or a high chance of rain that day (Open-Meteo forecast)
+ * Rain or a high chance of rain at the playdate (Open-Meteo forecast of its time slot, else of the day)
  * @param {{ isRaining?: boolean, precipitationProbability?: number }|null} weather
  * @returns {boolean}
  */
 export const isBadWeather = (weather) =>
   Boolean(weather && (weather.isRaining || (weather.precipitationProbability && weather.precipitationProbability > 50)));
+
+/**
+ * Whether a place is under a roof (the rain only matters on the way there)
+ * @param {string|null} placeType
+ * @returns {boolean}
+ */
+export const isIndoorPlace = (placeType) => INDOOR_PLACE_TYPES.includes(placeType) || placeType === 'home';
 
 const RISK_ORDER = Object.freeze({ low: 0, medium: 1, high: 2 });
 // Supervision of the catalog games (playdate.activities.js) as a level: 1 usual, 2 close watch, 3 one adult per child
@@ -21,6 +29,53 @@ const SUPERVISION_TEXT = Object.freeze({
   2: 'người lớn ở gần và quan sát các bé liên tục',
   3: 'mỗi bé cần một người lớn kèm 1-1',
 });
+
+// Open-air activities, read from the text only when the type of the place does not tell
+const OUTDOOR_TEXT_REGEX = /dã ngoại|picnic|ngoài trời|công viên(?! nước)|thả diều|cắm trại/i;
+const GREEN_AREA_TEXT_REGEX = /dã ngoại|picnic|công viên(?! nước)|cắm trại/i;
+// Place words shared by many catalog games: alone they do not name a game ("Dã ngoại công viên" is not cycling)
+const PLACE_WORDS_REGEX = /công viên(?! nước)|sân chơi|khu vui chơi|thư viện|ngoài trời|trong nhà/gi;
+// "Theo thông tin trên mạng về {place}: {game} ({link})" (plan-draft.rules.js): only the game is an activity
+const SOURCED_ITEM_REGEX = /^Theo thông tin trên mạng về\s.*?:\s+/i;
+const SOURCE_LINK_REGEX = /\s*\(https?:\/\/[^)]*\)\s*$/i;
+
+const WEATHER_RULES = Object.freeze({
+  HOT_TEMP: 33,
+  COLD_TEMP: 20,
+  SUN_FROM: '09:00',
+  SUN_TO: '16:00',
+  HARSH_SUN_FROM: '11:00',
+  HARSH_SUN_TO: '14:00',
+  EVENING_FROM: '16:00',
+  DARK_AFTER: '18:00',
+});
+
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+const toMinutes = (time) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+/**
+ * The game of an agenda item, without the name of the place and the link of its source
+ * @param {string} text
+ * @returns {string}
+ */
+export const activityTextOf = (text) =>
+  String(text || '').replace(SOURCE_LINK_REGEX, '').replace(SOURCED_ITEM_REGEX, '').trim();
+
+/**
+ * Whether the playdate is in the open air: the type of the chosen place decides, the words of the activity
+ * only when the place does not tell (no place yet, a sports center)
+ * @param {string} placeType
+ * @param {string} allTexts
+ * @returns {boolean}
+ */
+const isOutdoorPlaydate = (placeType, allTexts) => {
+  if (OUTDOOR_PLACE_TYPES.includes(placeType)) return true;
+  if (isIndoorPlace(placeType)) return false;
+  return OUTDOOR_TEXT_REGEX.test(allTexts);
+};
 
 const SAFETY_PRESETS = Object.freeze([
   {
@@ -45,18 +100,12 @@ const SAFETY_PRESETS = Object.freeze([
     items: ['Tất chống trượt', 'Quần áo co giãn'],
   },
   {
-    regex: /làm bánh|nấu ăn|thủ công|đất nặn|kéo|dao|nến/i,
+    // "kéo co" is a game, not scissors: only the tool itself counts
+    regex: /làm bánh|nấu ăn|thủ công|đất nặn|cắt dán|cây kéo|dùng kéo|(?:^|\s)dao(?=\s|$|[.,;])|nến/i,
     riskLevel: 'medium',
     supervisionLevel: 2,
     note: 'Hỗ trợ trẻ khi sử dụng dụng cụ nấu nướng, kéo hoặc vật liệu thủ công.',
     items: ['Tạp dề', 'Khăn lau ướt'],
-  },
-  {
-    regex: /dã ngoại|picnic|ngoài trời|công viên|thả diều/i,
-    riskLevel: 'low',
-    supervisionLevel: 1,
-    note: 'Tránh hoạt động dưới nắng gắt từ 11:00 đến 14:00, bổ sung nước thường xuyên cho trẻ.',
-    items: ['Mũ nón', 'Bình nước cá nhân', 'Kem chống nắng', 'Xịt chống muỗi'],
   },
 ]);
 
@@ -69,7 +118,9 @@ const SAFETY_PRESETS = Object.freeze([
  * @param {number|null} [input.youngestAge]
  * @param {number} [input.totalChildren=1]
  * @param {number[]} [input.childAges] - Ages of every child (adults needed: 1 per 2 under 5, 1 per 3 older)
- * @param {Object} [input.weather]
+ * @param {{ isRaining?: boolean, precipitationProbability?: number, maxTemp?: number|null, scope?: 'slot'|'day' }} [input.weather]
+ * @param {string|null} [input.time] - Start "HH:mm": sun, heat and dark notes follow the hours of the playdate
+ * @param {number} [input.durationMinutes=60]
  * @returns {{
  *   riskLevel: 'low'|'medium'|'high',
  *   supervisionLevel: 1|2|3,
@@ -87,8 +138,10 @@ export const evaluateSafetyRules = ({
   totalChildren = 1,
   childAges = [],
   weather = null,
+  time = null,
+  durationMinutes = 60,
 } = {}) => {
-  const texts = [activityTitle, ...(Array.isArray(agenda) ? agenda : [])].filter(Boolean);
+  const texts = [activityTitle, ...(Array.isArray(agenda) ? agenda : [])].map(activityTextOf).filter(Boolean);
   const allTexts = texts.join(' ');
   const safetyNotes = new Set();
   const itemsToBring = new Set();
@@ -111,7 +164,7 @@ export const evaluateSafetyRules = ({
   // a keyword rule above still gets its note
   const coveredByPreset = (text) => SAFETY_PRESETS.some((preset) => preset.riskLevel !== 'low' && preset.regex.test(text));
   texts.forEach((text) => {
-    catalogGamesNamedBy(text).forEach((game) => {
+    catalogGamesNamedBy(text.replace(PLACE_WORDS_REGEX, ' ')).forEach((game) => {
       if (!game.riskLevel || game.riskLevel === 'low') return;
       raiseRisk(game.riskLevel);
       const level = CATALOG_SUPERVISION[game.supervisionLevel] || 1;
@@ -122,19 +175,57 @@ export const evaluateSafetyRules = ({
     });
   });
 
-  // Outdoor place defaults
-  if (placeType === 'park' || placeType === 'playground') {
-    itemsToBring.add('Mũ nón');
-    itemsToBring.add('Bình nước cá nhân');
-  }
-
-  // Weather impact: bad weather elevates outdoor risks
+  // Weather and time of day: what the children need depends on where the playdate is, the forecast of its
+  // time slot (or of the day) and the hours it covers
   const rainy = isBadWeather(weather);
-  const isOutdoor = placeType === 'park' || placeType === 'playground' || /ngoài trời|công viên|dã ngoại|picnic/i.test(allTexts);
-  if (rainy && isOutdoor) {
-    raiseRisk('medium');
-    safetyNotes.add('Thời tiết có mưa/xấu, hoạt động ngoài trời dễ trơn trượt; cân nhắc chuẩn bị ô/áo mưa hoặc chuyển vào nhà.');
-    itemsToBring.add('Ô/áo mưa');
+  const isOutdoor = isOutdoorPlaydate(placeType, allTexts);
+  const hasTime = TIME_REGEX.test(String(time || ''));
+  const start = hasTime ? toMinutes(time) : null;
+  const end = hasTime ? start + (durationMinutes || 60) : null;
+  const covers = (from, to) => !hasTime || (start < toMinutes(to) && end > toMinutes(from));
+  const temperature = Number.isFinite(weather?.maxTemp) ? Math.round(weather.maxTemp) : null;
+
+  if (isOutdoor) {
+    itemsToBring.add('Bình nước cá nhân');
+    if (rainy) {
+      raiseRisk('medium');
+      const chance = weather.precipitationProbability ? ` (khả năng ${Math.round(weather.precipitationProbability)}%)` : '';
+      const when = weather.scope === 'slot' ? 'vào giờ chơi' : 'trong ngày';
+      safetyNotes.add(
+        `Dự báo có mưa ${when}${chance}: sân bãi dễ trơn trượt, nên có phương án chuyển vào chỗ có mái che hoặc trong nhà.`
+      );
+      ['Ô/áo mưa', 'Quần áo khô dự phòng', 'Giày dép chống trượt'].forEach((item) => itemsToBring.add(item));
+    } else {
+      const inSun = covers(WEATHER_RULES.SUN_FROM, WEATHER_RULES.SUN_TO);
+      if (inSun) {
+        itemsToBring.add('Mũ nón');
+        itemsToBring.add('Kem chống nắng');
+      }
+      if (inSun && temperature !== null && temperature >= WEATHER_RULES.HOT_TEMP) {
+        safetyNotes.add(
+          `Dự báo nắng nóng khoảng ${temperature}°C: cho bé uống nước thường xuyên và nghỉ trong bóng râm sau mỗi 20–30 phút vận động.`
+        );
+        itemsToBring.add('Khăn lau mồ hôi');
+      }
+      if (!hasTime) {
+        safetyNotes.add('Tránh hoạt động dưới nắng gắt từ 11:00 đến 14:00, bổ sung nước thường xuyên cho trẻ.');
+      } else if (covers(WEATHER_RULES.HARSH_SUN_FROM, WEATHER_RULES.HARSH_SUN_TO)) {
+        safetyNotes.add('Buổi chơi trùng khung nắng gắt 11:00–14:00: ưu tiên chỗ có bóng râm, đội mũ và bôi kem chống nắng cho bé.');
+      }
+    }
+    if (hasTime && end > toMinutes(WEATHER_RULES.DARK_AFTER)) {
+      safetyNotes.add('Buổi chơi kết thúc khi trời đã tối: chọn khu vực đủ ánh sáng và luôn giữ các bé trong tầm mắt.');
+    }
+    // Mosquitoes: green areas, and any open-air place late in the afternoon
+    if (placeType === 'park' || GREEN_AREA_TEXT_REGEX.test(allTexts) || (hasTime && end > toMinutes(WEATHER_RULES.EVENING_FROM))) {
+      itemsToBring.add('Xịt chống muỗi');
+    }
+    if (temperature !== null && temperature <= WEATHER_RULES.COLD_TEMP) {
+      itemsToBring.add('Áo khoác ấm');
+    }
+  } else if (rainy) {
+    // Indoors the rain only matters on the way there
+    itemsToBring.add('Ô/áo mưa khi di chuyển');
   }
 
   // Toddlers need direct supervision

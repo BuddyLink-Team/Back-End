@@ -1,13 +1,25 @@
 /**
- * BuddyLink demo data seed (Đà Nẵng and Hội An), 01/08/2026 to 31/10/2026.
+ * BuddyLink demo data seed (Đà Nẵng and Hội An): activity from 01/09/2026 to the day it runs.
  *
- * Keeps the parents already in the database and adds new ones up to SEED_PARENT_COUNT, 5 of them not
- * verified (these have a user and a parent document only). Everything else is rebuilt following the
- * app's rules: plan quotas, connections before playdates, host-only reschedules, moderation flow.
+ * Keeps the parents already in the database with their profile and children, and adds new ones until
+ * there are SEED_PARENT_COUNT seeded accounts. SEED_UNVERIFIED_COUNT of the new ones are not verified:
+ * these have a user and a parent document only. Everything else is rebuilt following the app's rules
+ * (plan quotas, connections before playdates, host-only reschedules, moderation flow), and every
+ * collection and field of the models gets data.
  *
- * - Accounts outside EMAIL_DOMAIN (real sign-ups): profile, password, child, subscription and payments are kept
- *   as they are; their activity is rebuilt like everyone else's.
- * - Accounts of EMAIL_DOMAIN: same ids, emails and names, the rest is reset (password included).
+ * - Accounts outside EMAIL_DOMAIN (real sign-ups) are deleted with everything they own: only the admin and
+ *   the seeded accounts are left.
+ * - Accounts of EMAIL_DOMAIN already in the database: same user, parent profile (name, avatar, bio, location,
+ *   preferences, privacy) and children. They own a child profile, so they are all verified. A sign-up date
+ *   before EARLIEST_SIGNUP is moved into the month before the window (their first child follows).
+ *   Password, plan and activity are rebuilt.
+ * - Locations are the real ones: a parent's point is the center of their ward and every place is an
+ *   OpenStreetMap element (WARDS and PLACES, checked with Nominatim). A kept account gets the address the
+ *   app would save ("<ward>, <city>") and the center of its ward.
+ * - Kept on purpose although no flow of the app writes them, so that every field of the models has data:
+ *   one soft-deleted unverified account (users.deletedAt), one admin notification removed from the list
+ *   (admin_notifications.isActive / deletedAt), the group chat on playdate reminders
+ *   (notifications.data.conversationId), and auth tokens that live AUTH_TOKEN_KEEP_DAYS days.
  * - subscription_plans, places_cache and places_sync_tiles are kept, missing documents are added.
  * - Includes the migrations: normalize-phones, migrate-bud48-child-pairs, migrate-report-severities.
  *   regeocode-parents is not needed: seeded parents use the same ward centers (it calls Nominatim).
@@ -43,6 +55,8 @@ import Conversation from '../src/modules/chat/conversation.model.js';
 import Message from '../src/modules/chat/message.model.js';
 import Playdate from '../src/modules/playdate/playdate.model.js';
 import RescheduleRequest from '../src/modules/playdate/reschedule-request.model.js';
+import PlaydateLeave from '../src/modules/playdate/playdate-leave.model.js';
+import { LEAVE_RULES, RELIABILITY_RULES } from '../src/modules/playdate/playdate.constants.js';
 import RatingFeedback from '../src/modules/rating-feedback/rating-feedback.model.js';
 import Badge from '../src/modules/gamification/badge.model.js';
 import UserBadge from '../src/modules/gamification/user-badge.model.js';
@@ -50,7 +64,10 @@ import { BADGE_DEFINITIONS } from '../src/modules/gamification/gamification.cons
 import { buildMetrics, calculateStreak } from '../src/modules/gamification/gamification.rules.js';
 import Notification from '../src/modules/notification/notification.model.js';
 import Block from '../src/modules/safety/block.model.js';
-import { CATEGORY_TO_SEVERITY, DEFAULT_BLOCK_REASON, REPORT_CATEGORY_NOTICES } from '../src/modules/safety/safety.constants.js';
+import { CATEGORY_TO_SEVERITY, DEFAULT_BLOCK_REASON, REPORT_CATEGORY_NOTICES, RISK_LEVEL_LABELS, toActionLabels } from '../src/modules/safety/safety.constants.js';
+import { SANCTION_POLICY_MATRIX } from '../src/modules/safety/moderation-policy.rules.js';
+import { RESTRICTION_STEP } from '../src/modules/safety/enforcement-metrics.rules.js';
+import { DELETED_MESSAGE_PLACEHOLDER } from '../src/modules/chat/chat.constants.js';
 import Report from '../src/modules/safety/report.model.js';
 import Subscription from '../src/modules/subscription/subscription.model.js';
 import SubscriptionPlan from '../src/modules/subscription/subscription-plan.model.js';
@@ -58,25 +75,33 @@ import Payment from '../src/modules/subscription/payment.model.js';
 import UsageQuota from '../src/modules/subscription/usage-quota.model.js';
 import { QUOTA_ACTIONS, SUBSCRIPTION_PLAN_DEFAULTS } from '../src/modules/subscription/subscription.constants.js';
 import AIChatSession from '../src/modules/ai-assistant/ai-assistant.model.js';
-import { AI_TOOL_NAMES } from '../src/modules/ai-assistant/ai-assistant.constants.js';
+import { AI_CARD_TYPES, AI_CHOICE_STATUS, AI_PLAN_STATUS, AI_STEPS, AI_TOOL_NAMES } from '../src/modules/ai-assistant/ai-assistant.constants.js';
 import AdminNotification from '../src/modules/admin/admin-notification.model.js';
 import { ADMIN_NOTIFICATION_TTL_SECONDS } from '../src/modules/admin/admin.constants.js';
 import { normalizePhone } from '../src/shared/helpers/phone.helper.js';
 import { migrateChildPairs } from './migrate-bud48-child-pairs.js';
 
 export const SEED_PASSWORD = 'abc123';
+// Seeded accounts (EMAIL_DOMAIN) after the seed: the ones already in the database + new ones
 export const SEED_PARENT_COUNT = 100;
-export const SEED_UNVERIFIED_COUNT = 5;
+// New accounts that never finished the verification: no data in any other collection
+export const SEED_UNVERIFIED_COUNT = 8;
 export const EMAIL_DOMAIN = 'mail.buddylink.vn';
 const CITY = 'Đà Nẵng';
 
 // Collections wiped before seeding (subscription_plans, places_cache and places_sync_tiles are kept)
 const MODELS_TO_WIPE = [
   User, AuthToken, RefreshToken, Parent, Child, Connection, Swipe, Conversation, Message, Playdate,
-  RescheduleRequest, RatingFeedback, Badge, UserBadge, Notification, Block, Report,
+  RescheduleRequest, PlaydateLeave, RatingFeedback, Badge, UserBadge, Notification, Block, Report,
   Subscription, Payment, UsageQuota, AIChatSession, AdminNotification,
 ];
 const MODELS_KEPT = [SubscriptionPlan, PlacesCache, PlacesSyncTile];
+
+// Protection applied by the Sentinel AI on its own (RESTRICTION_HOURS and AUTO_SUSPEND_MAX_DAYS of sentinel.service.js)
+// How long the seeded OTP / password reset tokens stay in auth_tokens before their TTL index removes them
+const AUTH_TOKEN_KEEP_DAYS = 7;
+const SENTINEL_RESTRICTION_HOURS = 72;
+const SENTINEL_SUSPEND_DAYS = 7;
 
 // Number of subscriptions per kind among the seeded verified families, the others are on Free
 const PLAN_MIX = { yearly: 14, renewedMonthly: 8, monthly: 12, expired: 10 };
@@ -108,16 +133,19 @@ const oid = () => new mongoose.Types.ObjectId();
 const sameId = (a, b) => a.toString() === b.toString();
 
 // ---------------------------------------------------------------------------
-// Dates: everything happens between WINDOW_START and WINDOW_END, in Vietnam time.
-// Only the date of upcoming playdates (and the end of paid plans) is later.
+// Dates: the activity happens between WINDOW_START and WINDOW_END (now), in Vietnam time.
+// Only the date of upcoming playdates (and the end of paid plans) is later; accounts kept from the
+// database may have signed up (and created their first child) before WINDOW_START, from EARLIEST_SIGNUP.
 // ---------------------------------------------------------------------------
 const NOW = new Date();
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const VN_OFFSET = 7 * HOUR;
-const WINDOW_START = new Date('2026-08-01T00:00:00+07:00');
-const WINDOW_END = new Date(Math.min(NOW.getTime(), new Date('2026-10-31T23:59:00+07:00').getTime()));
+const WINDOW_START = new Date('2026-09-01T00:00:00+07:00');
+const WINDOW_END = NOW;
+// No account is older than this: earlier sign-ups of kept accounts are moved between it and WINDOW_START
+const EARLIEST_SIGNUP = new Date('2026-08-01T00:00:00+07:00');
 
 const addTime = (date, ms) => new Date(date.getTime() + ms);
 const minDate = (...dates) => new Date(Math.min(...dates.map((d) => d.getTime())));
@@ -130,7 +158,12 @@ const awake = (date) => minDate(at(date, int(7, 22), int(0, 59)), addTime(WINDOW
 const capped = (date) => minDate(date, WINDOW_END);
 // A moment in one of the months of [from, to], each month equally likely: older accounts stay active
 // instead of everything piling up in the last weeks
-const MONTH_STARTS = ['2026-08-01', '2026-09-01', '2026-10-01', '2026-11-01'].map((day) => new Date(`${day}T00:00:00+07:00`));
+const MONTH_STARTS = [];
+for (let month = 8; ; month += 1) {
+  const start = new Date(`${2026 + Math.floor(month / 12)}-${String((month % 12) + 1).padStart(2, '0')}-01T00:00:00+07:00`);
+  MONTH_STARTS.push(start);
+  if (start > WINDOW_END) break;
+}
 const spread = (from, to) => {
   const ranges = MONTH_STARTS.slice(0, -1)
     .map((start, index) => [maxDate(start, from), minDate(MONTH_STARTS[index + 1], to)])
@@ -148,30 +181,51 @@ const ageAt = (dob, date) => (date.getTime() - new Date(dob).getTime()) / (365.2
 // Reference data
 // ---------------------------------------------------------------------------
 
-// Wards of Đà Nẵng after the 2025 administrative reorganization, approximate centers [lng, lat]
-// Ward centers: center of the ward boundary in OpenStreetMap (Nominatim), the same point the app geocodes
-// a parent's location to (geocoding.adapter.js), so seeded distances match real ones
+// Wards of Đà Nẵng since the 07/2025 administrative reorganization, [lng, lat].
+// center: center of the ward boundary in OpenStreetMap, exactly what Nominatim answers for "<ward>, Đà Nẵng,
+// Việt Nam" (checked 11/2026). It is the point the app saves for a parent of that ward (geocoding.adapter.js),
+// so seeded locations and distances are the real ones.
 const WARDS = [
-  { name: 'Phường Hải Châu', center: [108.2195, 16.0590], streets: ['Lê Duẩn', 'Trần Phú', 'Phan Châu Trinh', 'Bạch Đằng', 'Lý Tự Trọng'], weight: 7, cluster: 'da_nang' },
-  { name: 'Phường Hòa Cường', center: [108.2175, 16.0416], streets: ['Núi Thành', '2 Tháng 9', 'Xô Viết Nghệ Tĩnh', 'Lê Thanh Nghị', 'Huỳnh Tấn Phát'], weight: 6, cluster: 'da_nang' },
-  { name: 'Phường Thanh Khê', center: [108.1966, 16.0684], streets: ['Điện Biên Phủ', 'Hà Huy Tập', 'Lê Độ', 'Thái Thị Bôi', 'Trường Chinh'], weight: 5, cluster: 'da_nang' },
-  { name: 'Phường An Khê', center: [108.1855, 16.0500], streets: ['Hà Huy Tập', 'Nguyễn Tri Phương', 'Trần Cao Vân', 'Phạm Nhữ Tăng'], weight: 4, cluster: 'da_nang' },
-  { name: 'Phường An Hải', center: [108.2364, 16.0701], streets: ['Ngô Quyền', 'Phạm Văn Đồng', 'Hồ Nghinh', 'Nguyễn Văn Thoại', 'Hà Bổng'], weight: 6, cluster: 'da_nang' },
-  { name: 'Phường Sơn Trà', center: [108.2486, 16.1022], streets: ['Ngô Quyền', 'Yết Kiêu', 'Lê Văn Thứ', 'Hoàng Sa', 'Nguyễn Phan Vinh'], weight: 4, cluster: 'da_nang' },
-  { name: 'Phường Ngũ Hành Sơn', center: [108.2532, 16.0108], streets: ['Lê Văn Hiến', 'Trường Sa', 'Mai Đăng Chơn', 'Nguyễn Đình Chiểu', 'Chương Dương'], weight: 5, cluster: 'da_nang' },
-  { name: 'Phường Hòa Khánh', center: [108.1546, 16.0503], streets: ['Tôn Đức Thắng', 'Âu Cơ', 'Nguyễn Lương Bằng', 'Hồ Tùng Mậu'], weight: 3, cluster: 'da_nang' },
-  { name: 'Phường Liên Chiểu', center: [108.1392, 16.0767], streets: ['Nguyễn Tất Thành', 'Nguyễn Sinh Sắc', 'Kinh Dương Vương', 'Nguyễn Chánh'], weight: 2, cluster: 'da_nang' },
-  { name: 'Phường Cẩm Lệ', center: [108.2013, 16.0153], streets: ['Ông Ích Đường', 'Cách Mạng Tháng 8', 'Trần Đình Tri', 'Nguyễn Hữu Thọ'], weight: 4, cluster: 'da_nang' },
-  { name: 'Phường Hòa Xuân', center: [108.2204, 16.0049], streets: ['Minh Mạng', 'Nguyễn Phước Lan', 'Võ Chí Công', 'Lê Quang Đạo'], weight: 3, cluster: 'da_nang' },
-  { name: 'Phường Hội An', center: [108.3325, 15.8794], streets: ['Trần Hưng Đạo', 'Lý Thường Kiệt', 'Hai Bà Trưng', 'Phan Chu Trinh', 'Nguyễn Duy Hiệu'], weight: 18, cluster: 'hoi_an' },
-  { name: 'Phường Hội An Đông', center: [108.3640, 15.8786], streets: ['Cửa Đại', 'Lạc Long Quân', 'Âu Cơ', 'Nguyễn Phan Vinh'], weight: 12, cluster: 'hoi_an' },
-  { name: 'Phường Hội An Tây', center: [108.3109, 15.8974], streets: ['Lý Thái Tổ', 'Hùng Vương', 'Nguyễn Tất Thành', 'Tôn Đức Thắng'], weight: 10, cluster: 'hoi_an' },
+  { name: 'Phường Hải Châu', center: [108.2194844, 16.0589539], weight: 7, cluster: 'da_nang' },
+  { name: 'Phường Hòa Cường', center: [108.2175304, 16.0416286], weight: 6, cluster: 'da_nang' },
+  { name: 'Phường Thanh Khê', center: [108.1966311, 16.0683682], weight: 5, cluster: 'da_nang' },
+  { name: 'Phường An Khê', center: [108.1855365, 16.0499526], weight: 4, cluster: 'da_nang' },
+  { name: 'Phường An Hải', center: [108.2364217, 16.0700623], weight: 6, cluster: 'da_nang' },
+  { name: 'Phường Sơn Trà', center: [108.2485821, 16.1021731], weight: 4, cluster: 'da_nang' },
+  { name: 'Phường Ngũ Hành Sơn', center: [108.253178, 16.010798], weight: 5, cluster: 'da_nang' },
+  { name: 'Phường Hòa Khánh', center: [108.1546403, 16.0502691], weight: 3, cluster: 'da_nang' },
+  { name: 'Phường Liên Chiểu', center: [108.1392444, 16.0767069], weight: 2, cluster: 'da_nang' },
+  { name: 'Phường Cẩm Lệ', center: [108.2013088, 16.0153046], weight: 4, cluster: 'da_nang' },
+  { name: 'Phường Hòa Xuân', center: [108.2204494, 16.0049492], weight: 3, cluster: 'da_nang' },
+  { name: 'Phường Hội An', center: [108.3325425, 15.879426], weight: 18, cluster: 'hoi_an' },
+  { name: 'Phường Hội An Đông', center: [108.3639777, 15.878608], weight: 12, cluster: 'hoi_an' },
+  { name: 'Phường Hội An Tây', center: [108.3108797, 15.8973636], weight: 10, cluster: 'hoi_an' },
   // A few families outside the two main areas
-  { name: 'Phường Điện Bàn', center: [108.2493, 15.8892], streets: ['Trần Nhân Tông', 'Hùng Vương', 'Mẹ Thứ'], weight: 3, cluster: 'other' },
-  { name: 'Phường Điện Bàn Đông', center: [108.2703, 15.9316], streets: ['Lạc Long Quân', 'Võ Chí Công', 'Trường Sa'], weight: 3, cluster: 'other' },
-  { name: 'Phường An Thắng', center: [108.2254, 15.9060], streets: ['Hùng Vương', 'Trần Hưng Đạo', 'Nguyễn Văn Linh'], weight: 2, cluster: 'other' },
+  { name: 'Phường Điện Bàn', center: [108.2492516, 15.8891786], weight: 3, cluster: 'other' },
+  { name: 'Phường Điện Bàn Đông', center: [108.2703109, 15.9316216], weight: 3, cluster: 'other' },
+  { name: 'Phường An Thắng', center: [108.2253705, 15.9059975], weight: 2, cluster: 'other' },
+  // Not given to new families (weight 0): wards of accounts kept from the database
+  { name: 'Phường Hải Vân', center: [108.1148552, 16.1347996], weight: 0, cluster: 'da_nang' },
+  { name: 'Phường Điện Bàn Bắc', center: [108.1943582, 15.9319238], weight: 0, cluster: 'other' },
+  { name: 'Phường Tam Kỳ', center: [108.4821958, 15.5637942], weight: 0, cluster: 'other' },
+  { name: 'Phường Quảng Phú', center: [108.4962642, 15.5983959], weight: 0, cluster: 'other' },
+  { name: 'Phường Hương Trà', center: [108.5097489, 15.559363], weight: 0, cluster: 'other' },
+  { name: 'Phường Bàn Thạch', center: [108.4672092, 15.5852472], weight: 0, cluster: 'other' },
 ];
 const weightedWards = WARDS.flatMap((ward) => Array(ward.weight).fill(ward));
+// Ward of an area as a parent typed it: "Ngũ Hành Sơn" is geocoded to "Phường Ngũ Hành Sơn"
+const wardOfArea = (area = '') => {
+  const name = area.trim().toLowerCase();
+  return WARDS.find((ward) => ward.name.toLowerCase() === name || ward.name.toLowerCase() === `phường ${name}`) || null;
+};
+// What the app saves for a parent of this area: the profile form has no street field, the address is
+// "<area>, <city>" and the point is the center of the ward
+const locationOf = (area, ward) => ({
+  address: `${area}, ${CITY}`,
+  area,
+  city: CITY,
+  coordinates: { type: 'Point', coordinates: [...ward.center] },
+});
 
 const FAMILY_NAMES = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Phan', 'Võ', 'Đặng', 'Bùi', 'Đỗ', 'Ngô', 'Dương', 'Lý', 'Trương'];
 const MIDDLE_FEMALE = ['Thị', 'Thu', 'Ngọc', 'Thanh', 'Bảo', 'Minh', 'Phương', 'Hoài', 'Khánh', 'Mỹ'];
@@ -221,27 +275,29 @@ const BIOS = {
   ],
 };
 
-// osm-*: the real OpenStreetMap element (checked on openstreetmap.org), coordinates = its center.
-// seed-*: no matching OSM element, approximate coordinates, no OpenStreetMap link (Google Maps searches name + address).
+// Every place is a real OpenStreetMap element: osmId is its id, coordinates its center and the address its ward,
+// as Nominatim returns them (checked 11/2026).
 const PLACES = [
-  { name: 'Công viên Biển Đông', address: 'Đường Võ Nguyên Giáp, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.24593, 16.06815], placeType: 'park', osmId: 'osm-way-149699484' },
-  { name: 'Công viên APEC', address: 'Đường Bạch Đằng, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.22327, 16.0586], placeType: 'park', osmId: 'osm-way-675604354' },
-  { name: 'Công viên 29/3', address: 'Đường Điện Biên Phủ, Phường Thanh Khê, Thành phố Đà Nẵng', coordinates: [108.2004, 16.0641], placeType: 'park', osmId: 'seed-cong-vien-29-3' },
-  { name: 'Sun World Đà Nẵng Wonders', address: '1 Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2283, 16.0391], placeType: 'playground', osmId: 'seed-sun-world-da-nang-wonders' },
-  { name: 'Bảo tàng Điêu khắc Chăm', address: '02 Đường 2 Tháng 9, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.22317, 16.0602], placeType: 'workshop', osmId: 'osm-way-302872188' },
-  { name: 'Thư viện Khoa học Tổng hợp Đà Nẵng', address: 'Đường Lê Duẩn, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2166, 16.0716], placeType: 'library', osmId: 'seed-thu-vien-khth-da-nang' },
+  { name: 'Công viên Biển Đông', address: 'Đường Võ Nguyên Giáp, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2459339, 16.0683513], placeType: 'park', osmId: 'osm-way-149699484' },
+  { name: 'Công viên APEC', address: 'Đường Bạch Đằng, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.2235123, 16.0587532], placeType: 'park', osmId: 'osm-way-675604354' },
+  { name: 'Công viên 29 tháng 3', address: 'Đường Điện Biên Phủ, Phường Thanh Khê, Thành phố Đà Nẵng', coordinates: [108.2055438, 16.0632427], placeType: 'park', osmId: 'osm-way-35950948' },
+  { name: 'Công viên Thanh Niên', address: 'Phường Cẩm Lệ, Thành phố Đà Nẵng', coordinates: [108.216534, 16.027106], placeType: 'park', osmId: 'osm-way-966750005' },
+  { name: 'Trung tâm Giải trí Phức hợp Helio Center', address: 'Đường 2 Tháng 9, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2246715, 16.0364559], placeType: 'playground', osmId: 'osm-node-4807957148' },
+  { name: 'Bảo tàng Nghệ thuật Điêu khắc Chăm Đà Nẵng', address: '02 Đường 2 Tháng 9, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.223084, 16.0601209], placeType: 'workshop', osmId: 'osm-way-302872188' },
+  { name: 'Thư viện Đà Nẵng', address: '33 Đường Trần Phú, Phường Hải Châu, Thành phố Đà Nẵng', coordinates: [108.224146, 16.0737741], placeType: 'library', osmId: 'osm-way-1327065471' },
   // Kids areas inside a mall: the OSM element is the mall itself
-  { name: 'Khu vui chơi trẻ em Lotte Mart Đà Nẵng', address: '6 Nại Nam, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.22923, 16.03487], placeType: 'kids_cafe', osmId: 'osm-way-302765734' },
-  { name: 'Khu vui chơi Vincom Plaza Ngô Quyền', address: '910A Ngô Quyền, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2303, 16.0714], placeType: 'kids_cafe', osmId: 'osm-way-693393717' },
-  { name: 'Cung Thể thao Tiên Sơn', address: 'Đường Phan Đăng Lưu, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.22654, 16.03676], placeType: 'sports_center', osmId: 'osm-way-302765735' },
-  { name: 'Công viên Biển Hội An (An Bàng)', address: 'Bãi biển An Bàng, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3418, 15.9139], placeType: 'park', osmId: 'seed-cong-vien-bien-an-bang' },
-  { name: 'Bãi biển Cửa Đại', address: 'Đường Cửa Đại, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3816, 15.8741], placeType: 'park', osmId: 'seed-bai-bien-cua-dai' },
-  { name: 'Công viên Đồng Hiệp', address: 'Đường Nguyễn Hoàng, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3249, 15.8768], placeType: 'park', osmId: 'seed-cong-vien-dong-hiep-hoi-an' },
-  { name: 'Công viên Đất Nung Thanh Hà', address: 'Làng gốm Thanh Hà, Phường Hội An Tây, Thành phố Đà Nẵng', coordinates: [108.2997, 15.8768], placeType: 'workshop', osmId: 'seed-cong-vien-dat-nung-thanh-ha' },
-  { name: 'Làng rau Trà Quế', address: 'Đường Hai Bà Trưng, Phường Hội An Tây, Thành phố Đà Nẵng', coordinates: [108.3351, 15.9021], placeType: 'workshop', osmId: 'seed-lang-rau-tra-que' },
-  { name: 'Thư viện Thành phố Hội An', address: 'Đường Trần Hưng Đạo, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3282, 15.8796], placeType: 'library', osmId: 'seed-thu-vien-hoi-an' },
-  { name: 'Khu vui chơi thiếu nhi Hội An', address: 'Đường Lý Thường Kiệt, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3331, 15.8823], placeType: 'kids_cafe', osmId: 'seed-khu-vui-choi-hoi-an' },
-  { name: 'Trung tâm Thể thao Hội An', address: 'Đường Lý Thường Kiệt, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3359, 15.8847], placeType: 'sports_center', osmId: 'seed-trung-tam-the-thao-hoi-an' },
+  { name: 'Khu vui chơi trẻ em Lotte Mart Đà Nẵng', address: '06 Đường Nại Nam, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2292291, 16.0349347], placeType: 'kids_cafe', osmId: 'osm-way-302765734' },
+  { name: 'Khu vui chơi Vincom Plaza Ngô Quyền', address: '910A Đường Ngô Quyền, Phường An Hải, Thành phố Đà Nẵng', coordinates: [108.2302588, 16.0713595], placeType: 'kids_cafe', osmId: 'osm-way-693393717' },
+  { name: 'Cung Thể thao Tiên Sơn', address: 'Đường Doãn Khuê, Phường Hòa Cường, Thành phố Đà Nẵng', coordinates: [108.2265508, 16.036777], placeType: 'sports_center', osmId: 'osm-way-302765735' },
+  { name: 'Bãi biển Cửa Đại', address: 'Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3662256, 15.8980583], placeType: 'park', osmId: 'osm-node-4171964292' },
+  { name: 'Công viên Hội An', address: 'Phố cổ Hội An, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3340976, 15.8802215], placeType: 'park', osmId: 'osm-way-1077108382' },
+  { name: 'Công viên Vườn Tượng', address: 'Phố cổ Hội An, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3248384, 15.8764472], placeType: 'park', osmId: 'osm-node-2987298385' },
+  { name: 'Sân chơi Nhà văn hóa Cẩm Thanh', address: 'Đường Lăng Bà, Phường Hội An Đông, Thành phố Đà Nẵng', coordinates: [108.3634934, 15.8866237], placeType: 'playground', osmId: 'osm-way-749330300' },
+  { name: 'Công viên Đất Nung Thanh Hà', address: 'Đường Hùng Vương, Phường Hội An Tây, Thành phố Đà Nẵng', coordinates: [108.3001365, 15.8778967], placeType: 'workshop', osmId: 'osm-node-5513474821' },
+  { name: 'Làng rau Trà Quế', address: 'Trà Quế, Phường Hội An Tây, Thành phố Đà Nẵng', coordinates: [108.3360222, 15.9027147], placeType: 'workshop', osmId: 'osm-node-3079969135' },
+  { name: 'Thư viện Hội An', address: 'Đường Nguyễn Duy Hiệu, Phường Hội An, Thành phố Đà Nẵng', coordinates: [108.3377473, 15.8781194], placeType: 'library', osmId: 'osm-node-13637298701' },
+  { name: 'Royal Garden Coffee Playground', address: 'Đường 28 Tháng 3, Phường Hội An Tây, Thành phố Đà Nẵng', coordinates: [108.3092465, 15.886764], placeType: 'kids_cafe', osmId: 'osm-node-13637600103' },
+  { name: 'Khu văn hóa thể thao phường Tân An', address: 'Phường Hội An Tây, Thành phố Đà Nẵng', coordinates: [108.3194796, 15.890789], placeType: 'sports_center', osmId: 'osm-way-565586453' },
 ];
 
 // Usual opening hours per place type (OSM opening_hours format)
@@ -255,6 +311,16 @@ const OPENING_HOURS = {
   workshop: 'Tu-Su 08:30-17:30',
 };
 
+// OpenStreetMap tags of each place type (places_cache.tags)
+const PLACE_TAGS = {
+  park: { leisure: 'park' },
+  playground: { leisure: 'playground' },
+  kids_cafe: { amenity: 'cafe', kids_area: 'yes' },
+  library: { amenity: 'library' },
+  sports_center: { leisure: 'sports_centre' },
+  workshop: { tourism: 'attraction' },
+};
+
 const ACTIVITIES_BY_PLACE = {
   park: ['Đạp xe và thả diều', 'Xây lâu đài cát, chơi vận động ngoài trời', 'Dã ngoại, thổi bong bóng xà phòng', 'Chơi bóng và chạy nhảy buổi chiều'],
   playground: ['Chơi vòng quay và trò chơi thiếu nhi', 'Khám phá khu trò chơi cùng các bạn'],
@@ -265,6 +331,8 @@ const ACTIVITIES_BY_PLACE = {
 };
 const PLAYDATE_NOTES = ['Nhớ mang nón và kem chống nắng cho bé nhé.', 'Mỗi nhà mang một ít nước và trái cây.', 'Có chỗ gửi xe máy ngay cổng chính.', 'Nhà mình chuẩn bị sẵn khăn và nước lọc rồi.', ''];
 const CANCEL_REASONS = ['Bé bị sốt nhẹ từ tối qua, xin hẹn lại tuần sau ạ.', 'Nhà mình có việc đột xuất, xin lỗi cả nhà nhé.', 'Dự báo mưa lớn cả ngày nên mình xin dời sang dịp khác.', 'Bé bị ho, để bé nghỉ cho khỏe rồi mình hẹn lại.'];
+const ADMIN_REMOVAL_REASONS = ['Một trong hai phụ huynh yêu cầu hỗ trợ gỡ kết nối.', 'Kết nối bị gỡ sau khi xử lý báo cáo vi phạm.'];
+const LEAVE_REASONS = ['Bé bị sốt nên nhà mình xin phép không tham gia được ạ.', 'Nhà mình có việc gấp ở quê, xin lỗi mọi người nhé.', 'Lịch học thêm của bé bị đổi sang đúng giờ hẹn.', 'Xe nhà mình hỏng đột xuất, không qua kịp.'];
 // Stored by the auto-close job when nobody accepted (playdateService.closeExpiredPlaydates)
 const AUTO_CANCEL_REASON = 'No participant accepted the invitation';
 const RESCHEDULE_REASONS = ['Hôm đó nhà mình có đám giỗ, mình dời lịch được không ạ?', 'Chiều đó bé có lớp vẽ, mình đổi giờ nhé.', 'Dự báo có mưa, mình đổi giờ cho chắc nha.', 'Bé tan học muộn hơn, mình lùi giờ một chút được không?'];
@@ -286,7 +354,7 @@ const DIRECT_CHAT_SCRIPTS = {
     ],
     [
       'Chị ơi hôm qua bé nhà em về kể suốt về buổi đi chơi, cảm ơn chị đã dẫn bé đi cùng nha ❤️',
-      'Trời bé nhà chị cũng vậy luôn, cứ hỏi bao giờ gặp lại bạn. Tuần sau mình đi thư viện Lê Duẩn nhé?',
+      'Trời bé nhà chị cũng vậy luôn, cứ hỏi bao giờ gặp lại bạn. Tuần sau mình đi Thư viện Đà Nẵng trên đường Trần Phú nhé?',
       'Dạ hay đó chị, ở đó có góc đọc truyện thiếu nhi rất xịn.',
       'Vậy chiều thứ 4 nha, 15h30 chị đón bé xong qua luôn.',
       'Dạ ok chị!',
@@ -360,6 +428,7 @@ const GROUP_CHAT_LINES = [
   'Bé nhà em háo hức từ tối qua luôn 😄',
   'Trời hôm nay đẹp quá, hẹn mọi người lát gặp nha!',
 ];
+const POLL_QUESTION = 'Bình chọn thời gian hẹn chơi';
 const REPORTED_MESSAGE = 'Nhà chị dạy con kiểu đó thì đừng có rủ ai chơi nữa, phiền lắm.';
 
 const FEEDBACKS = [
@@ -439,26 +508,30 @@ const REPORT_TEXTS = {
   no_show: { reason: 'Không đến buổi hẹn', description: 'Đã xác nhận tham gia nhưng không đến và không báo trước, cả nhà đã ra tới nơi.' },
   other: { reason: 'Khác', description: 'Có vài điểm chưa rõ về hồ sơ của gia đình này, mong admin kiểm tra giúp.' },
 };
-// status + action of each report, oldest first: dates and targets are chosen in seedDatabase
+// status + action of each report, oldest first: dates and targets are chosen in seedDatabase.
+// auto: closed by the Sentinel AI alone; reopened: dismissed, then reopened and closed again; override: sanction
+// outside the policy matrix; cluster: a second parent reported the same account, closed with the same sanction;
+// failedFirst: a first sanction could not be applied; shield: provisional protection applied by the Sentinel AI
 const REPORT_PLAN = [
   { category: 'harassment', status: 'resolved', action: 'warn' },
   { category: 'fake_profile', status: 'dismissed', note: 'Đã kiểm tra hồ sơ, thông tin hợp lệ.' },
-  { category: 'spam', status: 'resolved', action: 'warn' },
+  { category: 'spam', status: 'resolved', action: 'warn', auto: true, cluster: true, evidence: true },
   { category: 'no_show', status: 'dismissed', target: 'playdate', note: 'Gia đình đã báo bé bị ốm, không vi phạm.' },
   { category: 'inappropriate_content', status: 'resolved', action: 'delete_message', target: 'message' },
   { category: 'harassment', status: 'resolved', action: 'suspend', durationDays: 7 },
-  { category: 'other', status: 'resolved', action: 'no_action', note: 'Không đủ căn cứ, đã nhắc nhở nhẹ qua hệ thống.' },
+  { category: 'other', status: 'resolved', action: 'no_action', note: 'Không đủ căn cứ, đã nhắc nhở nhẹ qua hệ thống.', reopened: true, severityChange: 'low' },
   { category: 'spam', status: 'dismissed', note: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.' },
   { category: 'no_show', status: 'resolved', action: 'warn', target: 'playdate' },
   { category: 'child_safety', status: 'resolved', action: 'cancel_playdate', target: 'cancelled_playdate' },
-  { category: 'harassment', status: 'resolved', action: 'ban', evidence: true, locked: true },
-  { category: 'fake_profile', status: 'resolved', action: 'suspend', durationDays: 45, locked: true },
-  { category: 'inappropriate_content', status: 'resolved', action: 'warn', target: 'message' },
+  { category: 'harassment', status: 'resolved', action: 'ban', evidence: true, locked: true, cluster: true },
+  { category: 'fake_profile', status: 'resolved', action: 'suspend', durationDays: 45, locked: true, override: 'Hồ sơ giả mạo có dấu hiệu lừa đảo nhiều gia đình nên cần đình chỉ dài hơn mức chính sách đề xuất.' },
+  { category: 'inappropriate_content', status: 'resolved', action: 'warn', target: 'message', failedFirst: true },
   { category: 'other', status: 'dismissed', note: 'Trao đổi riêng giữa hai gia đình, không vi phạm.' },
   { category: 'spam', status: 'reviewing', note: 'Đang yêu cầu phụ huynh giải trình.' },
   { category: 'fake_profile', status: 'reviewing', note: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.' },
+  { category: 'child_safety', status: 'reviewing', evidence: true, shield: true, locked: true },
   { category: 'child_safety', status: 'pending', evidence: true },
-  { category: 'harassment', status: 'pending' },
+  { category: 'harassment', status: 'pending', fallback: true },
   { category: 'inappropriate_content', status: 'pending', evidence: true },
   { category: 'no_show', status: 'pending', target: 'playdate' },
   { category: 'spam', status: 'pending' },
@@ -486,19 +559,10 @@ const clusterOfPoint = (point) => {
   return nearest.cluster;
 };
 
+// A parent's saved location is the center of their ward (never their home)
 const buildLocation = () => {
   const ward = pick(weightedWards);
-  const houseNumber = chance(0.25) ? `K${int(10, 480)}/${int(1, 40)}` : String(int(2, 420));
-  return {
-    cluster: ward.cluster,
-    location: {
-      address: `${houseNumber} ${pick(ward.streets)}, ${ward.name}, Thành phố ${CITY}`,
-      area: ward.name,
-      city: CITY,
-      // A parent's saved location is the center of their ward (never their home)
-      coordinates: { type: 'Point', coordinates: [...ward.center] },
-    },
-  };
+  return { cluster: ward.cluster, location: locationOf(ward.name, ward) };
 };
 
 const buildAvatarUrl = (isMother) => `https://randomuser.me/api/portraits/${isMother ? 'women' : 'men'}/${int(1, 95)}.jpg`;
@@ -540,33 +604,29 @@ const buildPreferences = (children) => {
 // New accounts are spread over the window, with more sign-ups as the app grows
 const randomSignup = () => {
   const roll = random();
-  if (roll < 0.25) return awake(between(WINDOW_START, new Date('2026-08-31T23:00:00+07:00')));
-  if (roll < 0.6) return awake(between(new Date('2026-09-01T00:00:00+07:00'), new Date('2026-09-30T23:00:00+07:00')));
+  if (roll < 0.35) return awake(between(WINDOW_START, new Date('2026-09-30T23:00:00+07:00')));
   return awake(between(new Date('2026-10-01T00:00:00+07:00'), addTime(WINDOW_END, -6 * DAY)));
 };
 
+const isSeedEmail = (email) => email.endsWith(`@${EMAIL_DOMAIN}`);
+
 /**
- * Parents and users already in the database, before they are wiped
+ * The admin and the seeded accounts (EMAIL_DOMAIN) already in the database, with their children, before the
+ * collections are wiped. Accounts of other domains are not loaded: they are deleted with the wipe.
  */
 const loadExistingAccounts = async () => {
-  const [users, parents] = await Promise.all([User.find({}).lean(), Parent.find({}).lean()]);
-  const parentIds = parents.map((parent) => parent._id);
-  const [children, subscriptions, payments] = await Promise.all([
-    Child.find({ parentId: { $in: parentIds } }).lean(),
-    Subscription.find({ parentId: { $in: parentIds } }).lean(),
-    Payment.find({ parentId: { $in: parentIds } }).lean(),
-  ]);
+  const users = await User.find({}).lean();
+  const seedUsers = users.filter((user) => user.role !== 'admin' && isSeedEmail(user.email));
+  const parents = await Parent.find({ userId: { $in: seedUsers.map((user) => user._id) } }).lean();
+  const children = await Child.find({ parentId: { $in: parents.map((parent) => parent._id) } }).lean();
   return {
     admin: users.find((user) => user.role === 'admin') || null,
-    usersById: new Map(users.map((user) => [user._id.toString(), user])),
+    usersById: new Map(seedUsers.map((user) => [user._id.toString(), user])),
     parents,
     children,
-    subscriptions,
-    payments,
+    removedCount: users.filter((user) => user.role !== 'admin' && !isSeedEmail(user.email)).length,
   };
 };
-
-const isSeedEmail = (email) => email.endsWith(`@${EMAIL_DOMAIN}`);
 
 /**
  * One entry per parent: existing accounts first, then new ones up to SEED_PARENT_COUNT
@@ -584,6 +644,7 @@ const buildFamilies = (existing, passwordHash) => {
   };
 
   const families = [];
+  const unknownAreas = new Set();
   for (const parent of existing.parents) {
     const user = existing.usersById.get(parent.userId.toString());
     if (!user) continue;
@@ -593,29 +654,53 @@ const buildFamilies = (existing, passwordHash) => {
     if (phone) usedPhones.add(phone);
     usedEmails.add(user.email.split('@')[0]);
     families.push({
-      isKept: !isSeedEmail(user.email),
       user: { ...user, phone: phone || undefined },
       parent,
       // 'other' is no longer a value of the child form: such a profile becomes boy or girl
       children: existing.children
         .filter((child) => sameId(child.parentId, parent._id))
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
         .map((child) => (Object.values(CHILD_GENDERS).includes(child.gender) ? child : { ...child, gender: pick(Object.values(CHILD_GENDERS)) })),
     });
   }
 
   for (const family of families) {
-    if (family.isKept) {
-      family.cluster = clusterOfPoint(pointOf(family));
-      continue;
+    // Same area as before, saved the way the app saves it: "<area>, <city>" at the center of the ward.
+    // An area that is not a known ward keeps its point (nothing to check it against).
+    const area = family.parent.location?.area || '';
+    const ward = wardOfArea(area);
+    if (ward) family.parent = { ...family.parent, location: locationOf(area, ward) };
+    else if (area) unknownAreas.add(area);
+    family.cluster = ward?.cluster || clusterOfPoint(pointOf(family));
+    // Seeded account already in the database: the profile and the children stay as they are. Only the
+    // account state is reset (password, no sanction left, a phone for those who had none).
+    // One without any child never finished the verification (unverified account of a previous seed).
+    family.isExisting = true;
+    family.wasDeleted = Boolean(family.user.deletedAt);
+    // Signed up before EARLIEST_SIGNUP: the account and its children are moved by the same delay
+    const signedUpAt = new Date(family.parent.createdAt);
+    if (signedUpAt < EARLIEST_SIGNUP) {
+      const movedTo = at(between(EARLIEST_SIGNUP, addTime(WINDOW_START, -DAY)), int(7, 22), int(0, 59));
+      const delay = movedTo.getTime() - signedUpAt.getTime();
+      family.parent = { ...family.parent, createdAt: movedTo };
+      family.children = family.children.map((child) => {
+        const createdAt = addTime(new Date(child.createdAt), delay);
+        return { ...child, createdAt, updatedAt: createdAt };
+      });
     }
-    // Same identity, the rest is reset to the current rules (no missing phone, every account in the window)
-    const isMother = !MIDDLE_MALE.includes(family.parent.fullName.split(' ')[1]);
-    const { cluster, location } = buildLocation();
-    family.cluster = cluster;
-    family.isMother = isMother;
-    family.user = { ...family.user, phone: family.user.phone || uniquePhone(), passwordHash, isActive: true, strikeCount: 0, suspensionUntil: null, banReason: null, deletedAt: null };
-    family.parent = { ...family.parent, location, bio: pick(BIOS[cluster]), avatarUrl: chance(0.7) ? buildAvatarUrl(isMother) : '', streak: undefined };
-    family.children = family.children.filter((child) => !child.isArchived);
+    family.isMother = !MIDDLE_MALE.includes(family.parent.fullName.split(' ')[1]);
+    family.user = {
+      ...family.user,
+      phone: family.user.phone || (family.children.length ? uniquePhone() : undefined),
+      passwordHash,
+      isActive: true,
+      strikeCount: 0,
+      suspensionUntil: null,
+      banReason: null,
+      messagingRestrictedUntil: null,
+      deletedAt: null,
+    };
+    family.parent = { ...family.parent, streak: undefined };
   }
 
   const newCount = Math.max(SEED_PARENT_COUNT - families.length, 0);
@@ -632,7 +717,6 @@ const buildFamilies = (existing, passwordHash) => {
     const { cluster, location } = buildLocation();
     const userId = oid();
     families.push({
-      isKept: false,
       isNew: true,
       isMother,
       cluster,
@@ -656,7 +740,7 @@ const buildFamilies = (existing, passwordHash) => {
       children: [],
     });
   }
-  return families;
+  return { families, unknownAreas: [...unknownAreas] };
 };
 
 // ---------------------------------------------------------------------------
@@ -668,8 +752,9 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, await bcrypt.genSalt(10));
   const existing = await loadExistingAccounts();
-  const families = buildFamilies(existing, passwordHash);
-  log(`Existing parents kept: ${existing.parents.length}, new parents: ${families.filter((f) => f.isNew).length}.`);
+  const { families, unknownAreas } = buildFamilies(existing, passwordHash);
+  if (unknownAreas.length) log(`Areas of kept accounts that are not in WARDS, their point is left as it was: ${unknownAreas.join(', ')}.`);
+  log(`Parents kept with their profile and children: ${families.filter((f) => !f.isNew).length}, new parents: ${families.filter((f) => f.isNew).length}, accounts outside @${EMAIL_DOMAIN} deleted: ${existing.removedCount}.`);
 
   // Plans are kept between seeds (admins may have changed prices): only create the missing ones
   for (const plan of SUBSCRIPTION_PLAN_DEFAULTS) {
@@ -683,18 +768,48 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // ---- Who is verified --------------------------------------------------------------------------
   // Real accounts keep their state and count towards the unverified total
-  const keptUnverified = families.filter((f) => f.isKept && !f.parent.verification?.isVerifiedParent).length;
-  const seedFamilies = families.filter((f) => !f.isKept);
-  const unverifiedCount = Math.max(SEED_UNVERIFIED_COUNT - keptUnverified, 0);
-  const unverified = seedFamilies.slice(seedFamilies.length - unverifiedCount);
-  unverified.forEach((family, index) => {
+  // A seeded account kept from the database is verified when it owns a child profile; one without any child
+  // is an unverified account of a previous seed and stays as it is. The other unverified accounts are the
+  // last new ones.
+  const seedFamilies = families;
+  const newFamilies = seedFamilies.filter((f) => f.isNew);
+  const keptUnverified = seedFamilies.filter((f) => f.isExisting && !f.children.length);
+  keptUnverified.forEach((family) => {
+    family.isUnverified = true;
+    family.isDeleted = family.wasDeleted;
+    if (family.parent.verification?.isEmailVerified && family.parent.verification?.isPhoneVerified) {
+      family.parent.verification = { isEmailVerified: true, isPhoneVerified: false, isVerifiedParent: false };
+    }
+  });
+  const newUnverified = newFamilies.slice(newFamilies.length - Math.min(Math.max(SEED_UNVERIFIED_COUNT - keptUnverified.length, 0), newFamilies.length));
+  // Every way of stopping before the end: no OTP at all, email only, phone only, Google sign-up (email
+  // verified by Google, no phone yet)
+  const UNVERIFIED_STATES = [
+    { isEmailVerified: false, isPhoneVerified: false },
+    { isEmailVerified: true, isPhoneVerified: false },
+    { isEmailVerified: false, isPhoneVerified: true },
+    { isEmailVerified: true, isPhoneVerified: false, isGoogle: true },
+  ];
+  newUnverified.forEach((family, index) => {
+    const { isGoogle, ...state } = UNVERIFIED_STATES[index % UNVERIFIED_STATES.length];
     family.isUnverified = true;
     family.children = [];
-    family.parent.avatarUrl = '';
-    // Signed up recently and stopped at the OTP step; a Google account already has its email verified
-    const isEmailVerified = index % 2 === 0 || Boolean(family.user.googleId);
-    family.parent.verification = { isEmailVerified, isPhoneVerified: false, isVerifiedParent: false };
+    family.parent.verification = { ...state, isVerifiedParent: false };
+    // Nothing of the profile is filled before the verification
+    family.parent.bio = '';
+    family.parent.location = undefined;
+    if (isGoogle) {
+      family.user.googleId = `seed-google-sub-${String(204857600000 + index)}`;
+      family.user.phone = undefined;
+      family.parent.avatarUrl = `https://lh3.googleusercontent.com/a/seed-avatar-${index}=s96-c`;
+    } else {
+      family.user.googleId = undefined;
+      family.parent.avatarUrl = '';
+    }
   });
+  // One of them is soft-deleted (isActive false, deletedAt set): every lookup of the app skips it
+  if (newUnverified[0] && !keptUnverified.some((family) => family.isDeleted)) newUnverified[0].isDeleted = true;
+  const unverified = [...keptUnverified, ...newUnverified];
   const verifiedSeedFamilies = seedFamilies.filter((f) => !f.isUnverified);
   verifiedSeedFamilies.forEach((family) => {
     family.parent.verification = { isEmailVerified: true, isPhoneVerified: true, isVerifiedParent: true };
@@ -713,41 +828,65 @@ export async function seedDatabase({ log = console.log } = {}) {
     ...Array(PLAN_MIX.monthly).fill('monthly'),
     ...Array(PLAN_MIX.expired).fill('expired'),
   ];
-  planOrder.forEach((family, index) => {
-    family.planKind = kinds[index] || 'free';
+  // Accounts kept from the database keep their sign-up date, so they only get a plan that fits it
+  const POWER_SIGNUP_LIMIT = addTime(WINDOW_START, 9 * DAY);
+  // A paid month must be over (expired) or renewed at least once before now
+  const PAID_MONTH_AGO = maxDate(addTime(WINDOW_END, -45 * DAY), addTime(WINDOW_START, DAY));
+  const LATEST_SIGNUP = {
+    yearly: addTime(WINDOW_END, -3 * DAY),
+    renewedMonthly: PAID_MONTH_AGO,
+    expired: PAID_MONTH_AGO,
+    monthly: addTime(WINDOW_END, -12 * DAY),
+  };
+  const keptSignupOf = (family) => (family.isExisting ? new Date(family.parent.createdAt) : null);
+  const planPool = [...planOrder];
+  for (const kind of kinds) {
+    // An account older than the window buys its plan from WINDOW_START
+    const index = planPool.findIndex((family) => !keptSignupOf(family) || maxDate(keptSignupOf(family), WINDOW_START) < LATEST_SIGNUP[kind]);
+    if (index !== -1) planPool.splice(index, 1)[0].planKind = kind;
+  }
+  // Whoever is left is on Free, except families who already have several children: they need a paid plan
+  planPool.forEach((family) => {
+    family.planKind = family.children.length > 1 ? 'yearly' : 'free';
   });
   let powerLeft = POWER_FAMILY_COUNT;
   for (const family of planOrder) {
+    const keptSignup = keptSignupOf(family);
     switch (family.planKind) {
       case 'yearly':
-        family.isPower = powerLeft > 0;
-        powerLeft -= 1;
+        family.isPower = powerLeft > 0 && (!keptSignup || keptSignup < POWER_SIGNUP_LIMIT);
+        if (family.isPower) powerLeft -= 1;
         family.signupAt = family.isPower
-          ? awake(between(WINDOW_START, new Date('2026-08-03T00:00:00+07:00')))
-          : awake(between(WINDOW_START, new Date('2026-10-10T00:00:00+07:00')));
+          ? awake(between(WINDOW_START, addTime(WINDOW_START, 2 * DAY)))
+          : awake(between(WINDOW_START, maxDate(addTime(WINDOW_END, -30 * DAY), addTime(WINDOW_START, DAY))));
         break;
       case 'renewedMonthly':
       case 'expired':
-        family.signupAt = awake(between(WINDOW_START, new Date('2026-09-05T00:00:00+07:00')));
+        family.signupAt = awake(between(WINDOW_START, PAID_MONTH_AGO));
         break;
       case 'monthly':
-        family.signupAt = awake(between(WINDOW_START, new Date('2026-10-20T00:00:00+07:00')));
+        family.signupAt = awake(between(WINDOW_START, addTime(WINDOW_END, -26 * DAY)));
         break;
       default:
         family.signupAt = randomSignup();
     }
+    if (keptSignup) family.signupAt = keptSignup;
   }
-  unverified.forEach((family) => {
+  newUnverified.forEach((family) => {
     family.signupAt = awake(between(addTime(WINDOW_END, -20 * DAY), addTime(WINDOW_END, -DAY)));
   });
-  families.filter((f) => f.isKept).forEach((family) => {
+  keptUnverified.forEach((family) => {
     family.signupAt = new Date(family.parent.createdAt);
+  });
+  // Activity (plan purchase, connections, playdates...) never starts before the window, whatever the sign-up date
+  families.forEach((family) => {
+    family.activeFrom = maxDate(family.signupAt, WINDOW_START);
   });
 
   // ---- Subscriptions and payments ---------------------------------------------------------------------------
   const subscriptions = [];
-  const payments = existing.payments.filter((payment) => families.some((f) => f.isKept && sameId(f.parent._id, payment.parentId)));
-  const usedOrderCodes = new Set(payments.map((payment) => payment.orderCode));
+  const payments = [];
+  const usedOrderCodes = new Set();
   let nextOrderCode = 100001;
   const planSnapshot = (planCode) => {
     const { name, price, currency, durationMonths } = planOf(planCode);
@@ -767,6 +906,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       orderCode,
       // Idempotency-Key sent by the checkout page (one per plan and browser tab)
       idempotencyKey: `seed-${family.parent._id}-${orderCode}`,
+      // Browser fingerprint sent with the checkout request
+      fingerprint: sha256(`seed-device-${family.parent._id}`).slice(0, 32),
       planSnapshot: planSnapshot(planCode),
       amount: price,
       paymentMethod: 'payos',
@@ -798,20 +939,12 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   for (const family of families) {
     if (family.isUnverified) continue;
-    if (family.isKept) {
-      const kept = existing.subscriptions.find((subscription) => sameId(subscription.parentId, family.parent._id));
-      family.subscriptionId = kept?._id || oid();
-      subscriptions.push(kept || { _id: family.subscriptionId, parentId: family.parent._id, planCode: 'free', status: 'active', startDate: family.signupAt, endDate: null, createdAt: family.signupAt, updatedAt: family.signupAt });
-      if (kept && kept.planCode !== 'free' && kept.endDate) family.premium = { from: new Date(kept.startDate), until: new Date(kept.endDate) };
-      continue;
-    }
-
     family.subscriptionId = oid();
     const base = { _id: family.subscriptionId, parentId: family.parent._id, status: 'active', createdAt: family.signupAt };
-    const buyAt = (from, to) => awake(between(maxDate(from, family.signupAt), to));
+    const buyAt = (from, to) => awake(between(maxDate(from, family.activeFrom), to));
 
     if (family.planKind === 'yearly') {
-      const paidAt = family.isPower ? addTime(family.signupAt, int(1, 8) * HOUR) : buyAt(family.signupAt, minDate(addTime(family.signupAt, 12 * DAY), addTime(WINDOW_END, -2 * DAY)));
+      const paidAt = family.isPower ? addTime(family.activeFrom, int(8, 14) * HOUR) : buyAt(family.activeFrom, minDate(addTime(family.activeFrom, 12 * DAY), addTime(WINDOW_END, -2 * DAY)));
       const startDate = maxDate(paidAt, family.signupAt);
       const endDate = calculateCalendarEndDate(startDate, 12);
       const payment = successfulPayment(family, 'premium_yearly', startDate, startDate, endDate, 12);
@@ -819,7 +952,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       subscriptions.push({ ...base, planCode: 'premium_yearly', startDate, endDate, calendarAnchorAt: startDate, purchasedMonths: 12, lastPaymentId: payment._id, updatedAt: startDate });
       family.premium = { from: startDate, until: endDate };
     } else if (family.planKind === 'monthly') {
-      const startDate = buyAt(new Date('2026-10-05T00:00:00+07:00'), addTime(WINDOW_END, -2 * DAY));
+      // Bought less than a month ago: still running
+      const startDate = buyAt(addTime(WINDOW_END, -25 * DAY), addTime(WINDOW_END, -2 * DAY));
       const endDate = calculateCalendarEndDate(startDate, 1);
       const payment = successfulPayment(family, 'premium_monthly', startDate, startDate, endDate, 1);
       payments.push(payment);
@@ -827,7 +961,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       family.premium = { from: startDate, until: endDate };
     } else if (family.planKind === 'renewedMonthly') {
       // Pays again before each month ends: same anchor, one more purchased month
-      const anchor = buyAt(family.signupAt, addTime(family.signupAt, 5 * DAY));
+      const anchor = buyAt(family.activeFrom, addTime(family.activeFrom, 5 * DAY));
       let months = 1;
       let end = calculateCalendarEndDate(anchor, months);
       const startDate = anchor;
@@ -845,7 +979,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       family.premium = { from: anchor, until: end };
     } else if (family.planKind === 'expired') {
       // One paid month, not renewed: downgraded to Free by the expiry job (subscriptionRepository.downgradeToFree)
-      const anchor = buyAt(family.signupAt, addTime(family.signupAt, 7 * DAY));
+      const anchor = buyAt(family.activeFrom, addTime(family.activeFrom, 7 * DAY));
       const end = calculateCalendarEndDate(anchor, 1);
       const payment = successfulPayment(family, 'premium_monthly', anchor, anchor, end, 1);
       payments.push(payment);
@@ -876,31 +1010,42 @@ export async function seedDatabase({ log = console.log } = {}) {
   if (recentBuyers[1]) payments.push({ ...payosPayment(recentBuyers[1], 'premium_monthly', 'creating', addTime(WINDOW_END, -MINUTE)), failureReason: 'PayOS call pending/timeout: timeout of 15000ms exceeded' });
 
   // ---- Children (Free plan: 1 child, paid plans: up to 3) ---------------------------------------------------
+  // Accounts kept from the database keep exactly the children they have
   for (const family of verifiedSeedFamilies) {
-    const wanted = family.premium ? (family.planKind === 'expired' ? 2 : pick([1, 2, 2, 3])) : 1;
-    const start = family.children.length;
-    for (let c = start; c < wanted; c += 1) {
-      family.children.push(buildChild(family.parent._id, new Date()));
+    if (family.isNew) {
+      const wanted = family.premium ? (family.planKind === 'expired' ? 2 : pick([1, 2, 2, 3])) : 1;
+      for (let c = family.children.length; c < wanted; c += 1) {
+        family.children.push(buildChild(family.parent._id, new Date()));
+      }
     }
     family.children.forEach((child, c) => {
+      if (family.isExisting && c === 0 && new Date(child.createdAt) >= family.signupAt) return;
       // Second and third children are added once the plan allows them
       const earliest = c === 0 ? addTime(family.signupAt, int(10, 300) * MINUTE) : addTime(family.premium?.from || family.signupAt, int(1, 3) * DAY);
       child.createdAt = capped(earliest);
       child.updatedAt = child.createdAt;
     });
     // A deleted profile on some larger families
-    if (family.children.length === 3 && chance(0.5)) family.children[2].isArchived = true;
+    if (family.isNew && family.children.length === 3 && chance(0.5)) family.children[2].isArchived = true;
+  }
+  // At least one deleted child profile, whatever the random draws
+  if (!verifiedSeedFamilies.some((f) => f.children.some((child) => child.isArchived))) {
+    const large = verifiedSeedFamilies.find((f) => f.isNew && f.children.length > 1);
+    if (large) large.children[large.children.length - 1].isArchived = true;
   }
   families.forEach((family) => {
     if (family.isUnverified) return;
     family.activeChildren = family.children.filter((child) => !child.isArchived);
-    if (!family.isKept) family.parent.preferences = buildPreferences(family.activeChildren);
+    if (family.isNew) family.parent.preferences = buildPreferences(family.activeChildren);
   });
 
-  // Privacy: a few families do not accept connection requests (not the ones who meet every week)
-  verifiedSeedFamilies.forEach((family) => {
-    const noRequests = !family.isPower && chance(0.05);
-    family.parent.privacySettings = { isProfileHidden: false, connectionPrivacy: noRequests ? 'nobody' : 'everyone', messagePrivacy: 'connected_only' };
+  // Privacy: a few families do not accept connection requests or hide their profile from Discovery
+  // (not the ones who meet every week). Accounts kept from the database keep their settings.
+  const privateFamilies = verifiedSeedFamilies.filter((family) => family.isNew && !family.isPower);
+  privateFamilies.forEach((family, index) => {
+    const noRequests = index === 0 || chance(0.05);
+    const isProfileHidden = index === 1 || chance(0.03);
+    family.parent.privacySettings = { isProfileHidden, connectionPrivacy: noRequests ? 'nobody' : 'everyone', messagePrivacy: 'connected_only' };
   });
 
   // ---- Quotas: the same limits the app enforces, so usage_quotas ends up matching the data --------------------
@@ -950,6 +1095,7 @@ export async function seedDatabase({ log = console.log } = {}) {
   };
 
   const connections = [];
+  let adminRemovals = 0;
   const swipes = [];
   const swipeKeys = new Set();
   const pairKeys = new Set();
@@ -970,6 +1116,8 @@ export async function seedDatabase({ log = console.log } = {}) {
     const pairKey = pairKeyOf(requester, recipient);
     if (pairKeys.has(pairKey)) return null;
     if (recipient.parent.privacySettings?.connectionPrivacy === 'nobody') return null;
+    // A hidden profile is not shown in Discovery: nobody can like it
+    if (recipient.parent.privacySettings?.isProfileHidden) return null;
     const requesterChild = usableChildAt(requester, requestedAt);
     const recipientChild = usableChildAt(recipient, requestedAt);
     if (!requesterChild || !recipientChild) return null;
@@ -986,6 +1134,9 @@ export async function seedDatabase({ log = console.log } = {}) {
     const respondedAt = capped(addTime(requestedAt, int(1, 40) * HOUR));
     const wasAccepted = status === 'accepted' || status === 'removed';
     const removedAt = status === 'removed' ? capped(addTime(respondedAt, int(3, 25) * DAY)) : null;
+    // A few connections are removed by the admin (connectionService.removeConnectionByAdmin)
+    const isRemovedByAdmin = status === 'removed' && (adminRemovals === 0 || chance(0.15));
+    if (isRemovedByAdmin) adminRemovals += 1;
     const connection = {
       _id: oid(),
       parents: pairKey.split('_'),
@@ -996,6 +1147,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       connectedAt: wasAccepted ? respondedAt : null,
       declinedAt: status === 'declined' ? respondedAt : null,
       removedAt,
+      removedByAdmin: isRemovedByAdmin,
+      removalReason: isRemovedByAdmin ? pick(ADMIN_REMOVAL_REASONS) : null,
       // The Like above paired these two children (BUD-48 child pairing)
       childPairs: [
         {
@@ -1040,22 +1193,11 @@ export async function seedDatabase({ log = console.log } = {}) {
       if (sent >= wanted) break;
       const from = maxDate(family.signupAt, other.signupAt, addTime(family.signupAt, DAY));
       if (from >= WINDOW_END) continue;
-      const requestedAt = family.isPower && sent < 10 ? awake(between(from, addTime(from, 10 * DAY))) : awake(spread(from, WINDOW_END));
+      const earlyFrom = maxDate(from, WINDOW_START);
+      const requestedAt = family.isPower && sent < 10 ? awake(between(earlyFrom, addTime(earlyFrom, 10 * DAY))) : awake(spread(from, WINDOW_END));
       if (requestedAt < from || requestedAt > WINDOW_END) continue;
       const connection = connect(family, other, requestedAt, family.isPower && sent < 10 ? 'accepted' : undefined);
       if (connection) sent += 1;
-    }
-  }
-
-  // Real accounts also have friends and requests waiting for them, after they signed up
-  for (const family of verifiedActors.filter((f) => f.isKept)) {
-    const inviters = candidatesFor(family).filter((other) => !other.isKept && !other.isPower);
-    let added = 0;
-    for (const other of inviters) {
-      if (added >= 4) break;
-      const requestedAt = awake(between(addTime(family.signupAt, 2 * HOUR), addTime(WINDOW_END, -2 * DAY)));
-      if (requestedAt < family.signupAt) continue;
-      if (connect(other, family, requestedAt, added < 3 ? 'accepted' : 'pending')) added += 1;
     }
   }
 
@@ -1065,7 +1207,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     let done = 0;
     for (const other of shuffled(candidatesFor(family))) {
       if (done >= wanted) break;
-      if (pairKeys.has(pairKeyOf(family, other))) continue;
+      if (pairKeys.has(pairKeyOf(family, other)) || other.parent.privacySettings?.isProfileHidden) continue;
       const from = maxDate(family.signupAt, other.signupAt);
       const swipedAt = awake(spread(from, WINDOW_END));
       if (swipedAt < from || swipedAt > WINDOW_END) continue;
@@ -1087,12 +1229,12 @@ export async function seedDatabase({ log = console.log } = {}) {
     addBlock(connection.requesterId, connection.recipientId, connection.removedAt);
   }
   let standaloneBlocks = 0;
-  for (const family of shuffled(verifiedActors.filter((f) => !f.isKept && !f.isPower))) {
+  for (const family of shuffled(verifiedActors.filter((f) => !f.isPower))) {
     if (standaloneBlocks >= 6) break;
-    const other = candidatesFor(family).find((o) => !o.isKept && !pairKeys.has(pairKeyOf(family, o)) && !blockedKeys.has(pairKeyOf(family, o)));
+    const other = candidatesFor(family).find((o) => !pairKeys.has(pairKeyOf(family, o)) && !blockedKeys.has(pairKeyOf(family, o)));
     if (!other) continue;
     pairKeys.add(pairKeyOf(family, other));
-    addBlock(family.parent._id, other.parent._id, awake(between(maxDate(family.signupAt, other.signupAt), WINDOW_END)));
+    addBlock(family.parent._id, other.parent._id, awake(between(maxDate(family.activeFrom, other.activeFrom), WINDOW_END)));
     standaloneBlocks += 1;
   }
 
@@ -1116,7 +1258,9 @@ export async function seedDatabase({ log = console.log } = {}) {
   };
   const finishConversation = (conversation, conversationMessages) => {
     const last = conversationMessages[conversationMessages.length - 1];
-    conversation.lastMessage = { messageId: last._id, senderId: last.senderId, content: last.content, type: last.type, sentAt: last.createdAt };
+    // A poll is previewed with its question (chatService.createPollMessage)
+    const preview = last.type === 'poll' ? `[Khảo sát] ${last.content}` : last.content;
+    conversation.lastMessage = { messageId: last._id, senderId: last.senderId, content: preview, type: last.type, sentAt: last.createdAt };
     conversation.updatedAt = last.createdAt;
     conversation.unreadCounts = Object.fromEntries(
       conversation.participants.map((id) => [
@@ -1166,7 +1310,9 @@ export async function seedDatabase({ log = console.log } = {}) {
     while (followUpAt < limit && chance(0.55)) {
       const senderId = chance(0.5) ? starter : other;
       const receiverId = sameId(senderId, starter) ? other : starter;
-      conversationMessages.push(addMessage(conversationId, senderId, 'text', pick(CHAT_FOLLOW_UPS), at(followUpAt, int(7, 21), int(0, 59)), [receiverId]));
+      // Never later than now (or than the end of the connection)
+      const followUpTime = at(followUpAt, int(7, 21), int(0, 59));
+      if (followUpTime < limit) conversationMessages.push(addMessage(conversationId, senderId, 'text', pick(CHAT_FOLLOW_UPS), followUpTime, [receiverId]));
       followUpAt = addTime(followUpAt, int(5, 16) * DAY);
     }
     const inOrder = conversationMessages.filter((m) => m.createdAt <= WINDOW_END).sort((a, b) => a.createdAt - b.createdAt);
@@ -1177,6 +1323,7 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // ---- Playdates ---------------------------------------------------------------------------------------------------
   const playdates = [];
+  const playdateLeaves = [];
   const reschedules = [];
   const ratings = [];
   const busy = new Map();
@@ -1213,14 +1360,20 @@ export async function seedDatabase({ log = console.log } = {}) {
     return weekday === 0 || weekday === 6 ? date : addTime(date, (6 - weekday) * DAY);
   };
 
-  const createPlaydate = ({ host, guests, day, status }) => {
+  // leave: { family, kind: 'late' | 'early' | 'safety', blocked? } makes that guest join and then leave
+  const createPlaydate = ({ host, guests, day, status, leave = null }) => {
     const time = pickTime(host);
     const scheduledDate = asDateAt(day, time);
     const hostChild = usableChildAt(host, scheduledDate);
     if (!hostChild) return null;
     const invited = guests.map((family) => ({ family, child: usableChildAt(family, scheduledDate) })).filter((guest) => guest.child);
     if (!invited.length) return null;
-    const allChildren = [hostChild, ...invited.map((guest) => guest.child)];
+    // A Premium host sometimes brings a second child (POST /playdates hostChildIds)
+    const sibling = isPremiumAt(host, scheduledDate) && chance(0.3)
+      ? host.activeChildren.find((child) => child !== hostChild && child.createdAt <= scheduledDate)
+      : null;
+    const hostChildren = sibling ? [hostChild, sibling] : [hostChild];
+    const allChildren = [...hostChildren, ...invited.map((guest) => guest.child)];
     const youngest = youngestAge(allChildren, scheduledDate);
     const durationMinutes = youngest < 3 ? pick([60, 90]) : youngest < 5 ? pick([90, 120]) : pick([90, 120, 150, 180]);
     const end = addTime(scheduledDate, durationMinutes * MINUTE);
@@ -1232,24 +1385,83 @@ export async function seedDatabase({ log = console.log } = {}) {
       ? awake(between(maxDate(earliest, addTime(WINDOW_END, -7 * DAY)), addTime(WINDOW_END, -HOUR)))
       : minDate(maxDate(addTime(scheduledDate, -int(2, 8) * DAY), addTime(earliest, 30 * MINUTE)), addTime(scheduledDate, -6 * HOUR));
     if (createdAt < earliest || createdAt > WINDOW_END) return null;
+    // Only children whose profile exists when the playdate is created, a second own child only on a paid plan
+    if (allChildren.some((child) => child.createdAt > createdAt)) return null;
+    if (sibling && !isPremiumAt(host, createdAt)) return null;
     if (!consumeQuota(host, 'playdateCreate', createdAt)) return null;
 
+    const playdateId = oid();
+    const left = [];
     const participants = invited.map(({ family, child }) => {
-      const respondedAt = minDate(addTime(createdAt, int(1, 30) * HOUR), addTime(scheduledDate, -HOUR), WINDOW_END);
+      const isForced = Boolean(leave) && (leave.family === family || leave.blocked === family);
+      const respondedAt = isForced
+        ? minDate(addTime(createdAt, int(20, 60) * MINUTE), addTime(scheduledDate, -HOUR), WINDOW_END)
+        : minDate(addTime(createdAt, int(1, 30) * HOUR), addTime(scheduledDate, -HOUR), WINDOW_END);
       const roll = random();
-      const answer = status === 'upcoming' ? (roll < 0.6 ? 'accepted' : roll < 0.9 ? 'pending' : 'declined') : roll < 0.9 ? 'accepted' : 'declined';
+      const wanted = status === 'upcoming' ? (roll < 0.6 ? 'accepted' : roll < 0.9 ? 'pending' : 'declined') : roll < 0.9 ? 'accepted' : 'declined';
+      const answer = isForced ? 'accepted' : wanted;
       const accepted = answer === 'accepted' && consumeQuota(family, 'playdateParticipate', respondedAt);
       const finalStatus = answer === 'pending' ? 'pending' : accepted ? 'accepted' : 'declined';
-      return {
+      const participant = {
         parentId: family.parent._id,
         childId: child._id,
         status: finalStatus,
         invitedAt: createdAt,
         respondedAt: finalStatus === 'pending' ? null : respondedAt,
+        leftAt: null,
         quotaConsumedAt: finalStatus === 'accepted' ? respondedAt : null,
       };
+
+      // A family who joined leaves before the start (playdateService.leavePlaydate): declined with leftAt,
+      // the participation quota stays consumed and the leave is kept in playdate_leaves
+      const leaveKind = !accepted ? null : leave?.family === family ? leave.kind : status === 'past' && !leave && chance(0.04) ? pick(['late', 'early']) : null;
+      if (leaveKind) {
+        const earliestLeave = addTime(respondedAt, 5 * MINUTE);
+        const lateLimit = addTime(scheduledDate, -(LEAVE_RULES.LATE_HOURS + 1) * HOUR);
+        const leftAt = leaveKind === 'late' || lateLimit <= earliestLeave
+          ? maxDate(addTime(scheduledDate, -int(2, 20) * HOUR), earliestLeave)
+          : between(earliestLeave, minDate(lateLimit, WINDOW_END));
+        if (leftAt < scheduledDate && leftAt <= WINDOW_END) {
+          const hoursBeforeStart = Math.round(((scheduledDate - leftAt) / HOUR) * 10) / 10;
+          const safetyExempt = leaveKind === 'safety';
+          participant.status = 'declined';
+          participant.respondedAt = leftAt;
+          participant.leftAt = leftAt;
+          left.push({
+            family,
+            record: {
+              playdateId,
+              parentId: family.parent._id,
+              leftAt,
+              scheduledStart: scheduledDate,
+              hoursBeforeStart,
+              isLate: !safetyExempt && hoursBeforeStart < LEAVE_RULES.LATE_HOURS,
+              safetyExempt,
+              // A leave after a block never carries a reason
+              reason: safetyExempt ? '' : pick(LEAVE_REASONS),
+              createdAt: leftAt,
+              updatedAt: leftAt,
+            },
+          });
+          if (safetyExempt && leave.blocked) {
+            pairKeys.add(pairKeyOf(family, leave.blocked));
+            addBlock(family.parent._id, leave.blocked.parent._id, addTime(leftAt, -3 * MINUTE));
+          }
+        }
+      }
+      return participant;
     });
     const hasAccepted = participants.some((p) => p.status === 'accepted');
+    // Adults who confirmed they stay with the children (playdateService.toggleChaperone)
+    const chaperoneLimit = minDate(scheduledDate, WINDOW_END);
+    const chaperones = !hasAccepted
+      ? []
+      : [
+          { parentId: host.parent._id, from: createdAt },
+          ...participants.filter((p) => p.status === 'accepted').map((p) => ({ parentId: p.parentId, from: p.respondedAt })),
+        ]
+          .filter(({ from }) => from < chaperoneLimit && chance(0.45))
+          .map(({ parentId, from }) => ({ parentId, confirmedAt: between(from, chaperoneLimit) }));
 
     let finalStatus = status;
     let cancellation;
@@ -1274,10 +1486,12 @@ export async function seedDatabase({ log = console.log } = {}) {
     const completedAt = finalStatus === 'completed' ? capped(chance(0.6) ? addTime(end, int(0, 60) * MINUTE) : addTime(dayStart(scheduledDate), DAY)) : null;
     const startedReminders = finalStatus === 'completed';
     const playdate = {
-      _id: oid(),
+      _id: playdateId,
       hostParentId: host.parent._id,
       hostChildId: hostChild._id,
+      hostChildIds: hostChildren.map((child) => child._id),
       participants,
+      chaperones,
       scheduledDate,
       time,
       durationMinutes,
@@ -1298,6 +1512,12 @@ export async function seedDatabase({ log = console.log } = {}) {
     notifyAdmin('playdates', 'created', 'info', 'Buổi hẹn chơi mới được tạo', `Buổi hẹn "${playdate.activity}" vừa được tạo bởi ${host.parent.fullName}.`, 'Playdate', playdate._id, createdAt);
     guests.forEach((family) => {
       notify(family, 'playdate_invite', 'Lời mời tham gia Playdate', `${host.parent.fullName} đã mời bạn và bé tham gia "${playdate.activity}".`, { senderId: host.parent._id, playdateId: playdate._id }, createdAt);
+    });
+    // The host is told about each family who left, with the reason they gave
+    left.forEach(({ family, record }) => {
+      playdateLeaves.push(record);
+      const reasonPart = record.reason ? ` Lý do: "${record.reason}".` : '';
+      notify(host, 'playdate_left', 'Một gia đình đã rời buổi hẹn', `${family.parent.fullName} đã rời${record.isLate ? ' sát giờ' : ''} buổi "${playdate.activity}".${reasonPart} Bạn có thể mời thêm bạn bè khác.`, { senderId: family.parent._id, playdateId: playdate._id }, record.leftAt);
     });
     if (cancellation && cancellation.cancelledAt <= WINDOW_END) {
       notifyAdmin('playdates', 'cancelled', 'info', 'Buổi hẹn chơi đã bị huỷ', `Buổi hẹn "${playdate.activity}" đã bị huỷ: ${cancellation.reason}.`, 'Playdate', playdate._id, cancellation.cancelledAt);
@@ -1322,7 +1542,7 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // Families who meet every week, on the weekend
   for (const family of verifiedActors.filter((f) => f.isPower)) {
-    for (let week = maxDate(family.signupAt, new Date('2026-08-08T00:00:00+07:00')); week <= lastPastDay; week = addTime(week, 7 * DAY)) {
+    for (let week = addTime(family.activeFrom, 5 * DAY); week <= lastPastDay; week = addTime(week, 7 * DAY)) {
       const day = toWeekend(week);
       if (day > lastPastDay) break;
       const friends = shuffled(friendsOf(family, addTime(day, -DAY)));
@@ -1371,10 +1591,45 @@ export async function seedDatabase({ log = console.log } = {}) {
     const [host, guest] = chance(0.5) ? [a, b] : [b, a];
     createPlaydate({ host, guests: [guest], day: upcomingDay(int(2, 14)), status: 'upcoming' });
   }
-  // Real accounts have something on their calendar
-  for (const family of verifiedActors.filter((f) => f.isKept)) {
-    const friend = friendsOf(family, WINDOW_END)[0];
-    if (friend) createPlaydate({ host: friend, guests: [family], day: upcomingDay(int(3, 10)), status: 'upcoming' });
+
+  // ---- Leaves: every kind is present, whatever the random draws ---------------------------------------------------
+  const lateLeavesOf = (family) => playdateLeaves.filter((l) => l.isLate && sameId(l.parentId, family.parent._id)).length;
+  const hasLeave = (test) => playdateLeaves.some(test);
+  const ordinaryFamilies = shuffled(verifiedActors.filter((f) => !f.isPower));
+
+  // A parent who keeps leaving at the last minute: at risk after RELIABILITY_RULES.AT_RISK_LATE_LEAVES late leaves
+  for (const family of ordinaryFamilies.filter((f) => isPremiumAt(f, WINDOW_END))) {
+    const hosts = friendsOf(family, addTime(lastPastDay, -45 * DAY));
+    if (!hosts.length) continue;
+    for (let offset = 2; offset <= 44 && lateLeavesOf(family) < RELIABILITY_RULES.AT_RISK_LATE_LEAVES; offset += 3) {
+      createPlaydate({ host: pick(hosts), guests: [family], day: addTime(lastPastDay, -offset * DAY), status: 'past', leave: { family, kind: 'late' } });
+    }
+    if (lateLeavesOf(family) >= RELIABILITY_RULES.AT_RISK_LATE_LEAVES) break;
+  }
+
+  // A family who leaves an upcoming playdate early, with a reason
+  for (const family of ordinaryFamilies) {
+    if (hasLeave((l) => !l.isLate && !l.safetyExempt && l.scheduledStart > NOW)) break;
+    const host = friendsOf(family, WINDOW_END)[0];
+    if (host) createPlaydate({ host, guests: [family], day: upcomingDay(int(3, 12)), status: 'upcoming', leave: { family, kind: 'early' } });
+  }
+
+  // A family who blocks another joined family and leaves: a safety leave, never counted and without a reason
+  for (const host of ordinaryFamilies) {
+    if (hasLeave((l) => l.safetyExempt)) break;
+    const friends = friendsOf(host, WINDOW_END);
+    const pair = friends.flatMap((a) => friends.filter((b) => b !== a && !pairKeys.has(pairKeyOf(a, b))).map((b) => [a, b]))[0];
+    if (pair) createPlaydate({ host, guests: pair, day: upcomingDay(int(3, 12)), status: 'upcoming', leave: { family: pair[0], kind: 'safety', blocked: pair[1] } });
+  }
+
+  // Admins are told when a parent reaches the at-risk number of late leaves
+  for (const family of verifiedActors) {
+    const late = playdateLeaves
+      .filter((l) => l.isLate && sameId(l.parentId, family.parent._id) && NOW - l.leftAt < RELIABILITY_RULES.WINDOW_DAYS * DAY)
+      .sort((a, b) => a.leftAt - b.leftAt);
+    if (late.length >= RELIABILITY_RULES.AT_RISK_LATE_LEAVES) {
+      notifyAdmin('playdates', 'reliability_at_risk', 'warning', 'Phụ huynh hay rời buổi hẹn sát giờ', `${family.parent.fullName} đã rời sát giờ ${RELIABILITY_RULES.AT_RISK_LATE_LEAVES} buổi hẹn trong ${RELIABILITY_RULES.WINDOW_DAYS} ngày qua.`, 'User', family.user._id, late[RELIABILITY_RULES.AT_RISK_LATE_LEAVES - 1].leftAt);
+    }
   }
 
   const completedPlaydates = playdates.filter((p) => p.status === 'completed');
@@ -1386,19 +1641,23 @@ export async function seedDatabase({ log = console.log } = {}) {
     for (const participant of playdate.participants.filter((p) => p.status === 'accepted')) {
       const connection = connectionFor.get([playdate.hostParentId.toString(), participant.parentId.toString()].sort().join('_'));
       if (connection?.status !== 'accepted') continue;
-      const pairKey = buildChildPairKey(playdate.hostChildId, participant.childId);
-      if (connection.childPairs.some((pair) => pair.pairKey === pairKey)) continue;
-      connection.childPairs.push({
-        childIds: [playdate.hostChildId.toString(), participant.childId.toString()].sort(),
-        pairKey,
-        source: 'playdate',
-        matchScore: null,
-        createdAt: playdate.completedAt,
-      });
+      // Every child of the host who came
+      for (const hostChildId of playdate.hostChildIds) {
+        const pairKey = buildChildPairKey(hostChildId, participant.childId);
+        if (connection.childPairs.some((pair) => pair.pairKey === pairKey)) continue;
+        connection.childPairs.push({
+          childIds: [hostChildId.toString(), participant.childId.toString()].sort(),
+          pairKey,
+          source: 'playdate',
+          matchScore: null,
+          createdAt: playdate.completedAt,
+        });
+      }
     }
   }
 
   // ---- Group chats: invitees join once they accept --------------------------------------------------------------
+  let pollCount = 0;
   for (const playdate of playdates) {
     const accepted = playdate.participants.filter((p) => p.status === 'accepted');
     if (!accepted.length) continue;
@@ -1417,9 +1676,29 @@ export async function seedDatabase({ log = console.log } = {}) {
       conversationMessages.push(addMessage(conversationId, sender, 'text', GROUP_CHAT_LINES[l], sentAt, isUnread ? [] : members.filter((m) => !sameId(m, sender))));
       sentAt = addTime(sentAt, int(30, 600) * MINUTE);
     }
+    // Some groups vote on the time with a poll (group chats only); past playdates have theirs closed
+    if (members.length > 1 && sentAt < limit && (pollCount < 2 || chance(0.2))) {
+      const isClosed = playdate.status !== 'upcoming' || pollCount === 1;
+      const options = [0, 1, 2].map((offset) => {
+        const optionDay = addTime(playdate.scheduledDate, offset * DAY);
+        return { id: `opt_${offset + 1}`, date: formatDay(optionDay), time: playdate.time, label: `${formatVnDate(optionDay)} ${playdate.time}`, voterParentIds: [] };
+      });
+      members.filter(() => chance(0.75)).forEach((member, index) => options[index === 0 ? 0 : int(0, 2)].voterParentIds.push(member));
+      conversationMessages.push(addMessage(conversationId, playdate.hostParentId, 'poll', POLL_QUESTION, sentAt, members.slice(1), {
+        poll: { question: POLL_QUESTION, options, deadline: minDate(addTime(sentAt, 2 * DAY), playdate.scheduledDate), isClosed },
+      }));
+      pollCount += 1;
+    }
     finishConversation(conversation, conversationMessages);
     playdate.chatConversationId = conversationId;
     conversationByPair.set(`playdate:${playdate._id}`, { conversation, messages: conversationMessages });
+  }
+
+  // A reminder points to the group chat of its playdate
+  const playdateById = new Map(playdates.map((playdate) => [playdate._id.toString(), playdate]));
+  for (const notification of notifications) {
+    if (notification.type !== 'playdate_reminder') continue;
+    notification.data.conversationId = playdateById.get(String(notification.data.playdateId))?.chatConversationId || null;
   }
 
   // ---- Reschedule requests (host only; every accepted participant votes) ----------------------------------------------
@@ -1462,6 +1741,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     }
   }
 
+  const rebookings = [];
   // ---- Ratings ----------------------------------------------------------------------------------------------------------
   for (const playdate of completedPlaydates) {
     const raters = [playdate.hostParentId, ...playdate.participants.filter((p) => p.status === 'accepted').map((p) => p.parentId)];
@@ -1471,6 +1751,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       if (createdAt > WINDOW_END) continue;
       const { rating, feedback, tags } = pick(FEEDBACKS);
       ratings.push({ playdateId: playdate._id, parentId, rating, feedback, tags, createdAt });
+      // A good playdate: the AI assistant prepares a plan to meet the same friends again (BUD-49 D4)
+      if (rating >= 4 && (rebookings.length < 2 || chance(0.15))) rebookings.push({ family: familyOf(parentId), playdate, createdAt });
     }
   }
 
@@ -1518,12 +1800,19 @@ export async function seedDatabase({ log = console.log } = {}) {
   const reports = [];
   const lockedFamilies = new Set();
   const hasUpcoming = (family) => upcomingPlaydates.some((p) => sameId(p.hostParentId, family.parent._id) || p.participants.some((x) => sameId(x.parentId, family.parent._id)));
-  const reportable = (family) => family && !family.isKept && !family.isPower && !lockedFamilies.has(family) && !family.isUnverified;
+  const reportable = (family) => family && !family.isPower && !lockedFamilies.has(family) && !family.isUnverified;
   const usedReportPairs = new Set();
   const span = WINDOW_END.getTime() - WINDOW_START.getTime() - 25 * DAY;
   const closedPlan = REPORT_PLAN.filter((plan) => ['resolved', 'dismissed'].includes(plan.status));
 
-  const chooseUserTarget = (notBefore, wantLocked) => {
+  // Another parent connected with the reported one before `before`, who can report them too
+  const otherReportersOf = (reported, reporter, before) =>
+    everAccepted
+      .filter((c) => c.connectedAt < before && (sameId(c.requesterId, reported.parent._id) || sameId(c.recipientId, reported.parent._id)))
+      .map((c) => familyOf(sameId(c.requesterId, reported.parent._id) ? c.recipientId : c.requesterId))
+      .filter((family) => family !== reporter && verifiedActors.includes(family) && !lockedFamilies.has(family));
+
+  const chooseUserTarget = (notBefore, wantLocked, wantCluster = false) => {
     const pool = shuffled(everAccepted.filter((c) => c.connectedAt < addTime(WINDOW_END, -2 * DAY)));
     for (const connection of pool) {
       if (usedReportPairs.has(connection.pairKey)) continue;
@@ -1533,17 +1822,112 @@ export async function seedDatabase({ log = console.log } = {}) {
       if (!reportable(reported) || !verifiedActors.includes(reporter)) continue;
       if (wantLocked && hasUpcoming(reported)) continue;
       if (connection.connectedAt > notBefore) continue;
+      if (wantCluster && !otherReportersOf(reported, reporter, notBefore).length) continue;
       usedReportPairs.add(connection.pairKey);
       return { reporter, reported };
     }
     return null;
   };
 
+  // What the Sentinel AI stores on a report, consistent with how the report ends (same fields as sentinelService)
+  const RISK_BY_SEVERITY = { critical: 'high', high: 'medium', medium: 'low', low: 'low' };
+  const assessReport = (report, plan, assessedAt, { reported, reporterCount }) => {
+    const isFallback = Boolean(plan.fallback);
+    const isDismissed = plan.status === 'dismissed' || plan.action === 'no_action';
+    const verdict = isFallback || (plan.status === 'reviewing' && !plan.shield) ? 'unclear' : isDismissed ? 'no_violation' : 'violation';
+    const isViolation = verdict === 'violation';
+    const confidenceScore = isFallback ? 0 : isViolation ? int(82, 97) : verdict === 'unclear' ? int(45, 68) : int(70, 90);
+    const clause = SANCTION_POLICY_MATRIX[report.category].clause;
+    const hasEvidence = report.evidenceUrls.length > 0 || report.targetType !== 'user';
+    const riskLevel = isViolation ? RISK_BY_SEVERITY[report.severity] : 'low';
+    const requiredReporters = report.severity === 'critical' ? 1 : 2;
+    const sanction = !isViolation ? null : plan.action && plan.action !== 'no_action' ? plan.action : report.severity === 'critical' ? 'suspend' : 'warn';
+    const sanctionDays = sanction === 'suspend' ? plan.durationDays || SENTINEL_SUSPEND_DAYS : null;
+    const notice = REPORT_CATEGORY_NOTICES[report.category];
+    const strikeCount = (reported.user.strikeCount || 0) + 1;
+    const credibilityLabel = 'Đáng tin cậy — Lịch sử báo cáo tốt, không có dấu hiệu phối hợp báo cáo ảo';
+    const incidentPattern = reporterCount > 1
+      ? `Ghi nhận ${reporterCount} báo cáo từ ${reporterCount} phụ huynh độc lập với ngữ cảnh tương tác riêng biệt (không phải báo cáo giả phối hợp).`
+      : 'Ghi nhận 1 báo cáo đơn lẻ, chưa có phụ huynh khác báo cáo cùng tài khoản.';
+
+    report.sentinelAssessment = {
+      summary: isFallback
+        ? 'Không thể phân tích tự động (lỗi gọi mô hình AI). Cần Admin xem xét thủ công.'
+        : isViolation
+          ? `Nội dung báo cáo phù hợp với hành vi ${notice}. ${hasEvidence ? 'Bằng chứng đính kèm khớp với mô tả.' : 'Chưa có bằng chứng trực tiếp, dựa trên mô tả của người báo cáo.'}`
+          : verdict === 'unclear'
+            ? 'Chưa đủ căn cứ để kết luận, cần Admin trao đổi thêm với hai bên.'
+            : 'Không tìm thấy dấu hiệu vi phạm rõ ràng, nhiều khả năng là hiểu lầm giữa hai gia đình.',
+      violationType: report.category,
+      severityRecommendation: report.severity,
+      policySuggestedSeverity: report.severity,
+      confidenceScore,
+      strikeCount,
+      policyClause: clause,
+      isFallback,
+      autoResolveEligible: Boolean(plan.auto),
+      verdict,
+      corroboration: { isCorroborated: reporterCount >= requiredReporters, reporterCount, requiredReporters, incidentCount: reporterCount, windowDays: 30 },
+      evidenceAnalysis: {
+        isValid: hasEvidence,
+        notes: hasEvidence ? 'Bằng chứng (ảnh chụp hoặc nội dung được báo cáo) khớp với mô tả vi phạm.' : 'Báo cáo không kèm bằng chứng, chỉ có mô tả bằng lời.',
+      },
+      recommendedSanctions: sanction ? [{ type: sanction, durationDays: sanctionDays, reason: `Theo ${clause}` }] : [],
+      draftNotes: {
+        adminNote: isViolation ? `Đề xuất ${toActionLabels([sanction])} theo ${clause}.` : 'Đề xuất đóng báo cáo, không áp dụng chế tài.',
+        reportedUserNotice: isViolation ? `Tài khoản của bạn bị xử lý do vi phạm quy chuẩn cộng đồng: ${notice}.` : '',
+        reporterFeedback: isViolation
+          ? 'Cảm ơn bạn đã báo cáo. Chúng tôi đã xử lý tài khoản vi phạm.'
+          : 'Cảm ơn bạn đã báo cáo. Chúng tôi đã xem xét và chưa ghi nhận vi phạm.',
+      },
+      assessedAt,
+      assessedByModel: isFallback ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash',
+      autoShieldApplied: false,
+      autoResolved: false,
+      monitoring: {
+        reportsReceived: reporterCount,
+        timeWindow: '30 phút',
+        totalOpenAgainstUser: reporterCount,
+        uniqueReportersCount: reporterCount,
+        riskLevel,
+        reporterCredibility: {
+          level: 'high',
+          label: credibilityLabel,
+          totalSubmitted: 1,
+          confirmedCount: isViolation && plan.status === 'resolved' ? 1 : 0,
+          dismissedCount: plan.status === 'dismissed' ? 1 : 0,
+          coordinatedSuspected: false,
+          isIndependentIncidents: true,
+          incidentPattern,
+        },
+        investigationSteps: [
+          `Đối chiếu nội dung báo cáo với ${clause}`,
+          `Độ tin cậy người báo cáo: ${credibilityLabel}`,
+          incidentPattern,
+        ],
+        temporaryRestriction: { applied: false, badgeLabel: `Tạm hạn chế gửi tin nhắn (${SENTINEL_RESTRICTION_HOURS}h)`, steps: [] },
+      },
+    };
+    report.history.push({
+      eventType: 'sentinel_assessed',
+      fromStatus: 'pending',
+      toStatus: 'pending',
+      by: null,
+      actorType: 'system',
+      at: assessedAt,
+      note: `Sentinel AI đánh giá: Rủi ro ${RISK_LEVEL_LABELS[riskLevel]} (Độ tự tin: ${confidenceScore}%) — ${plan.auto ? 'Đủ điều kiện tự động thi hành' : 'Chờ Admin xử lý'} (Xác thực chéo: ${reporterCount}/${requiredReporters} phụ huynh trong 30 ngày)`,
+      metadata: { confidenceScore, corroboratingReporters: reporterCount, isFallback, severityRecommendation: report.severity, policySuggestedSeverity: report.severity, strikeCount, isAutoResolveEligible: Boolean(plan.auto) },
+    });
+    report.updatedAt = assessedAt;
+  };
+
   for (const plan of REPORT_PLAN) {
     const isOpen = plan.status === 'pending' || plan.status === 'reviewing';
     const position = closedPlan.indexOf(plan);
     const createdAt = isOpen
-      ? awake(addTime(WINDOW_END, -(plan.status === 'pending' ? int(0, 2) : int(2, 6)) * DAY))
+      ? plan.shield
+        ? addTime(WINDOW_END, -int(3, 20) * HOUR)
+        : awake(addTime(WINDOW_END, -(plan.status === 'pending' ? int(0, 2) : int(2, 6)) * DAY))
       : awake(new Date(WINDOW_START.getTime() + 18 * DAY + (span * position) / Math.max(closedPlan.length, 1)));
     const base = { _id: oid(), category: plan.category, severity: CATEGORY_TO_SEVERITY[plan.category], ...REPORT_TEXTS[plan.category], evidenceUrls: plan.evidence ? [SAMPLE_IMAGE_URL] : [], actions: [], history: [] };
     let target = null;
@@ -1579,7 +1963,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       }
     }
     if (!target) {
-      const pair = chooseUserTarget(createdAt, plan.locked);
+      const pair = chooseUserTarget(createdAt, plan.locked, plan.cluster) || (plan.cluster ? chooseUserTarget(createdAt, plan.locked) : null);
       if (!pair) continue;
       target = { ...pair, targetType: 'user' };
     }
@@ -1597,10 +1981,35 @@ export async function seedDatabase({ log = console.log } = {}) {
     };
     notifyAdmin('safety', 'new_violation_report', 'critical', 'Báo cáo vi phạm mới cần xử lý', `Báo cáo vi phạm mới: ${report.reason}.`, 'Report', report._id, createdAt);
 
-    if (plan.status !== 'pending') {
-      const claimedAt = capped(addTime(createdAt, int(1, 10) * HOUR));
+    // Every new report is assessed by the Sentinel AI a moment later (sentinelService.assessReport)
+    const coReporters = plan.cluster ? otherReportersOf(target.reported, target.reporter, createdAt) : [];
+    const assessedAt = capped(addTime(createdAt, int(20, 90) * 1000));
+    assessReport(report, plan, assessedAt, { reported: target.reported, reporterCount: coReporters.length ? 2 : 1 });
+
+    // Critical child-safety report: the Sentinel AI protects first (messaging restriction and a provisional
+    // 7-day suspension), the admin confirms the official sanction later
+    if (plan.shield) {
+      const shieldedAt = addTime(assessedAt, 5 * 1000);
+      const clause = SANCTION_POLICY_MATRIX[plan.category].clause;
+      const reason = 'Sentinel AI (phòng thủ tự động) phong tỏa khẩn cấp 7 ngày bảo vệ trẻ em';
+      report.status = 'reviewing';
+      report.actions.push({ type: 'suspend', params: { durationDays: SENTINEL_SUSPEND_DAYS, reason }, performedBy: null, actorType: 'system', propagatedFrom: null, isProvisional: true, performedAt: shieldedAt, note: reason, isPolicyOverride: false, overrideReason: '', policyClause: clause });
+      report.history.push({ eventType: 'auto_shielded', fromStatus: 'pending', toStatus: 'reviewing', by: null, actorType: 'system', at: shieldedAt, note: `Sentinel AI kích hoạt phòng thủ tự động: Đã tự động tạm hạn chế gửi tin nhắn (tối đa ${SENTINEL_RESTRICTION_HOURS}h) & tạm khóa khẩn cấp tài khoản ${SENTINEL_SUSPEND_DAYS} ngày. Chờ Admin xác nhận hình phạt chính thức.` });
+      report.sentinelAssessment.autoShieldApplied = true;
+      report.sentinelAssessment.monitoring.investigationSteps.push(RESTRICTION_STEP);
+      report.sentinelAssessment.monitoring.temporaryRestriction = { applied: true, badgeLabel: `Tạm hạn chế gửi tin nhắn (${SENTINEL_RESTRICTION_HOURS}h)`, steps: [RESTRICTION_STEP] };
+      report.updatedAt = shieldedAt;
+      target.reported.user.isActive = false;
+      target.reported.user.suspensionUntil = addTime(shieldedAt, SENTINEL_SUSPEND_DAYS * DAY);
+      target.reported.user.messagingRestrictedUntil = addTime(shieldedAt, SENTINEL_RESTRICTION_HOURS * HOUR);
+      lockedFamilies.add(target.reported);
+      notifyAdmin('users', 'account_locked', 'warning', 'Tài khoản đã bị khoá', `Tài khoản ${target.reported.user.email} đã được khoá.`, 'User', target.reported.user._id, shieldedAt);
+    }
+
+    const claimedAt = capped(addTime(createdAt, int(1, 10) * HOUR));
+    if (plan.status !== 'pending' && !plan.shield && !plan.auto) {
       report.assignedTo = admin._id;
-      report.history.push({ eventType: 'claim', fromStatus: 'pending', toStatus: 'reviewing', by: admin._id, at: claimedAt, note: 'Tiếp nhận xử lý vụ việc' });
+      report.history.push({ eventType: 'claim', fromStatus: 'pending', toStatus: 'reviewing', by: admin._id, actorType: 'admin', at: claimedAt, note: 'Tiếp nhận xử lý vụ việc' });
       report.updatedAt = claimedAt;
       if (plan.status === 'reviewing') report.adminNotes = plan.note || '';
     }
@@ -1610,9 +2019,53 @@ export async function seedDatabase({ log = console.log } = {}) {
       const closedAt = addTime(actedAt, int(1, 4) * HOUR);
       const reportedFamily = target.reported;
       const notice = REPORT_CATEGORY_NOTICES[plan.category];
+      const clause = SANCTION_POLICY_MATRIX[plan.category].clause;
+      // Closed by the admin who claimed it, or by the Sentinel AI alone (never claimed)
+      const actorId = plan.auto ? null : admin._id;
+      const actorType = plan.auto ? 'system' : 'admin';
+      const openStatus = plan.auto ? 'pending' : 'reviewing';
+      const overrideReason = plan.override || '';
+      // A moment between the claim and the sanction
+      const during = (share) => new Date(claimedAt.getTime() + (actedAt.getTime() - claimedAt.getTime()) * share);
+      const event = (eventType, at, note, metadata = null, statuses = [openStatus, openStatus]) =>
+        report.history.push({ eventType, fromStatus: statuses[0], toStatus: statuses[1], by: actorId, actorType, at, note, metadata });
+
+      if (plan.reopened) {
+        event('status_change', during(0.3), 'Đóng báo cáo: chưa đủ căn cứ.', { resolution: 'dismissed' }, ['reviewing', 'dismissed']);
+        event('reopen', during(0.6), 'Người báo cáo bổ sung thông tin, mở lại để xem xét.', null, ['dismissed', 'reviewing']);
+      }
+      if (plan.severityChange) {
+        const oldSeverity = report.severity;
+        report.severity = plan.severityChange;
+        event('severity_change', during(0.8), `Đổi mức độ nghiêm trọng từ ${oldSeverity} sang ${plan.severityChange}`, { oldSeverity, newSeverity: plan.severityChange });
+      }
+      if (plan.failedFirst) {
+        event('action_failed', during(0.9), `Không thể thi hành đủ chế tài theo đề xuất Sentinel (${toActionLabels(['delete_message'])}) — báo cáo vẫn mở để Admin xử lý tiếp`, { failed: [{ type: 'delete_message', error: 'Message already deleted by its sender' }] });
+      }
+
       const applied = (type, note, durationDays = null) => {
-        report.actions.push({ type, params: { durationDays, reason: note }, performedBy: admin._id, performedAt: actedAt, note });
-        report.history.push({ eventType: 'action_applied', fromStatus: 'reviewing', toStatus: 'reviewing', by: admin._id, at: actedAt, note, metadata: { actionType: type, durationDays } });
+        report.actions.push({
+          type,
+          params: { durationDays, reason: note },
+          performedBy: actorId,
+          actorType,
+          propagatedFrom: null,
+          isProvisional: false,
+          performedAt: actedAt,
+          note,
+          isPolicyOverride: Boolean(overrideReason),
+          overrideReason,
+          policyClause: clause,
+        });
+        event(
+          'action_applied',
+          actedAt,
+          overrideReason ? `Đã thi hành chế tài (ngoại lệ chính sách): ${toActionLabels([type])} — Lý do: ${overrideReason}` : note,
+          { actionType: type, durationDays, isPolicyOverride: Boolean(overrideReason), overrideReason },
+        );
+        if (overrideReason) {
+          event('policy_overridden', actedAt, `Ngoại lệ chính sách cho "${toActionLabels([type])}": ${overrideReason}`, { actionType: type, overrideReason });
+        }
       };
       const tellReported = (title, body) => notify(reportedFamily, 'system', title, body, { reportId: report._id }, actedAt);
 
@@ -1622,11 +2075,15 @@ export async function seedDatabase({ log = console.log } = {}) {
           reportedFamily.user.strikeCount = (reportedFamily.user.strikeCount || 0) + 1;
           tellReported('Cảnh cáo vi phạm an toàn', `Bạn nhận được 1 cảnh cáo do vi phạm quy chuẩn cộng đồng: ${notice}. Vui lòng tuân thủ quy tắc để giữ an toàn cho cộng đồng.`);
           break;
-        case 'delete_message':
+        case 'delete_message': {
           applied('delete_message', 'Đã gỡ tin nhắn vi phạm.');
           target.message.isDeleted = true;
+          // The conversation preview no longer shows the removed text
+          const chat = conversations.find((conversation) => sameId(conversation._id, target.message.conversationId));
+          if (chat && sameId(chat.lastMessage.messageId, target.message._id)) chat.lastMessage.content = DELETED_MESSAGE_PLACEHOLDER;
           tellReported('Tin nhắn đã bị gỡ bỏ', `Một tin nhắn của bạn đã bị Quản trị viên gỡ do vi phạm quy chuẩn cộng đồng: ${notice}.`);
           break;
+        }
         case 'cancel_playdate':
           applied('cancel_playdate', 'Hủy bởi Quản trị viên do vi phạm an toàn');
           notifyAdmin('playdates', 'cancelled', 'warning', 'Buổi hẹn bị huỷ bởi Quản trị viên', `Buổi hẹn "${target.cancelled.activity}" đã bị huỷ: ${target.cancelled.cancellation.reason}.`, 'Playdate', target.cancelled._id, target.cancelled.cancellation.cancelledAt);
@@ -1634,14 +2091,16 @@ export async function seedDatabase({ log = console.log } = {}) {
         case 'suspend': {
           const until = addTime(actedAt, plan.durationDays * DAY);
           applied('suspend', `Tạm đình chỉ ${plan.durationDays} ngày.`, plan.durationDays);
-          // An ended suspension leaves the account active again (suspension-expiry.job.js)
+          tellReported('Tài khoản bị tạm đình chỉ', `Tài khoản của bạn bị tạm đình chỉ ${plan.durationDays} ngày, đến ${formatVnDate(until)}, do vi phạm quy chuẩn cộng đồng: ${notice}.`);
+          notifyAdmin('users', 'account_locked', 'warning', 'Tài khoản đã bị khoá', `Tài khoản ${reportedFamily.user.email} đã được khoá.`, 'User', reportedFamily.user._id, actedAt);
           if (until > NOW) {
             reportedFamily.user.isActive = false;
             reportedFamily.user.suspensionUntil = until;
             lockedFamilies.add(reportedFamily);
+          } else {
+            // An ended suspension leaves the account active again (suspension-expiry.job.js)
+            notifyAdmin('users', 'account_unlocked', 'info', 'Tài khoản được mở khoá', `Tài khoản ${reportedFamily.user.email} đã được mở khoá.`, 'User', reportedFamily.user._id, until);
           }
-          tellReported('Tài khoản bị tạm đình chỉ', `Tài khoản của bạn bị tạm đình chỉ ${plan.durationDays} ngày, đến ${formatVnDate(until)}, do vi phạm quy chuẩn cộng đồng: ${notice}.`);
-          notifyAdmin('users', 'account_locked', 'warning', 'Tài khoản đã bị khoá', `Tài khoản ${reportedFamily.user.email} đã được khoá.`, 'User', reportedFamily.user._id, actedAt);
           break;
         }
         case 'ban':
@@ -1659,13 +2118,53 @@ export async function seedDatabase({ log = console.log } = {}) {
           applied('dismiss', plan.note);
       }
 
+      const sanction = report.actions[report.actions.length - 1];
       report.status = plan.status;
       report.resolution = plan.status === 'dismissed' ? 'dismissed' : plan.action === 'no_action' ? 'no_action' : 'action_taken';
-      report.adminNotes = plan.note || report.actions[report.actions.length - 1].note;
-      report.resolvedBy = admin._id;
+      report.adminNotes = plan.auto
+        ? `Sentinel AI tự động giải quyết theo Khung Kỷ Luật Quy Chuẩn (${clause}). Chế tài áp dụng: ${toActionLabels([sanction.type])}.`
+        : plan.note || sanction.note;
+      report.resolvedBy = actorId;
       report.resolvedAt = closedAt;
-      report.history.push({ eventType: 'status_change', fromStatus: 'reviewing', toStatus: plan.status, by: admin._id, at: closedAt, note: report.adminNotes });
+      event(
+        'status_change',
+        closedAt,
+        plan.auto ? `Sentinel AI tự động thi hành chế tài & đóng báo cáo (${toActionLabels([sanction.type])}): Độ tự tin ${report.sentinelAssessment.confidenceScore}%.` : report.adminNotes,
+        { resolution: report.resolution, autoResolved: Boolean(plan.auto), actions: [sanction.type], clause },
+        [openStatus, plan.status],
+      );
+      report.sentinelAssessment.autoResolved = Boolean(plan.auto);
       report.updatedAt = closedAt;
+
+      // The other parent who reported the same account: closed with the same sanction (propagatedFrom)
+      const coReporter = coReporters[0];
+      if (coReporter) {
+        const siblingAt = minDate(addTime(createdAt, int(5, 25) * MINUTE), addTime(actedAt, -HOUR));
+        const sibling = {
+          ...base,
+          _id: oid(),
+          evidenceUrls: [],
+          actions: [],
+          history: [],
+          reporterId: coReporter.parent._id,
+          reportedUserId: reportedFamily.parent._id,
+          targetType: 'user',
+          targetMessageId: null,
+          targetPlaydateId: null,
+          status: 'pending',
+          createdAt: siblingAt,
+          updatedAt: siblingAt,
+        };
+        notifyAdmin('safety', 'new_violation_report', 'critical', 'Báo cáo vi phạm mới cần xử lý', `Báo cáo vi phạm mới: ${sibling.reason}.`, 'Report', sibling._id, siblingAt);
+        assessReport(sibling, plan, addTime(siblingAt, int(20, 90) * 1000), { reported: reportedFamily, reporterCount: 2 });
+        const note = `Áp dụng chế tài từ báo cáo liên quan: ${toActionLabels([sanction.type])}.`;
+        sibling.actions.push({ ...sanction, propagatedFrom: report._id, note });
+        sibling.history.push({ eventType: 'action_applied', fromStatus: 'pending', toStatus: 'pending', by: actorId, actorType, at: actedAt, note, metadata: { actionType: sanction.type, sourceReportId: report._id } });
+        sibling.history.push({ eventType: 'status_change', fromStatus: 'pending', toStatus: plan.status, by: actorId, actorType, at: closedAt, note: 'Đóng cùng báo cáo liên quan về cùng tài khoản.', metadata: { sourceReportId: report._id, autoResolved: Boolean(plan.auto) } });
+        Object.assign(sibling, { status: plan.status, resolution: report.resolution, adminNotes: report.adminNotes, resolvedBy: actorId, resolvedAt: closedAt, updatedAt: closedAt });
+        sibling.sentinelAssessment.autoResolved = Boolean(plan.auto);
+        reports.push(sibling);
+      }
     }
     reports.push(report);
   }
@@ -1675,7 +2174,7 @@ export async function seedDatabase({ log = console.log } = {}) {
 
   // ---- Announcements ----------------------------------------------------------------------------------------------------
   const ANNOUNCEMENTS = [
-    { at: new Date('2026-08-15T09:00:00+07:00'), title: 'BuddyLink ra mắt tại Hội An', body: 'Từ nay bạn có thể tìm bạn chơi cho bé tại Hội An và các phường lân cận thuộc thành phố Đà Nẵng.' },
+    { at: new Date('2026-09-03T09:00:00+07:00'), title: 'BuddyLink ra mắt tại Hội An', body: 'Từ nay bạn có thể tìm bạn chơi cho bé tại Hội An và các phường lân cận thuộc thành phố Đà Nẵng.' },
     { at: new Date('2026-09-12T10:00:00+07:00'), title: 'Tuần lễ gia đình an toàn', body: 'Luôn hẹn ở nơi công cộng cho buổi đầu tiên và báo cáo ngay nếu thấy điều gì chưa ổn nhé.' },
     { at: new Date('2026-10-10T09:30:00+07:00'), title: 'Trợ lý AI đã biết lên kế hoạch hẹn chơi', body: 'Hãy thử nhờ Trợ lý gợi ý địa điểm và hoạt động phù hợp với độ tuổi của bé.' },
   ];
@@ -1688,9 +2187,13 @@ export async function seedDatabase({ log = console.log } = {}) {
   // ---- Places ---------------------------------------------------------------------------------------------------------------
   // Written with the other documents, after the validation below
   const writePlaces = async () => {
-    // places_cache is kept (the places sync fills it from OpenStreetMap): only the hand-added places are written here
+    // places_cache is kept (the places sync fills it from OpenStreetMap): only the hand-added places are written here.
+    // Places of a previous seed that had no OpenStreetMap element ("seed-…", approximate points) are removed.
+    await PlacesCache.deleteMany({ source: PLACE_SOURCES.MANUAL, osmId: /^seed-/ });
     await PlacesCache.bulkWrite(
-      PLACES.map((p) => ({
+      PLACES.map((p, index) => {
+        const lastFetchedAt = between(addTime(WINDOW_END, -20 * DAY), WINDOW_END);
+        return {
         updateOne: {
           filter: { osmId: p.osmId },
           update: {
@@ -1702,16 +2205,51 @@ export async function seedDatabase({ log = console.log } = {}) {
               // Never removed by a places sync (the kids areas in a mall are not kid-friendly places in OSM)
               source: PLACE_SOURCES.MANUAL,
               openingHours: OPENING_HOURS[p.placeType] || '',
-              lastFetchedAt: between(addTime(WINDOW_END, -20 * DAY), WINDOW_END),
+              phone: `+84236${String(3500000 + index * 1379).padStart(7, '0')}`,
+              website: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.name}, ${p.address}`)}`,
+              // OpenStreetMap-like tags of the place
+              tags: { name: p.name, 'addr:city': CITY, ...PLACE_TAGS[p.placeType] },
+              // What children can do there, found by the attraction search of the AI assistant
+              attractions: ACTIVITIES_BY_PLACE[p.placeType].map((title) => ({
+                title,
+                description: `${title} tại ${p.name}.`,
+                minAge: ['sports_center', 'workshop'].includes(p.placeType) ? 4 : 2,
+                maxAge: 10,
+                durationMinutes: 60,
+                sourceUrl: `https://www.google.com/search?q=${encodeURIComponent(p.name)}`,
+              })),
+              attractionsFetchedAt: lastFetchedAt,
+              lastFetchedAt,
             },
           },
           upsert: true,
         },
-      })),
+        };
+      }),
+    );
+    // A cell whose last sync failed (retried by the next search around it): the west of the city, mostly mountains
+    const failedAt = addTime(WINDOW_END, -2 * HOUR);
+    const size = PLACES_SYNC_DEFAULTS.CELL_SIZE_DEG;
+    const [failedRow, failedCol] = [Math.floor(16.0 / size), Math.floor(107.95 / size)];
+    await PlacesSyncTile.updateOne(
+      { key: `${size}:${failedRow}:${failedCol}` },
+      {
+        $setOnInsert: {
+          cellSizeDeg: size,
+          bbox: [failedRow * size, failedCol * size, (failedRow + 1) * size, (failedCol + 1) * size],
+          status: PLACES_SYNC_TILE_STATUS.FAILED,
+          placesCount: 0,
+          startedAt: failedAt,
+          syncedAt: addTime(failedAt, -40 * DAY),
+          lastError: 'Overpass request failed: timeout of 180000ms exceeded',
+          createdAt: failedAt,
+          updatedAt: addTime(failedAt, 3 * MINUTE),
+        },
+      },
+      { upsert: true, timestamps: false },
     );
     // An empty database gets the cells of these places, synced long enough ago to be refreshed on the next search
-    if ((await PlacesSyncTile.estimatedDocumentCount()) === 0) {
-      const size = PLACES_SYNC_DEFAULTS.CELL_SIZE_DEG;
+    if ((await PlacesSyncTile.countDocuments({ status: { $ne: PLACES_SYNC_TILE_STATUS.FAILED } })) === 0) {
       const cells = new Map();
       for (const place of PLACES) {
         const row = Math.floor(place.coordinates[1] / size);
@@ -1721,48 +2259,199 @@ export async function seedDatabase({ log = console.log } = {}) {
         cell.placesCount += 1;
         cells.set(key, cell);
       }
-      const syncedAt = new Date('2026-08-05T02:00:00+07:00');
+      const syncedAt = addTime(WINDOW_END, -40 * DAY);
       await PlacesSyncTile.insertMany([...cells.values()].map((cell) => ({ ...cell, status: PLACES_SYNC_TILE_STATUS.DONE, startedAt: syncedAt, syncedAt, createdAt: syncedAt, updatedAt: syncedAt })));
     }
   };
 
   // ---- AI assistant: one quota unit per session ---------------------------------------------------------------------------------
   const aiSessions = [];
+  const nearestPlaces = (family) => [...PLACES].sort((a, b) => distanceKmBetween(pointOf(family), a.coordinates) - distanceKmBetween(pointOf(family), b.coordinates));
+  const draftChild = (child, date) => ({ childId: child._id.toString(), displayName: child.displayName, age: Math.floor(ageAt(child.dateOfBirth, date)), interests: child.interests });
+  // One step the parent answers by tapping (plan-steps.js makeChoiceCard)
+  const choiceCard = (stepId, title, options, selectedOptionIds = []) => ({
+    type: AI_CARD_TYPES.CHOICES,
+    stepId,
+    title,
+    selectionMode: 'single',
+    status: selectedOptionIds.length ? AI_CHOICE_STATUS.ANSWERED : AI_CHOICE_STATUS.OPEN,
+    selectedOptionIds,
+    allowCustom: false,
+    allowSkip: false,
+    options,
+  });
+  const slotOptions = (from) =>
+    [2, 3, 4].map((offset) => {
+      const slotDay = formatDay(addTime(from, offset * DAY));
+      const time = pick(['08:30', '09:00', '15:30', '16:00']);
+      return { id: `slot:${slotDay}T${time}`, label: `${slotDay.split('-').reverse().join('/')} lúc ${time}`, description: '', data: { date: slotDay, time }, links: [] };
+    });
+  // Plan being collected (plan-draft.rules.js emptyDraft)
+  const planDraftOf = (fields) => ({
+    status: AI_PLAN_STATUS.COLLECTING,
+    hostChild: null,
+    hostChildren: [],
+    preferredDate: null,
+    date: null,
+    time: null,
+    durationMinutes: 120,
+    durationSource: 'default',
+    participants: [],
+    pendingParticipants: null,
+    playmatesSkipped: false,
+    activity: null,
+    location: null,
+    agenda: [],
+    agendaConfirmed: false,
+    extraDone: false,
+    safetyAcknowledged: false,
+    safetyNotes: [],
+    itemsToBring: [],
+    hasHighRisk: false,
+    note: '',
+    warnings: [],
+    ...fields,
+  });
+  const pushSession = (family, { title, messages, planDraft = null, startedAt, isBilled = true, pendingSince = null, isDeleted = false }) => {
+    const promptTokens = 180 + messages.length * 60 + int(0, 80);
+    const completionTokens = 90 + messages.length * 35 + int(0, 50);
+    const lastMessageAt = messages[messages.length - 1].timestamp;
+    const session = {
+      _id: oid(),
+      parentId: family.parent._id,
+      title,
+      messages,
+      planDraft,
+      messageCount: messages.filter((m) => m.role === 'user').length,
+      // Counted once, at the first successful reply; a session prepared by the app is not billed until then
+      quotaConsumedAt: isBilled ? addTime(startedAt, 40 * 1000) : null,
+      // Set while a reply is being generated (lock against a second message)
+      pendingSince,
+      lastMessageAt,
+      tokenUsage: isBilled ? { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens } : { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      isActive: !isDeleted,
+      deletedAt: isDeleted ? capped(addTime(lastMessageAt, int(1, 72) * HOUR)) : null,
+      createdAt: startedAt,
+      updatedAt: lastMessageAt,
+    };
+    aiSessions.push(session);
+    return session;
+  };
+
   for (const family of verifiedActors) {
     const count = family.premium ? int(1, 6) : int(0, 3);
     for (let s = 0; s < count; s += 1) {
       const startedAt = awake(spread(family.signupAt, addTime(WINDOW_END, -HOUR)));
       if (startedAt < family.signupAt || !consumeQuota(family, 'aiAssistant', startedAt)) continue;
-      const nearest = [...PLACES].sort((a, b) => distanceKmBetween(pointOf(family), a.coordinates) - distanceKmBetween(pointOf(family), b.coordinates));
-      const script = pick(AI_SESSIONS)(pick(nearest.slice(0, 3)));
+      const script = pick(AI_SESSIONS)(pick(nearestPlaces(family).slice(0, 3)));
       const toolName = script.messages.find(([, , toolCall]) => toolCall)?.[2]?.name;
+      const place = nearestPlaces(family)[0];
       const sessionMessages = script.messages.map(([role, content, toolCall], m) => ({
+        _id: oid(),
         role,
         content,
         ...(toolCall ? { toolCalls: [{ id: `call_seed_${s}_${m}`, type: 'function', function: toolCall }] } : {}),
         ...(role === 'tool' ? { toolCallId: `call_seed_${s}_${m - 1}`, toolName } : {}),
         ...(role === 'assistant' && toolName && !toolCall ? { toolsUsed: [toolName] } : {}),
+        // The reply to a places search shows them as a card
+        ...(role === 'assistant' && toolName === AI_TOOL_NAMES.FIND_NEARBY_PLACES && !toolCall
+          ? { cards: [{ type: AI_CARD_TYPES.PLACE_SUGGESTIONS, items: [{ id: place.osmId, name: place.name, address: place.address, placeType: place.placeType, distanceKm: Math.round(distanceKmBetween(pointOf(family), place.coordinates) * 10) / 10, openingHours: OPENING_HOURS[place.placeType] || '', links: [] }] }] }
+          : {}),
+        // Sent by the web client with every message, so a retry is not answered twice
+        ...(role === 'user' ? { clientMessageId: crypto.randomUUID() } : {}),
         timestamp: addTime(startedAt, m * 40 * 1000),
       }));
-      const promptTokens = 180 + sessionMessages.length * 60 + int(0, 80);
-      const completionTokens = 90 + sessionMessages.length * 35 + int(0, 50);
-      const lastMessageAt = sessionMessages[sessionMessages.length - 1].timestamp;
       // Some conversations were deleted by the parent
-      const isDeleted = chance(0.12);
-      aiSessions.push({
-        parentId: family.parent._id,
-        title: script.title,
-        messages: sessionMessages,
-        messageCount: sessionMessages.filter((m) => m.role === 'user').length,
-        quotaConsumedAt: addTime(startedAt, 40 * 1000),
-        lastMessageAt,
-        tokenUsage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
-        isActive: !isDeleted,
-        deletedAt: isDeleted ? capped(addTime(lastMessageAt, int(1, 72) * HOUR)) : null,
-        createdAt: startedAt,
-        updatedAt: lastMessageAt,
-      });
+      pushSession(family, { title: script.title, messages: sessionMessages, startedAt, isDeleted: chance(0.12) });
     }
+  }
+
+  // Planning a playdate step by step: the parent taps a choice card, the draft of the plan is kept on the session
+  const planners = shuffled(verifiedActors.filter((f) => hasSession(f) && f.activeChildren.length && friendsOf(f, WINDOW_END).some((friend) => friend.activeChildren.length)));
+  let planSessions = 0;
+  for (const family of planners) {
+    if (planSessions >= 6) break;
+    const startedAt = planSessions === 0 ? addTime(WINDOW_END, -2 * MINUTE) : awake(spread(maxDate(family.signupAt, addTime(WINDOW_END, -30 * DAY)), addTime(WINDOW_END, -HOUR)));
+    if (startedAt < family.signupAt || !consumeQuota(family, 'aiAssistant', startedAt)) continue;
+    const child = family.activeChildren[0];
+    const friend = friendsOf(family, WINDOW_END).find((f) => f.activeChildren.length);
+    const friendChild = friend.activeChildren[0];
+    const childOption = { id: `child:${child._id}`, label: child.displayName, description: `${Math.floor(ageAt(child.dateOfBirth, startedAt))} tuổi`, data: { childId: child._id.toString() }, links: [] };
+    const playmateOption = { id: `playmate:${friendChild._id}`, label: friendChild.displayName, description: `Con của ${friend.parent.fullName}`, data: { childId: friendChild._id.toString(), parentId: friend.parent._id.toString() }, links: [] };
+    const stamp = (index) => addTime(startedAt, index * 35 * 1000);
+    const askChild = { _id: oid(), role: 'assistant', content: 'Bé nào sẽ tham gia buổi hẹn này?', cards: [choiceCard(AI_STEPS.CHILD, 'Chọn bé tham gia', [childOption], [childOption.id])], toolsUsed: [AI_TOOL_NAMES.PROPOSE_PLAYDATE], timestamp: stamp(1) };
+    const askPlaymates = { _id: oid(), role: 'assistant', content: `Bé ${child.displayName} muốn chơi cùng bạn nào?`, cards: [choiceCard(AI_STEPS.PLAYMATES, 'Chọn bạn chơi cùng', [playmateOption], [playmateOption.id])], toolsUsed: [AI_TOOL_NAMES.FIND_AVAILABLE_PLAYMATES], timestamp: stamp(3) };
+    const askTime = { _id: oid(), role: 'assistant', content: 'Bạn muốn hẹn vào lúc nào? Đây là các khung giờ cả hai gia đình đều rảnh.', cards: [choiceCard(AI_STEPS.TIME, 'Chọn thời gian', slotOptions(startedAt))], toolsUsed: [AI_TOOL_NAMES.SUGGEST_TIME_SLOTS], timestamp: stamp(5) };
+    const messages = [
+      { _id: oid(), role: 'user', content: 'Lên kế hoạch hẹn chơi cuối tuần này giúp mình', clientMessageId: crypto.randomUUID(), timestamp: stamp(0) },
+      askChild,
+      { _id: oid(), role: 'user', content: child.displayName, choice: { messageId: askChild._id, stepId: AI_STEPS.CHILD, optionIds: [childOption.id] }, clientMessageId: crypto.randomUUID(), timestamp: stamp(2) },
+      askPlaymates,
+      { _id: oid(), role: 'user', content: friendChild.displayName, choice: { messageId: askPlaymates._id, stepId: AI_STEPS.PLAYMATES, optionIds: [playmateOption.id] }, clientMessageId: crypto.randomUUID(), timestamp: stamp(4) },
+      askTime,
+    ];
+    // The latest one is still waiting for the assistant's reply to a message just sent
+    const isPending = planSessions === 0;
+    if (isPending) messages.push({ _id: oid(), role: 'user', content: 'Sáng thứ 7 được không?', clientMessageId: crypto.randomUUID(), timestamp: stamp(6) });
+    pushSession(family, {
+      title: 'Lên kế hoạch hẹn chơi',
+      messages,
+      startedAt,
+      pendingSince: isPending ? addTime(WINDOW_END, -20 * 1000) : null,
+      planDraft: planDraftOf({
+        hostChild: draftChild(child, startedAt),
+        hostChildren: [draftChild(child, startedAt)],
+        participants: [{ parentId: friend.parent._id.toString(), childId: friendChild._id.toString(), childName: friendChild.displayName, parentName: friend.parent.fullName, warnings: [] }],
+      }),
+    });
+    planSessions += 1;
+  }
+
+  // Rebooking after a playdate rated 4-5 stars: a session with the plan ready, opened from an ai_suggestion
+  // notification (aiAssistantService.prepareRebookingSession). Not billed until the parent answers.
+  for (const { family, playdate, createdAt } of rebookings) {
+    if (!verifiedActors.includes(family)) continue;
+    const isHost = sameId(playdate.hostParentId, family.parent._id);
+    const accepted = playdate.participants.filter((p) => p.status === 'accepted');
+    const ownChildIds = isHost ? playdate.hostChildIds : accepted.filter((p) => sameId(p.parentId, family.parent._id)).map((p) => p.childId);
+    const others = [
+      ...(isHost ? [] : playdate.hostChildIds.map((childId) => ({ parentId: playdate.hostParentId, childId }))),
+      ...accepted.filter((p) => !sameId(p.parentId, family.parent._id)).map((p) => ({ parentId: p.parentId, childId: p.childId })),
+    ];
+    const childOf = (owner, childId) => owner.children.find((child) => sameId(child._id, childId));
+    const ownChildren = ownChildIds.map((childId) => childOf(family, childId)).filter(Boolean);
+    const participants = others
+      .map(({ parentId, childId }) => ({ owner: familyOf(parentId), child: childOf(familyOf(parentId), childId) }))
+      .filter(({ child }) => child)
+      .map(({ owner, child }) => ({ parentId: owner.parent._id.toString(), childId: child._id.toString(), childName: child.displayName, parentName: owner.parent.fullName, warnings: [] }));
+    if (!ownChildren.length || !participants.length) continue;
+    const names = participants.map((participant) => participant.childName).join(', ');
+    const session = pushSession(family, {
+      title: `Hẹn lại với ${names}`,
+      startedAt: createdAt,
+      isBilled: false,
+      messages: [
+        {
+          _id: oid(),
+          role: 'assistant',
+          content: `Buổi chơi vừa rồi của bé ${ownChildren.map((child) => child.displayName).join(', ')} và ${names} thật vui! Mình đã chuẩn bị sẵn kế hoạch hẹn lại ("${playdate.activity}" tại ${playdate.location.name}). Bạn chọn thời gian bên dưới nhé, các bước sau vẫn chỉnh được.`,
+          cards: [choiceCard(AI_STEPS.TIME, 'Chọn thời gian', slotOptions(createdAt))],
+          toolsUsed: [],
+          timestamp: createdAt,
+        },
+      ],
+      planDraft: planDraftOf({
+        hostChild: draftChild(ownChildren[0], createdAt),
+        hostChildren: ownChildren.map((child) => draftChild(child, createdAt)),
+        durationMinutes: playdate.durationMinutes,
+        durationSource: 'parent',
+        participants,
+        activity: { key: 'custom', title: playdate.activity, placeTypes: [] },
+        location: { id: playdate.location.placeId, name: playdate.location.name, address: playdate.location.address, placeId: playdate.location.placeId, coordinates: playdate.location.coordinates.coordinates },
+      }),
+    });
+    const streak = family.parent.streak?.currentWeeklyStreak || 0;
+    notify(family, 'ai_suggestion', `Hẹn lại với ${names} nhé?`, `Buổi hẹn chơi vừa qua thật tuyệt! BuddyLink AI đã chuẩn bị sẵn kế hoạch buổi tiếp theo, bạn chỉ cần chọn thời gian.${streak > 0 ? ` Hẹn thêm một buổi trong tuần tới để giữ chuỗi ${streak} tuần nhé!` : ''}`, { playdateId: playdate._id, sessionId: session._id }, createdAt);
   }
 
   // ---- Admin notifications about accounts and payments ------------------------------------------------------------------------------
@@ -1778,12 +2467,21 @@ export async function seedDatabase({ log = console.log } = {}) {
   for (const payment of payments) {
     if (payment.status === 'success') {
       notifyAdmin('payments', 'payment_succeeded', 'info', 'Thanh toán thành công', `Đơn hàng #${payment.orderCode} (${Number(payment.amount).toLocaleString('vi-VN')} ₫) đã thanh toán thành công.`, 'Payment', payment._id, new Date(payment.createdAt));
+      if (payment.subscriptionId) {
+        notifyAdmin('payments', 'new_subscription', 'info', 'Thuê bao mới được kích hoạt', `Phụ huynh đã kích hoạt gói cước ${payment.planSnapshot.name}.`, 'Subscription', payment.subscriptionId, addTime(new Date(payment.createdAt), 2 * 1000));
+      }
     } else if (['failed', 'cancelled'].includes(payment.status)) {
       notifyAdmin('payments', 'payment_failed', 'warning', 'Thanh toán thất bại', `Giao dịch đơn hàng #${payment.orderCode} đã thất bại hoặc bị huỷ.`, 'Payment', payment._id, new Date(payment.createdAt));
     }
   }
   notifyAdmin('system', 'cron_job_failed', 'critical', 'Lỗi tác vụ định kỳ hệ thống (Cron Job)', 'Tác vụ "SubscriptionExpiryJob" gặp sự cố: connect ETIMEDOUT.', 'System', null, new Date('2026-09-18T03:05:00+07:00'));
   notifyAdmin('system', 'cron_job_failed', 'critical', 'Lỗi tác vụ định kỳ hệ thống (Cron Job)', 'Tác vụ "PlaydateAutoCloseJob" gặp sự cố: connection pool cleared.', 'System', null, new Date('2026-10-11T00:00:30+07:00'));
+
+  notifyAdmin('system', 'payment_gateway_error', 'critical', 'Lỗi cổng thanh toán PayOS', 'Lỗi xử lý webhook PayOS: Xác thực dữ liệu thất bại.', 'System', null, addTime(WINDOW_END, -9 * DAY));
+
+  // One notification was removed from the admin's list (kept in the database, hidden by every query)
+  const hiddenNotification = [...adminNotifications].sort((a, b) => a.createdAt - b.createdAt).find((n) => n.readBy.length);
+  if (hiddenNotification) Object.assign(hiddenNotification, { isActive: false, deletedAt: capped(addTime(hiddenNotification.createdAt, 2 * DAY)) });
 
   // ---- Usage quotas: what the data above consumed ---------------------------------------------------------------------------------------
   const quotas = [];
@@ -1796,16 +2494,18 @@ export async function seedDatabase({ log = console.log } = {}) {
     }
   }
 
-  // ---- Auth: sessions and short-lived tokens (TTL indexes delete them once expired, so they are all recent) -------------------------------
+  // ---- Auth: sessions and short-lived tokens. TTL indexes delete them once expired: sessions were refreshed in the
+  // last two days, and the OTP / reset tokens are kept AUTH_TOKEN_KEEP_DAYS days (minutes in the app) so the
+  // collection is not empty a moment after the seed ------------------------------------------------------------------
   const refreshTokens = [];
   for (const family of verifiedActors.filter(hasSession)) {
     if (!chance(0.65)) continue;
-    const createdAt = awake(between(addTime(WINDOW_END, -6 * DAY), WINDOW_END));
+    const createdAt = between(addTime(WINDOW_END, -2 * DAY), WINDOW_END);
     const isRevoked = chance(0.1);
     refreshTokens.push({ userId: family.user._id, tokenHash: sha256(crypto.randomUUID()), isRevoked, revokedAt: isRevoked ? capped(addTime(createdAt, int(1, 20) * HOUR)) : null, expiresAt: addTime(createdAt, 7 * DAY), createdAt, updatedAt: createdAt });
   }
   // A password reset just requested, and an OTP resent after changing the phone number
-  const authTokens = pickMany(verifiedActors.filter((f) => !f.isKept && hasSession(f)), 6).map((family, i) => {
+  const authTokens = pickMany(verifiedActors.filter(hasSession), 6).map((family, i) => {
     const type = ['password_reset', 'phone_otp', 'email_verify'][i % 3];
     return {
       userId: family.user._id,
@@ -1814,7 +2514,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       type,
       isUsed: i < 2,
       attempts: i === 4 ? 2 : 0,
-      expiresAt: addTime(NOW, (type === 'password_reset' ? 15 : 10) * MINUTE),
+      expiresAt: addTime(NOW, AUTH_TOKEN_KEEP_DAYS * DAY),
       createdAt: addTime(NOW, -int(1, 4) * MINUTE),
     };
   });
@@ -1826,14 +2526,15 @@ export async function seedDatabase({ log = console.log } = {}) {
       { ...admin, updatedAt: admin.updatedAt || admin.createdAt },
       ...families.map((family) => {
         const createdAt = family.signupAt;
-        const lastChange = family.user.updatedAt && family.isKept ? family.user.updatedAt : createdAt;
-        return { isActive: true, ...family.user, createdAt, updatedAt: lastChange };
+        // A removed account is disabled and soft-deleted a few days after it was created
+        const removed = family.isDeleted ? { isActive: false, deletedAt: capped(addTime(createdAt, 3 * DAY)) } : {};
+        return { isActive: true, ...family.user, ...removed, createdAt, updatedAt: removed.deletedAt || createdAt };
       }),
     ]],
     [Parent, families.map((family) => ({
       ...family.parent,
       createdAt: family.signupAt,
-      updatedAt: family.isKept ? family.parent.updatedAt : family.signupAt,
+      updatedAt: family.signupAt,
     }))],
     [Child, families.flatMap((family) => family.children)],
     [Subscription, subscriptions],
@@ -1845,6 +2546,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     [Message, messages],
     [Playdate, playdates],
     [RescheduleRequest, reschedules],
+    [PlaydateLeave, playdateLeaves],
     [RatingFeedback, ratings],
     [Badge, BADGES],
     [UserBadge, userBadges],
@@ -1920,7 +2622,7 @@ async function main() {
   console.log(`Target database: ${mongoose.connection.name} @ ${mongoose.connection.host}`);
 
   if (!process.argv.includes('--confirm')) {
-    console.log('Dry run. These collections would be wiped and rebuilt (existing parents, their ids and emails are kept):');
+    console.log('Dry run. These collections would be wiped and rebuilt (existing parents are kept with their profile and children):');
     for (const Model of MODELS_TO_WIPE) {
       console.log(`  - ${Model.collection.collectionName}: ${await Model.estimatedDocumentCount()} documents`);
     }
@@ -1929,7 +2631,9 @@ async function main() {
       console.log(`  - ${Model.collection.collectionName}: ${await Model.estimatedDocumentCount()} documents`);
     }
     const realAccounts = await User.countDocuments({ role: 'parent', email: { $not: new RegExp(`@${EMAIL_DOMAIN.replace('.', '\\.')}$`) } });
-    console.log(`Accounts outside @${EMAIL_DOMAIN} keep their profile and password, their activity is rebuilt: ${realAccounts}`);
+    const seededAccounts = await User.countDocuments({ role: 'parent', email: new RegExp(`@${EMAIL_DOMAIN.replace('.', '\\.')}$`) });
+    console.log(`Seeded accounts (@${EMAIL_DOMAIN}) kept with their profile and children: ${seededAccounts}, new ones to add: ${Math.max(SEED_PARENT_COUNT - seededAccounts, 0)} (password of all of them: ${SEED_PASSWORD})`);
+    console.log(`Accounts outside @${EMAIL_DOMAIN} would be DELETED with everything they own: ${realAccounts}`);
     console.log('Re-run with --confirm to wipe and seed.');
     return;
   }

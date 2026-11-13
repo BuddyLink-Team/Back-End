@@ -16,6 +16,7 @@ import {
   draftHostChildren,
   draftAgendaSize,
   withAttractionSource,
+  safetyContextKey,
 } from '../plan-draft.rules.js';
 import { PLAYDATE_RULES } from '../../playdate/playdate.constants.js';
 import { advancePlan, resolveActivity } from './plan-steps.js';
@@ -390,6 +391,14 @@ export const applyPlanFields = async (ctx, fields) => {
     draft.extraSafetyNotes = [...new Set(fields.safetyNotes.map((item) => String(item || '').replace(/\s+/g, ' ').trim()).filter(Boolean))]
       .map((item) => item.slice(0, AI_LIMITS.SAFETY_NOTE_MAX_LENGTH))
       .slice(0, AI_LIMITS.MAX_EXTRA_SAFETY_NOTES);
+    draft._extraSafetyKey = safetyContextKey(draft);
+  }
+  // Things to bring the model adds to the rule-based ones, for this activity at this place
+  if (Array.isArray(fields.itemsToBring)) {
+    draft.extraItemsToBring = [...new Set(fields.itemsToBring.map((item) => String(item || '').replace(/\s+/g, ' ').trim()).filter(Boolean))]
+      .map((item) => item.slice(0, AI_LIMITS.EXTRA_ITEM_MAX_LENGTH))
+      .slice(0, AI_LIMITS.MAX_EXTRA_ITEMS_TO_BRING);
+    draft._extraSafetyKey = safetyContextKey(draft);
   }
 
   return { ambiguousNames };
@@ -456,7 +465,17 @@ export const proposePlaydateTool = {
           items: { type: 'string' },
           maxItems: 3,
           description:
-            'Extra safety precautions for these children and activities, added to the rule-based ones (which always stay)',
+            'Extra safety precautions in Vietnamese, added to the rule-based ones (which always stay). Each one must be about ' +
+            'THIS plan: its games, its place type (indoor/outdoor), the forecast and the hours of CURRENT PLAN, the ages of the children. ' +
+            'Never repeat or contradict a note already on the card, never a generic one. Send [] to clear yours.',
+        },
+        itemsToBring: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 4,
+          description:
+            'Extra things to bring in Vietnamese (2-5 words each), added to the rule-based ones: only what these games at this place ' +
+            'in this weather really need and the card does not list yet. Nothing for sun on a rainy or evening playdate, nothing for rain indoors.',
         },
       },
     },

@@ -17,7 +17,7 @@ import {
   agendaSizeFor,
   activityGamesFor,
 } from '../playdate/playdate.activities.js';
-import { evaluateSafetyRules, isBadWeather } from './safety-rules.js';
+import { evaluateSafetyRules, isBadWeather, isIndoorPlace } from './safety-rules.js';
 import {
   AI_PLAN_STATUS,
   AI_STEPS,
@@ -442,6 +442,8 @@ export const evaluateDraftWarnings = (
       totalChildren: totalKids,
       childAges: ages,
       weather,
+      time: draft.time,
+      durationMinutes: duration,
     });
 
     if (safety.hasHighRisk) {
@@ -491,12 +493,19 @@ export const evaluateDraftWarnings = (
   }
 
   // 5. WEATHER
-  if (isBadWeather(weather)) {
+  if (isBadWeather(weather) && !isIndoorPlace(placeType)) {
     warnings.push({ code: AI_DRAFT_WARNING_CODES.BAD_WEATHER, severity: AI_WARNING_SEVERITY.WARN });
   }
 
   return warnings;
 };
+
+/**
+ * Activity and place the model's own safety notes and items were written for (see refreshDraft)
+ * @param {Object} draft
+ * @returns {string}
+ */
+export const safetyContextKey = (draft) => `${draft?.activity?.title || ''}||${draft?.location?.name || ''}`;
 
 /**
  * Whether the stored preference fit was computed for the current time and invitees of the draft
@@ -618,7 +627,9 @@ export const describeWarning = (warning, draft) => {
     case AI_DRAFT_WARNING_CODES.NO_SHARED_INTEREST:
       return 'Các bé chưa có sở thích chung nào trong hồ sơ';
     case AI_DRAFT_WARNING_CODES.BAD_WEATHER:
-      return 'Dự báo ngày này có mưa, nên ưu tiên chỗ trong nhà';
+      return draft?.weather?.scope === 'slot'
+        ? 'Dự báo có mưa đúng giờ chơi, nên ưu tiên chỗ trong nhà'
+        : 'Dự báo ngày này có mưa, nên ưu tiên chỗ trong nhà';
     default:
       return '';
   }
@@ -663,11 +674,19 @@ export const refreshDraft = (draft, now = new Date()) => {
     totalChildren: Math.max(1, draftHostChildren(draft).length) + (draft.participants?.length || 0),
     childAges: draftAges(draft),
     weather: draft.weather,
+    time: draft.time,
+    durationMinutes: draft.durationMinutes,
   });
+  // What the model added was written for one activity at one place: it is dropped when either changes
+  if (draft._extraSafetyKey !== safetyContextKey(draft)) {
+    draft.extraSafetyNotes = [];
+    draft.extraItemsToBring = [];
+  }
   // The model may add precautions (extraSafetyNotes), never remove the rule-based ones (B1)
   draft.safetyNotes = [...new Set([...safety.safetyNotes, ...(draft.extraSafetyNotes || [])])];
   draft.requiredAdults = safety.requiredAdults;
-  draft.itemsToBring = safety.itemsToBring;
+  const ruleItems = new Set(safety.itemsToBring.map((item) => normalizeText(item)));
+  draft.itemsToBring = [...safety.itemsToBring, ...(draft.extraItemsToBring || []).filter((item) => !ruleItems.has(normalizeText(item)))];
   draft.hasHighRisk = safety.hasHighRisk;
 
   const kept = (draft.warnings || []).filter(
@@ -702,6 +721,23 @@ export const refreshDraft = (draft, now = new Date()) => {
 };
 
 /**
+ * Forecast of the playdate for the system prompt
+ * @param {Object|null} weather
+ * @returns {string}
+ */
+const describeForecast = (weather) => {
+  if (!weather) return '(unknown)';
+  const parts = [
+    isBadWeather(weather) ? 'rain' : 'dry',
+    `${Math.round(weather.precipitationProbability || 0)}% chance of rain`,
+    Number.isFinite(weather.maxTemp) ? `up to ${Math.round(weather.maxTemp)}°C` : null,
+    weather.scope === 'slot' ? 'during the playdate hours' : 'that day',
+    weather.basis === 'home' ? "around the parent's home (no place yet)" : null,
+  ];
+  return parts.filter(Boolean).join(', ');
+};
+
+/**
  * Short text of the draft for the system prompt
  * @param {Object|null} draft
  * @returns {string}
@@ -720,6 +756,10 @@ export const summarizeDraft = (draft) => {
     `Activity: ${draft.activity ? draft.activity.title : '(missing)'}`,
     `Place: ${draft.location ? draft.location.name : '(missing)'}`,
     `Agenda: ${draft.agenda.length ? draft.agenda.join(' | ') : '(none yet)'}${draft.agendaConfirmed ? ' (reviewed by the parent)' : ''}`,
+    `Place type: ${draft.location?.placeType || '(unknown)'}`,
+    `Forecast: ${describeForecast(draft.weather)}`,
+    `Safety notes on the card: ${(draft.safetyNotes || []).length ? draft.safetyNotes.join(' | ') : '(none)'}`,
+    `Items to bring on the card: ${(draft.itemsToBring || []).length ? draft.itemsToBring.join(', ') : '(none)'}`,
     `Note: ${draft.note || '(none)'}`,
     `Warnings (say them in your own words, never the codes):${warningLines.length ? `\n${warningLines.join('\n')}` : ' (none)'}`,
     `Most severe: ${highest ? describeWarning(highest, draft) || highest.code : 'none'}`,

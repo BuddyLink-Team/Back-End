@@ -636,12 +636,17 @@ const addWeather = async (ctx) => {
   const point = placePoint || (Array.isArray(home) && home.length === 2 ? home : null);
   if (!draft.date || !point) return;
   const basis = placePoint ? 'place' : 'home';
-  if (draft.weather?.date === draft.date && draft.weather?.basis === basis) return;
+  // The forecast belongs to one day, time slot and point: any of them changing asks for it again
+  const key = [draft.date, draft.time || '', draft.durationMinutes, basis, ...point.map((value) => Math.round(value * 100) / 100)].join('|');
+  if (draft.weather?.key === key) return;
   try {
     const [lng, lat] = point;
-    const weather = await openMeteoAdapter.getDailyWeather(lat, lng, draft.date);
+    const weather = await openMeteoAdapter.getDailyWeather(lat, lng, draft.date, {
+      time: draft.time,
+      durationMinutes: draft.durationMinutes,
+    });
     // Unknown weather: never keep the forecast of another day or point
-    draft.weather = weather ? { ...weather, date: draft.date, basis } : null;
+    draft.weather = weather ? { ...weather, date: draft.date, basis, key } : null;
   } catch (_error) {
     draft.weather = null;
   }
