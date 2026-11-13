@@ -233,12 +233,6 @@ const reportSchema = new mongoose.Schema(
       default: REPORT_STATUS.PENDING,
       index: true,
     },
-    assignedTo: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      default: null,
-      index: true,
-    },
     resolution: {
       type: String,
       enum: Object.values(REPORT_RESOLUTION_TYPES),
@@ -256,6 +250,14 @@ const reportSchema = new mongoose.Schema(
     resolvedAt: {
       type: Date,
       default: null,
+    },
+    // Report the decision of the case was taken on: reports closed by one decision share it, so a closed
+    // case stays one row of the queue. null while open, and on reports closed before cases existed.
+    closedCaseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Report',
+      default: null,
+      index: true,
     },
     actions: {
       type: [reportActionSchema],
@@ -278,7 +280,6 @@ const reportSchema = new mongoose.Schema(
 
 // Indexes
 reportSchema.index({ reportedUserId: 1, status: 1 });
-reportSchema.index({ assignedTo: 1, status: 1 });
 reportSchema.index({ status: 1, createdAt: -1 });
 
 const Report = mongoose.models.Report || mongoose.model('Report', reportSchema);

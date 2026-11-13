@@ -10,6 +10,7 @@ import {
   withRestrictionOutcome,
   calculateCorroboration,
   calculateCredibility,
+  caseKeyOf,
   RESTRICTION_STEP,
 } from './enforcement-metrics.rules.js';
 import { calculatePolicySanction } from './moderation-policy.rules.js';
@@ -67,6 +68,12 @@ ANALYSIS GUIDELINES:
 5. Verdict: conclude with "violation" only when the evidence shows a real breach, "no_violation" for a misunderstanding,
    a false or retaliatory report, "unclear" when the evidence is not enough. The drafts MUST match the verdict:
    never announce a sanction for "no_violation" or "unclear".
+6. Honesty about data: only describe what is actually present in the input. When the context says
+   "Target: User Profile" or "no chat context", you have NOT seen the reported user's profile content or any
+   of their messages. Never claim you checked the profile, the context or the messages, and never state that
+   no violating messages were found. Say plainly (in Vietnamese) that no message or profile content was
+   provided, base the assessment only on the reporter note, counts and image evidence, and use "unclear"
+   unless the image evidence itself clearly shows or disproves a violation.
 
 RESPONSE FORMAT:
 You MUST respond ONLY with a valid JSON object strictly matching this structure:
@@ -489,7 +496,8 @@ class SentinelService {
    * @returns {Promise<{ parsedResult: Object, model: string|null }>}
    */
   async _runModelAssessment(report, { reporter, reportedParent, priorSanctionsCount, reportsIn30Min, outcomes }) {
-    let contextText = 'Target: User Profile';
+    let contextText =
+      'Target: User Profile (NO profile content and NO chat messages were provided to you)';
     if (report.targetType === REPORT_TARGET_TYPES.MESSAGE && report.targetMessageId) {
       try {
         const messageContext = await chatService.getMessageContext(report.targetMessageId);
@@ -510,7 +518,7 @@ class SentinelService {
         );
       }
     } else if (report.targetType === REPORT_TARGET_TYPES.PLAYDATE && report.targetPlaydateId) {
-      contextText = `Target: Playdate ID ${report.targetPlaydateId}`;
+      contextText = 'Target: a playdate (no chat context and no playdate content were provided to you)';
     }
 
     const safeReporterNote = sanitizeUserContent(report.description || report.reason || 'None provided');
@@ -617,13 +625,10 @@ Please analyze this report thoroughly and provide the JSON assessment according 
   }
 
   /**
-   * Leave the report open (reviewing) for the admin, with the reason in its history.
+   * Leave the report open for the admin, with the reason in its history.
    * @private
    */
   _handOffToAdmin(report, prevStatus, note, metadata) {
-    if (report.status === REPORT_STATUS.PENDING) {
-      report.status = REPORT_STATUS.REVIEWING;
-    }
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.ACTION_FAILED,
       fromStatus: prevStatus,
@@ -672,11 +677,14 @@ Please analyze this report thoroughly and provide the JSON assessment according 
 
     const appliedActions = [];
     const failedActions = [];
+    // The parents read the notices the AI wrote for this decision; the generic ones otherwise
+    const offenderNotice = (parsedResult.draftNotes?.reportedUserNotice || '').trim();
+    const reporterNotice = (parsedResult.draftNotes?.reporterFeedback || '').trim();
 
     for (const action of plan.executable) {
       try {
         let actionDoc = null;
-        const params = { policyClause: policyResult.clause };
+        const params = { policyClause: policyResult.clause, isSilent: Boolean(offenderNotice) };
         if (action.type === REPORT_ACTION_TYPES.DELETE_MESSAGE) {
           actionDoc = await sanctionExecutorService.deleteMessage({
             report,
@@ -737,6 +745,8 @@ Please analyze this report thoroughly and provide the JSON assessment according 
     report.resolution = REPORT_RESOLUTION_TYPES.ACTION_TAKEN;
     report.resolvedBy = null;
     report.resolvedAt = new Date();
+    // The reports closed by this decision are one row of the queue
+    report.closedCaseId = report._id;
     report.adminNotes =
       parsedResult.draftNotes?.adminNote ||
       `Sentinel AI tự động giải quyết theo Khung Kỷ Luật Quy Chuẩn (${policyResult.clause}). Chế tài áp dụng: ${toActionLabels(appliedActionTypes)}.`;
@@ -761,8 +771,16 @@ Please analyze this report thoroughly and provide the JSON assessment according 
       },
     });
 
-    await sanctionExecutorService.notifyReporter(report, REPORT_STATUS.RESOLVED);
-    await this._closeCorroboratingReports(report, appliedActions, relatedReportIds);
+    if (offenderNotice && targetUser?._id) {
+      await sanctionExecutorService.sendReportNotification({
+        recipientId: targetUser._id,
+        title: 'Thông báo xử lý vi phạm',
+        body: offenderNotice,
+        data: { reportId: report._id },
+      });
+    }
+    await sanctionExecutorService.notifyReporter(report, REPORT_STATUS.RESOLVED, reporterNotice);
+    await this._closeCorroboratingReports(report, appliedActions, relatedReportIds, reporterNotice);
     return true;
   }
 
@@ -771,14 +789,15 @@ Please analyze this report thoroughly and provide the JSON assessment according 
    * propagated actions (never counted as extra strikes). Reports an admin already works on are left alone.
    * @private
    */
-  async _closeCorroboratingReports(sourceReport, appliedActions, relatedReportIds = []) {
+  async _closeCorroboratingReports(sourceReport, appliedActions, relatedReportIds = [], reporterNotice = '') {
+    // Reports about the same content as another closed one share its row in the queue
+    const caseIds = new Map([[caseKeyOf(sourceReport), sourceReport._id]]);
     for (const relatedId of relatedReportIds) {
       try {
         const related = await safetyService.getReportDocById(relatedId);
         if (
           !related ||
           !REPORT_OPEN_STATUSES.includes(related.status) ||
-          related.assignedTo ||
           (related.actions || []).length > 0
         ) {
           continue;
@@ -803,7 +822,10 @@ Please analyze this report thoroughly and provide the JSON assessment according 
         related.resolution = REPORT_RESOLUTION_TYPES.ACTION_TAKEN;
         related.resolvedBy = null;
         related.resolvedAt = now;
-        related.adminNotes = `Sentinel AI đóng cùng vụ việc với báo cáo ${sourceReport._id} (đã xác thực chéo nhiều phụ huynh).`;
+        const relatedKey = caseKeyOf(related);
+        if (!caseIds.has(relatedKey)) caseIds.set(relatedKey, related._id);
+        related.closedCaseId = caseIds.get(relatedKey);
+        related.adminNotes = `Sentinel AI đóng cùng vụ việc với báo cáo chính của cụm (đã xác thực chéo nhiều phụ huynh).`;
         related.history.push({
           eventType: REPORT_HISTORY_EVENT_TYPES.STATUS_CHANGE,
           fromStatus: prevStatus,
@@ -811,14 +833,14 @@ Please analyze this report thoroughly and provide the JSON assessment according 
           by: null,
           actorType: 'system',
           at: now,
-          note: `Đóng đồng loạt theo báo cáo ${sourceReport._id}: chế tài ${toActionLabels(
+          note: `Đóng đồng loạt theo báo cáo chính của cụm: chế tài ${toActionLabels(
             appliedActions.map((a) => a.type)
           )} đã được áp dụng một lần cho cả vụ việc`,
           metadata: { sourceReportId: sourceReport._id, autoResolved: true },
         });
 
         await safetyService.saveReport(related);
-        await sanctionExecutorService.notifyReporter(related, REPORT_STATUS.RESOLVED);
+        await sanctionExecutorService.notifyReporter(related, REPORT_STATUS.RESOLVED, reporterNotice);
       } catch (err) {
         logger.warn(`[Sentinel Auto-Resolve] Could not close corroborating report=${relatedId}: ${err.message}`);
       }
@@ -830,7 +852,7 @@ Please analyze this report thoroughly and provide the JSON assessment according 
    * - Restricts messaging for 72h (lifted when the admin closes the last restricted report)
    * - Deletes the message and freezes the account for 7 days ONLY for child safety
    * - Marks provisional actions with isProvisional: true
-   * - Moves PENDING -> REVIEWING to alert the admin
+   * - The report stays open (pending) for the admin's decision
    * @private
    * @returns {Promise<{ restricted: boolean, actionsTaken: number }>}
    */
@@ -839,10 +861,6 @@ Please analyze this report thoroughly and provide the JSON assessment according 
     const actor = { id: null, actorType: 'system' };
     const shieldActionsTaken = [];
     let restricted = false;
-
-    if (report.status === REPORT_STATUS.PENDING) {
-      report.status = REPORT_STATUS.REVIEWING;
-    }
 
     if (targetUser?._id) {
       try {

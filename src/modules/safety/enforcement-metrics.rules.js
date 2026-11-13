@@ -248,6 +248,19 @@ const hasDirectEvidence = (r) =>
  * @param {Object} report
  * @returns {string}
  */
+/**
+ * Case of a report in the moderation queue: the reports about the same content are handled together
+ * (one reported message, one reported playdate, or the profile of one parent for one kind of violation).
+ * Unlike an incident, profile reports of the same kind against one parent are one case.
+ * @param {{ targetPlaydateId?: *, targetMessageId?: *, reportedUserId?: *, category?: string }} report
+ * @returns {string}
+ */
+export function caseKeyOf(report) {
+  if (report?.targetPlaydateId) return `playdate:${report.targetPlaydateId}`;
+  if (report?.targetMessageId) return `message:${report.targetMessageId}`;
+  return `user:${report?.reportedUserId}:${report?.category}`;
+}
+
 export function incidentKeyOf(report) {
   if (report?.targetPlaydateId) return `playdate:${report.targetPlaydateId}`;
   if (report?.targetMessageId) return `message:${report.targetMessageId}`;

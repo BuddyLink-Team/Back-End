@@ -511,7 +511,8 @@ const REPORT_TEXTS = {
 // status + action of each report, oldest first: dates and targets are chosen in seedDatabase.
 // auto: closed by the Sentinel AI alone; reopened: dismissed, then reopened and closed again; override: sanction
 // outside the policy matrix; cluster: a second parent reported the same account, closed with the same sanction;
-// failedFirst: a first sanction could not be applied; shield: provisional protection applied by the Sentinel AI
+// failedFirst: a first sanction could not be applied; shield: provisional protection applied by the Sentinel AI;
+// unclear: an open case the AI could not conclude on, waiting for days; lifted: the admin ended the suspension early
 const REPORT_PLAN = [
   { category: 'harassment', status: 'resolved', action: 'warn' },
   { category: 'fake_profile', status: 'dismissed', note: 'Đã kiểm tra hồ sơ, thông tin hợp lệ.' },
@@ -519,6 +520,7 @@ const REPORT_PLAN = [
   { category: 'no_show', status: 'dismissed', target: 'playdate', note: 'Gia đình đã báo bé bị ốm, không vi phạm.' },
   { category: 'inappropriate_content', status: 'resolved', action: 'delete_message', target: 'message' },
   { category: 'harassment', status: 'resolved', action: 'suspend', durationDays: 7 },
+  { category: 'inappropriate_content', status: 'resolved', action: 'suspend', durationDays: 14, lifted: 'Phụ huynh khiếu nại kèm bằng chứng tin nhắn bị cắt ngữ cảnh, admin chấp nhận.' },
   { category: 'other', status: 'resolved', action: 'no_action', note: 'Không đủ căn cứ, đã nhắc nhở nhẹ qua hệ thống.', reopened: true, severityChange: 'low' },
   { category: 'spam', status: 'dismissed', note: 'Người báo cáo xác nhận bấm nhầm, đóng báo cáo.' },
   { category: 'no_show', status: 'resolved', action: 'warn', target: 'playdate' },
@@ -527,9 +529,9 @@ const REPORT_PLAN = [
   { category: 'fake_profile', status: 'resolved', action: 'suspend', durationDays: 45, locked: true, override: 'Hồ sơ giả mạo có dấu hiệu lừa đảo nhiều gia đình nên cần đình chỉ dài hơn mức chính sách đề xuất.' },
   { category: 'inappropriate_content', status: 'resolved', action: 'warn', target: 'message', failedFirst: true },
   { category: 'other', status: 'dismissed', note: 'Trao đổi riêng giữa hai gia đình, không vi phạm.' },
-  { category: 'spam', status: 'reviewing', note: 'Đang yêu cầu phụ huynh giải trình.' },
-  { category: 'fake_profile', status: 'reviewing', note: 'Đang yêu cầu phụ huynh xác minh lại số điện thoại.' },
-  { category: 'child_safety', status: 'reviewing', evidence: true, shield: true, locked: true },
+  { category: 'spam', status: 'pending', unclear: true },
+  { category: 'fake_profile', status: 'pending', unclear: true },
+  { category: 'child_safety', status: 'pending', evidence: true, shield: true, locked: true },
   { category: 'child_safety', status: 'pending', evidence: true },
   { category: 'harassment', status: 'pending', fallback: true },
   { category: 'inappropriate_content', status: 'pending', evidence: true },
@@ -1796,7 +1798,7 @@ export async function seedDatabase({ log = console.log } = {}) {
     }
   }
 
-  // ---- Reports, following the moderation flow (claim, sanction, close) ------------------------------------------------
+  // ---- Reports, following the moderation flow (one decision closes the case) -----------------------------------------
   const reports = [];
   const lockedFamilies = new Set();
   const hasUpcoming = (family) => upcomingPlaydates.some((p) => sameId(p.hostParentId, family.parent._id) || p.participants.some((x) => sameId(x.parentId, family.parent._id)));
@@ -1834,7 +1836,7 @@ export async function seedDatabase({ log = console.log } = {}) {
   const assessReport = (report, plan, assessedAt, { reported, reporterCount }) => {
     const isFallback = Boolean(plan.fallback);
     const isDismissed = plan.status === 'dismissed' || plan.action === 'no_action';
-    const verdict = isFallback || (plan.status === 'reviewing' && !plan.shield) ? 'unclear' : isDismissed ? 'no_violation' : 'violation';
+    const verdict = isFallback || plan.unclear ? 'unclear' : isDismissed ? 'no_violation' : 'violation';
     const isViolation = verdict === 'violation';
     const confidenceScore = isFallback ? 0 : isViolation ? int(82, 97) : verdict === 'unclear' ? int(45, 68) : int(70, 90);
     const clause = SANCTION_POLICY_MATRIX[report.category].clause;
@@ -1922,12 +1924,12 @@ export async function seedDatabase({ log = console.log } = {}) {
   };
 
   for (const plan of REPORT_PLAN) {
-    const isOpen = plan.status === 'pending' || plan.status === 'reviewing';
+    const isOpen = plan.status === 'pending';
     const position = closedPlan.indexOf(plan);
     const createdAt = isOpen
       ? plan.shield
         ? addTime(WINDOW_END, -int(3, 20) * HOUR)
-        : awake(addTime(WINDOW_END, -(plan.status === 'pending' ? int(0, 2) : int(2, 6)) * DAY))
+        : awake(addTime(WINDOW_END, -(plan.unclear ? int(2, 6) : int(0, 2)) * DAY))
       : awake(new Date(WINDOW_START.getTime() + 18 * DAY + (span * position) / Math.max(closedPlan.length, 1)));
     const base = { _id: oid(), category: plan.category, severity: CATEGORY_TO_SEVERITY[plan.category], ...REPORT_TEXTS[plan.category], evidenceUrls: plan.evidence ? [SAMPLE_IMAGE_URL] : [], actions: [], history: [] };
     let target = null;
@@ -1992,9 +1994,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       const shieldedAt = addTime(assessedAt, 5 * 1000);
       const clause = SANCTION_POLICY_MATRIX[plan.category].clause;
       const reason = 'Sentinel AI (phòng thủ tự động) phong tỏa khẩn cấp 7 ngày bảo vệ trẻ em';
-      report.status = 'reviewing';
       report.actions.push({ type: 'suspend', params: { durationDays: SENTINEL_SUSPEND_DAYS, reason }, performedBy: null, actorType: 'system', propagatedFrom: null, isProvisional: true, performedAt: shieldedAt, note: reason, isPolicyOverride: false, overrideReason: '', policyClause: clause });
-      report.history.push({ eventType: 'auto_shielded', fromStatus: 'pending', toStatus: 'reviewing', by: null, actorType: 'system', at: shieldedAt, note: `Sentinel AI kích hoạt phòng thủ tự động: Đã tự động tạm hạn chế gửi tin nhắn (tối đa ${SENTINEL_RESTRICTION_HOURS}h) & tạm khóa khẩn cấp tài khoản ${SENTINEL_SUSPEND_DAYS} ngày. Chờ Admin xác nhận hình phạt chính thức.` });
+      report.history.push({ eventType: 'auto_shielded', fromStatus: 'pending', toStatus: 'pending', by: null, actorType: 'system', at: shieldedAt, note: `Sentinel AI kích hoạt phòng thủ tự động: Đã tự động tạm hạn chế gửi tin nhắn (tối đa ${SENTINEL_RESTRICTION_HOURS}h) & tạm khóa khẩn cấp tài khoản ${SENTINEL_SUSPEND_DAYS} ngày. Chờ Admin xác nhận hình phạt chính thức.` });
       report.sentinelAssessment.autoShieldApplied = true;
       report.sentinelAssessment.monitoring.investigationSteps.push(RESTRICTION_STEP);
       report.sentinelAssessment.monitoring.temporaryRestriction = { applied: true, badgeLabel: `Tạm hạn chế gửi tin nhắn (${SENTINEL_RESTRICTION_HOURS}h)`, steps: [RESTRICTION_STEP] };
@@ -2006,13 +2007,8 @@ export async function seedDatabase({ log = console.log } = {}) {
       notifyAdmin('users', 'account_locked', 'warning', 'Tài khoản đã bị khoá', `Tài khoản ${target.reported.user.email} đã được khoá.`, 'User', target.reported.user._id, shieldedAt);
     }
 
-    const claimedAt = capped(addTime(createdAt, int(1, 10) * HOUR));
-    if (plan.status !== 'pending' && !plan.shield && !plan.auto) {
-      report.assignedTo = admin._id;
-      report.history.push({ eventType: 'claim', fromStatus: 'pending', toStatus: 'reviewing', by: admin._id, actorType: 'admin', at: claimedAt, note: 'Tiếp nhận xử lý vụ việc' });
-      report.updatedAt = claimedAt;
-      if (plan.status === 'reviewing') report.adminNotes = plan.note || '';
-    }
+    // When the admin opened the case (nothing is logged for it)
+    const openedAt = capped(addTime(createdAt, int(1, 10) * HOUR));
 
     if (plan.status === 'resolved' || plan.status === 'dismissed') {
       const actedAt = addTime(createdAt, int(11, 30) * HOUR);
@@ -2020,19 +2016,19 @@ export async function seedDatabase({ log = console.log } = {}) {
       const reportedFamily = target.reported;
       const notice = REPORT_CATEGORY_NOTICES[plan.category];
       const clause = SANCTION_POLICY_MATRIX[plan.category].clause;
-      // Closed by the admin who claimed it, or by the Sentinel AI alone (never claimed)
+      // Closed by the admin, or by the Sentinel AI alone
       const actorId = plan.auto ? null : admin._id;
       const actorType = plan.auto ? 'system' : 'admin';
-      const openStatus = plan.auto ? 'pending' : 'reviewing';
+      const openStatus = 'pending';
       const overrideReason = plan.override || '';
-      // A moment between the claim and the sanction
-      const during = (share) => new Date(claimedAt.getTime() + (actedAt.getTime() - claimedAt.getTime()) * share);
+      // A moment between opening the case and the decision
+      const during = (share) => new Date(openedAt.getTime() + (actedAt.getTime() - openedAt.getTime()) * share);
       const event = (eventType, at, note, metadata = null, statuses = [openStatus, openStatus]) =>
         report.history.push({ eventType, fromStatus: statuses[0], toStatus: statuses[1], by: actorId, actorType, at, note, metadata });
 
       if (plan.reopened) {
-        event('status_change', during(0.3), 'Đóng báo cáo: chưa đủ căn cứ.', { resolution: 'dismissed' }, ['reviewing', 'dismissed']);
-        event('reopen', during(0.6), 'Người báo cáo bổ sung thông tin, mở lại để xem xét.', null, ['dismissed', 'reviewing']);
+        event('status_change', during(0.3), 'Đóng báo cáo: chưa đủ căn cứ.', { resolution: 'dismissed' }, ['pending', 'dismissed']);
+        event('reopen', during(0.6), 'Người báo cáo bổ sung thông tin, mở lại để xem xét.', null, ['dismissed', 'pending']);
       }
       if (plan.severityChange) {
         const oldSeverity = report.severity;
@@ -2069,6 +2065,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       };
       const tellReported = (title, body) => notify(reportedFamily, 'system', title, body, { reportId: report._id }, actedAt);
 
+      let liftedAt = null;
       switch (plan.action) {
         case 'warn':
           applied('warn', 'Đã cảnh cáo tài khoản, theo dõi thêm 30 ngày.');
@@ -2093,7 +2090,11 @@ export async function seedDatabase({ log = console.log } = {}) {
           applied('suspend', `Tạm đình chỉ ${plan.durationDays} ngày.`, plan.durationDays);
           tellReported('Tài khoản bị tạm đình chỉ', `Tài khoản của bạn bị tạm đình chỉ ${plan.durationDays} ngày, đến ${formatVnDate(until)}, do vi phạm quy chuẩn cộng đồng: ${notice}.`);
           notifyAdmin('users', 'account_locked', 'warning', 'Tài khoản đã bị khoá', `Tài khoản ${reportedFamily.user.email} đã được khoá.`, 'User', reportedFamily.user._id, actedAt);
-          if (until > NOW) {
+          if (plan.lifted) {
+            // Unlocked from the users page a day later, before the end of the suspension
+            liftedAt = minDate(addTime(actedAt, DAY), addTime(until, -HOUR), addTime(WINDOW_END, -HOUR));
+            notifyAdmin('users', 'account_unlocked', 'info', 'Tài khoản được mở khoá', `Tài khoản ${reportedFamily.user.email} đã được mở khoá.`, 'User', reportedFamily.user._id, liftedAt);
+          } else if (until > NOW) {
             reportedFamily.user.isActive = false;
             reportedFamily.user.suspensionUntil = until;
             lockedFamilies.add(reportedFamily);
@@ -2126,6 +2127,8 @@ export async function seedDatabase({ log = console.log } = {}) {
         : plan.note || sanction.note;
       report.resolvedBy = actorId;
       report.resolvedAt = closedAt;
+      // The reports closed by this decision are one row of the queue
+      report.closedCaseId = report._id;
       event(
         'status_change',
         closedAt,
@@ -2135,6 +2138,21 @@ export async function seedDatabase({ log = console.log } = {}) {
       );
       report.sentinelAssessment.autoResolved = Boolean(plan.auto);
       report.updatedAt = closedAt;
+      if (liftedAt) {
+        const endedAt = new Date(Math.max(liftedAt.getTime(), closedAt.getTime() + MINUTE));
+        const until = addTime(actedAt, plan.durationDays * DAY);
+        report.history.push({
+          eventType: 'sanction_lifted',
+          fromStatus: plan.status,
+          toStatus: plan.status,
+          by: admin._id,
+          actorType: 'admin',
+          at: endedAt,
+          note: `Admin mở khóa tài khoản sớm (án đình chỉ đến ${formatVnDate(until)}) — Lý do: ${plan.lifted}`,
+          metadata: { lockType: 'suspended', suspensionUntil: until, reason: plan.lifted },
+        });
+        report.updatedAt = endedAt;
+      }
 
       // The other parent who reported the same account: closed with the same sanction (propagatedFrom)
       const coReporter = coReporters[0];
@@ -2161,7 +2179,7 @@ export async function seedDatabase({ log = console.log } = {}) {
         sibling.actions.push({ ...sanction, propagatedFrom: report._id, note });
         sibling.history.push({ eventType: 'action_applied', fromStatus: 'pending', toStatus: 'pending', by: actorId, actorType, at: actedAt, note, metadata: { actionType: sanction.type, sourceReportId: report._id } });
         sibling.history.push({ eventType: 'status_change', fromStatus: 'pending', toStatus: plan.status, by: actorId, actorType, at: closedAt, note: 'Đóng cùng báo cáo liên quan về cùng tài khoản.', metadata: { sourceReportId: report._id, autoResolved: Boolean(plan.auto) } });
-        Object.assign(sibling, { status: plan.status, resolution: report.resolution, adminNotes: report.adminNotes, resolvedBy: actorId, resolvedAt: closedAt, updatedAt: closedAt });
+        Object.assign(sibling, { status: plan.status, resolution: report.resolution, adminNotes: report.adminNotes, resolvedBy: actorId, resolvedAt: closedAt, closedCaseId: report.targetType === 'user' && report.category === sibling.category ? report._id : sibling._id, updatedAt: closedAt });
         sibling.sentinelAssessment.autoResolved = Boolean(plan.auto);
         reports.push(sibling);
       }

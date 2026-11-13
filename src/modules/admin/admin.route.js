@@ -30,7 +30,7 @@ import {
   listReportsValidation,
   reportStatsValidation,
   reportIdParamValidation,
-  reviewReportValidation,
+  decideReportValidation,
   updateReportSeverityValidation,
   applyReportActionValidation,
   resolveReportValidation,
@@ -120,7 +120,7 @@ router.post(
   adminController.resolveSentinelCluster
 );
 router.get('/reports/:id', validate(reportIdParamValidation), adminController.getReportDetail);
-router.patch('/reports/:id/review', validate(reviewReportValidation), adminController.reviewReport);
+router.post('/reports/:id/decide', validate(decideReportValidation), adminController.decideReport);
 router.patch('/reports/:id/severity', validate(updateReportSeverityValidation), adminController.updateReportSeverity);
 router.post('/reports/:id/action', validate(applyReportActionValidation), adminController.applyReportAction);
 router.patch('/reports/:id/resolve', validate(resolveReportValidation), adminController.resolveReport);

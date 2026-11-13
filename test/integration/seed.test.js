@@ -334,7 +334,7 @@ describe('Demo data seed', () => {
     expect(await Playdate.countDocuments({ _id: { $in: rated }, status: { $ne: 'completed' } })).toBe(0);
 
     const reports = await Report.find({}).lean();
-    expect([...new Set(reports.map((r) => r.status))].sort()).toEqual(['dismissed', 'pending', 'resolved', 'reviewing']);
+    expect([...new Set(reports.map((r) => r.status))].sort()).toEqual(['dismissed', 'pending', 'resolved']);
     for (const report of reports) {
       expect(report.severity).toBeTruthy();
       if (report.status === 'resolved') expect(report.actions.length).toBeGreaterThan(0);

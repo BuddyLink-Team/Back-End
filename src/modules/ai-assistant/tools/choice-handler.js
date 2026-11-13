@@ -26,7 +26,7 @@ import {
 } from '../plan-draft.rules.js';
 import { advancePlan, showStep, suggestAgenda, ownScheduleConflict } from './plan-steps.js';
 import { PLAYDATE_RULES } from '../../playdate/playdate.constants.js';
-import { applyPlanFields, applyPlace } from './propose-playdate.tool.js';
+import { applyPlanFields, applyPlace, resetAgendaOnNewPlace } from './propose-playdate.tool.js';
 import { buildCriteria, searchMatches } from './find-matches.tool.js';
 import { sendConnectionRequests } from './send-connection-requests.tool.js';
 
@@ -300,7 +300,10 @@ export const applyChoice = async (ctx, session, choice) => {
       const place = custom || options[0].data;
       if (!String(place.name || '').trim()) throw invalidChoice();
       // A place picked in the search keeps its cached details (type, opening hours, attractions)
+      const previousPlace = ctx.draft.location?.name || null;
       await applyPlace(ctx, place);
+      // Another place than before: the games reviewed for the previous one are suggested again
+      resetAgendaOnNewPlace(ctx.draft, previousPlace);
       result = await advancePlan(ctx);
       break;
     }
@@ -344,7 +347,9 @@ export const applyChoice = async (ctx, session, choice) => {
       draft.agendaConfirmed = true;
       answered = { customAnswer: { agenda } };
       result = await advancePlan(ctx);
+      // The parent's list is final: the model only comments, it does not rewrite the games
       instruction = NOTES.default;
+      allowTools = false;
       break;
     }
     case AI_STEPS.EXTRA: {

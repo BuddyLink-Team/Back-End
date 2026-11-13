@@ -7,6 +7,7 @@ import safetyService from '../safety/safety.service.js';
 import sentinelService from '../safety/sentinel.service.js';
 import sanctionExecutorService from '../safety/sanction-executor.service.js';
 import { calculatePolicySanction, checkActionPolicyCompliance } from '../safety/moderation-policy.rules.js';
+import { caseKeyOf } from '../safety/enforcement-metrics.rules.js';
 import chatService from '../chat/chat.service.js';
 import notificationService from '../notification/notification.service.js';
 import { NOTIFICATION_TYPES } from '../notification/notification.constants.js';
@@ -15,7 +16,7 @@ import logger from '../../shared/logger/index.js';
 import env from '../../config/env.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { getZonedParts, getZonedDayRange } from '../../shared/helpers/date.helper.js';
-import { ADMIN_REPORT_ERRORS } from './admin.constants.js';
+import { ADMIN_REPORT_ERRORS, REPORT_DECISIONS } from './admin.constants.js';
 import { emitUserEvent, USER_EVENTS } from '../user/user.events.js';
 import {
   toOptionalBoolean,
@@ -72,20 +73,22 @@ const formatNoticeDate = (date) => date.toLocaleString('vi-VN', { timeZone: env.
 
 class AdminReportService {
   /**
-   * Moderation queue: severity then oldest first, unless another order is asked for
+   * Moderation queue by case: the reports about the same content are one row, with how many parents
+   * reported it. Severity then oldest first, unless another order is asked for.
    * @param {Object} queryParams
-   * @param {string|ObjectId} currentAdminUserId - Who assignedTo=me is
    */
-  async getReports(queryParams, currentAdminUserId) {
+  async getReports(queryParams) {
     const paging = toPaging(queryParams);
     const search = queryParams.search?.trim();
+    // The Excel export lists every report on its own line (view=reports)
+    const isByReport = queryParams.view === 'reports';
+    const findPage = isByReport ? safetyService.findReportPage : safetyService.findCasePage;
 
-    const { items: reports, total } = await safetyService.findReportPage({
+    const { items: reports, total } = await findPage.call(safetyService, {
       status: queryParams.status,
       severity: queryParams.severity,
       category: queryParams.category,
       targetType: queryParams.targetType,
-      assignedTo: queryParams.assignedTo === 'me' ? currentAdminUserId : queryParams.assignedTo,
       from: toDateBound(queryParams.fromDate),
       to: toDateBound(queryParams.toDate, { endOfDay: true }),
       search,
@@ -94,8 +97,28 @@ class AdminReportService {
       sort: queryParams.sort,
       ...paging,
     });
+    // Every report of each case, whatever the filters kept: the row counts all of its reporters
+    const caseReports = isByReport
+      ? []
+      : await Promise.all(reports.map((report) => safetyService.getCaseReports(report)));
+    return {
+      items: await this._toReportListItems(reports, caseReports),
+      pagination: toPagination(paging, total),
+    };
+  }
 
-    const parentIds = [...new Set(reports.flatMap((report) => [String(report.reporterId), String(report.reportedUserId)]))];
+  /**
+   * List items of reports, each with the reports of its case when given
+   * @private
+   * @param {Array<Object>} reports
+   * @param {Array<Array<Object>>} [caseReports] - Reports of the case of each report, same order
+   */
+  async _toReportListItems(reports, caseReports = []) {
+    const parentIds = [
+      ...new Set(
+        [...reports, ...caseReports.flat()].flatMap((report) => [String(report.reporterId), String(report.reportedUserId)])
+      ),
+    ];
     const parents = await parentService.getParentsByIds(parentIds);
     const [users, actorsById, messageContents] = await Promise.all([
       userService.getUsersByIds(parents.map((parent) => parent.userId).filter(Boolean)),
@@ -106,25 +129,49 @@ class AdminReportService {
     const userById = new Map(users.map((user) => [String(user._id), user]));
     const toUser = (parent) => (parent ? userById.get(String(parent.userId)) : null);
 
-    return {
-      items: reports.map((report) => {
-        const reporterParent = parentById.get(String(report.reporterId));
-        const reportedParent = parentById.get(String(report.reportedUserId));
-        return AdminReportListItemDTO.toResponse({
-          report,
-          reporterParent,
-          reporterUser: toUser(reporterParent),
-          reportedParent,
-          reportedUser: toUser(reportedParent),
-          actorsById,
-          isOverdue: checkIsOverdue(report),
-          reportedMessageContent: report.targetMessageId
-            ? messageContents.get(String(report.targetMessageId)) || null
-            : null,
-        });
-      }),
-      pagination: toPagination(paging, total),
-    };
+    return reports.map((report, index) => {
+      const reporterParent = parentById.get(String(report.reporterId));
+      const reportedParent = parentById.get(String(report.reportedUserId));
+      const members = caseReports[index] || [report];
+      const reporterIds = [...new Set(members.map((member) => String(member.reporterId)))];
+      // The case is as old as its first report and as severe as its worst one
+      const first = members[0] || report;
+      const worst = members.reduce(
+        (found, member) =>
+          (REPORT_SEVERITY_WEIGHTS[member.severity] || 0) > (REPORT_SEVERITY_WEIGHTS[found.severity] || 0) ? member : found,
+        report
+      );
+      return AdminReportListItemDTO.toResponse({
+        report,
+        reporterParent,
+        reporterUser: toUser(reporterParent),
+        reportedParent,
+        reportedUser: toUser(reportedParent),
+        actorsById,
+        isOverdue: members.some(checkIsOverdue),
+        reportedMessageContent: report.targetMessageId
+          ? messageContents.get(String(report.targetMessageId)) || null
+          : null,
+        caseSummary: {
+          reportCount: members.length,
+          reporterCount: reporterIds.length,
+          reporterNames: reporterIds.map((id) => parentById.get(id)?.fullName).filter(Boolean),
+          firstReportedAt: first.createdAt,
+          severity: worst.severity,
+        },
+      });
+    });
+  }
+
+  /**
+   * Open reports one by one (not by case), with their Sentinel assessment: the scan overview groups them
+   * by reported parent itself.
+   * @private
+   * @param {number} limit
+   */
+  async _listOpenReports(limit) {
+    const { items } = await safetyService.findReportPage({ statuses: REPORT_OPEN_STATUSES, page: 1, limit });
+    return this._toReportListItems(items);
   }
 
   /**
@@ -231,11 +278,60 @@ class AdminReportService {
         })
       : null;
 
-    let policyGuidance = ruleSnapshot?.policyResult || null;
-    if (!policyGuidance && report.sentinelAssessment?.assessedAt) {
-      const priorSanctionsCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report);
-      policyGuidance = calculatePolicySanction(report.category, report.severity, priorSanctionsCount, report.targetType);
-    }
+    // The matrix is always shown (the decision dialog preselects its sanctions); leaving it only needs a
+    // policy override once the AI assessed the report
+    const priorViolationCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report);
+    const policyGuidance =
+      ruleSnapshot?.policyResult ||
+      calculatePolicySanction(report.category, report.severity, priorViolationCount, report.targetType);
+
+    // The case: every report about the same content, decided together
+    const members = await safetyService.getCaseReports(report);
+    const memberParents = await parentService.getParentsByIds([...new Set(members.map((member) => String(member.reporterId)))]);
+    const memberUsers = await userService.getUsersByIds(memberParents.map((parent) => parent.userId).filter(Boolean));
+    const memberParentById = new Map(memberParents.map((parent) => [String(parent._id), parent]));
+    const memberUserById = new Map(memberUsers.map((user) => [String(user._id), user]));
+    const caseReports = members.map((member) => {
+      const parent = memberParentById.get(String(member.reporterId));
+      return AdminReportDetailDTO.toCaseReport({
+        report: member,
+        reporterParent: parent,
+        reporterUser: parent ? memberUserById.get(String(parent.userId)) : null,
+      });
+    });
+
+    // Other open cases against the same parent, by case
+    const ownCaseKey = isOpen ? caseKeyOf(report) : null;
+    const openAgainst = await safetyService.findOpenReportsAgainst(report.reportedUserId);
+    const otherCases = new Map();
+    openAgainst
+      .filter((other) => caseKeyOf(other) !== ownCaseKey)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+      .forEach((other) => {
+        const key = caseKeyOf(other);
+        const found = otherCases.get(key);
+        if (!found) {
+          otherCases.set(key, {
+            id: other._id.toString(),
+            targetType: other.targetType,
+            category: other.category,
+            severity: other.severity,
+            createdAt: other.createdAt,
+            reportCount: 1,
+            reporterIds: new Set([String(other.reporterId)]),
+          });
+          return;
+        }
+        found.reportCount += 1;
+        found.reporterIds.add(String(other.reporterId));
+        if ((REPORT_SEVERITY_WEIGHTS[other.severity] || 0) > (REPORT_SEVERITY_WEIGHTS[found.severity] || 0)) {
+          found.severity = other.severity;
+        }
+      });
+    const otherOpenCases = [...otherCases.values()].map(({ reporterIds, ...item }) => ({
+      ...item,
+      reporterCount: reporterIds.size,
+    }));
     const reportView = ruleSnapshot
       ? {
           ...report,
@@ -259,52 +355,13 @@ class AdminReportService {
       pastReports,
       previousSanctions,
       policyGuidance,
-      isOverdue: checkIsOverdue(report),
+      isPolicyEnforced: Boolean(report.sentinelAssessment?.assessedAt),
+      isOverdue: members.some(checkIsOverdue),
       totalReportsSubmitted,
+      caseReports,
+      otherOpenCases,
+      priorViolationCount,
     });
-  }
-
-  /**
-   * Claim or take over a report
-   * @param {string} adminUserId
-   * @param {string} id
-   * @param {{ action: 'claim' | 'takeover' }} param2
-   */
-  async reviewReport(adminUserId, id, { action }) {
-    const report = await this._getReportDocOrFail(id);
-
-    if (action === 'claim') {
-      if (!REPORT_OPEN_STATUSES.includes(report.status)) {
-        throw new AppError('Can only claim pending or reviewing reports', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
-      }
-      const fromStatus = report.status;
-      report.status = REPORT_STATUS.REVIEWING;
-      report.assignedTo = adminUserId;
-      report.history.push({
-        eventType: REPORT_HISTORY_EVENT_TYPES.CLAIM,
-        fromStatus,
-        toStatus: REPORT_STATUS.REVIEWING,
-        by: adminUserId,
-        at: new Date(),
-        note: 'Tiếp nhận xử lý vụ việc',
-      });
-    } else if (action === 'takeover') {
-      if (report.status !== REPORT_STATUS.REVIEWING) {
-        throw new AppError('Can only takeover reports in reviewing status', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
-      }
-      report.assignedTo = adminUserId;
-      report.history.push({
-        eventType: REPORT_HISTORY_EVENT_TYPES.TAKEOVER,
-        fromStatus: REPORT_STATUS.REVIEWING,
-        toStatus: REPORT_STATUS.REVIEWING,
-        by: adminUserId,
-        at: new Date(),
-        note: 'Tiếp quản xử lý vụ việc từ người khác',
-      });
-    }
-
-    await safetyService.saveReport(report);
-    return this.getReportDetail(id);
   }
 
   /**
@@ -329,8 +386,8 @@ class AdminReportService {
   async updateReportSeverity(adminUserId, id, { severity, note }) {
     const report = await this._getReportDocOrFail(id);
 
-    if (report.status !== REPORT_STATUS.REVIEWING) {
-      throw new AppError('Can only change severity when reviewing', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
+    if (!REPORT_OPEN_STATUSES.includes(report.status)) {
+      throw new AppError('Can only change the severity of an open report', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
     }
 
     const oldSeverity = report.severity;
@@ -356,14 +413,26 @@ class AdminReportService {
    * @param {string} id
    * @param {{ type: string, durationDays?: number, note?: string, isPolicyOverride?: boolean, overrideReason?: string }} param2
    */
-  async applyReportAction(adminUserId, id, { type, durationDays, note, isPolicyOverride = false, overrideReason = '' }) {
+  async applyReportAction(adminUserId, id, options, { isSilent = false } = {}) {
+    const report = await this._executeReportAction(adminUserId, id, { ...options, isSilent });
+    await this._refreshRuleSnapshots(report.reportedUserId);
+    return this.getReportDetail(id);
+  }
+
+  /**
+   * Run one sanction on an open report and record it (action, history). The report stays open.
+   * @private
+   * @returns {Promise<Document>} The saved report
+   */
+  async _executeReportAction(
+    adminUserId,
+    id,
+    { type, durationDays, note, isPolicyOverride = false, overrideReason = '', isSilent = false }
+  ) {
     const report = await this._getReportDocOrFail(id);
 
     if (REPORT_CLOSED_STATUSES.includes(report.status)) {
       throw new AppError('Cannot apply action on closed report', 409, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
-    }
-    if (report.status !== REPORT_STATUS.REVIEWING) {
-      throw new AppError('Start reviewing the report before applying an action', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
     }
     if (!REPORT_SANCTION_TYPES.includes(type)) {
       throw new AppError('This action cannot be applied as a sanction', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
@@ -404,11 +473,11 @@ class AdminReportService {
     const targetUser = await userService.liftExpiredSuspension(await userService.getUserById(reportedParent.userId));
 
     const sanctions = {
-      [REPORT_ACTION_TYPES.WARN]: () => this._warnReportedUser(report, targetUser),
-      [REPORT_ACTION_TYPES.DELETE_MESSAGE]: () => this._deleteReportedMessage(report, targetUser),
+      [REPORT_ACTION_TYPES.WARN]: () => this._warnReportedUser(report, targetUser, isSilent),
+      [REPORT_ACTION_TYPES.DELETE_MESSAGE]: () => this._deleteReportedMessage(report, targetUser, isSilent),
       [REPORT_ACTION_TYPES.CANCEL_PLAYDATE]: () => this._cancelReportedPlaydate(report, note),
-      [REPORT_ACTION_TYPES.SUSPEND]: () => this._suspendReportedUser(report, targetUser, durationDays),
-      [REPORT_ACTION_TYPES.BAN]: () => this._banReportedUser(report, targetUser, note),
+      [REPORT_ACTION_TYPES.SUSPEND]: () => this._suspendReportedUser(report, targetUser, durationDays, isSilent),
+      [REPORT_ACTION_TYPES.BAN]: () => this._banReportedUser(report, targetUser, note, isSilent),
     };
     await sanctions[type]();
 
@@ -451,8 +520,7 @@ class AdminReportService {
     }
 
     await safetyService.saveReport(report);
-    await this._refreshRuleSnapshots(report.reportedUserId);
-    return this.getReportDetail(id);
+    return report;
   }
 
   _assertActionTarget(report, type) {
@@ -497,7 +565,7 @@ class AdminReportService {
    * @param {{ note?: string }} [options] - Admin's approval note, kept in the audit log
    * @returns {Promise<Object>} Report detail, with `sentinelApplyResult: { applied, failed, notApplicable }`
    */
-  async applySentinelRecommendation(adminUserId, id, { note = '' } = {}) {
+  async applySentinelRecommendation(adminUserId, id, { note = '' } = {}, { useDraftNotice = false } = {}) {
     const report = await this._getReportDocOrFail(id);
 
     if (REPORT_CLOSED_STATUSES.includes(report.status)) {
@@ -512,19 +580,6 @@ class AdminReportService {
     const assessment = currentReport.sentinelAssessment;
     if (!assessment) {
       throw new AppError('No Sentinel assessment available for this report', 400, 'NO_SENTINEL_ASSESSMENT');
-    }
-
-    if (currentReport.status === REPORT_STATUS.PENDING) {
-      currentReport.status = REPORT_STATUS.REVIEWING;
-      currentReport.assignedTo = adminUserId;
-      currentReport.history.push({
-        eventType: REPORT_HISTORY_EVENT_TYPES.CLAIM,
-        fromStatus: REPORT_STATUS.PENDING,
-        toStatus: REPORT_STATUS.REVIEWING,
-        by: adminUserId,
-        at: new Date(),
-        note: 'Tiếp nhận xử lý vụ việc qua Sentinel 1-Click Approve',
-      });
     }
 
     if (assessment.severityRecommendation && currentReport.severity !== assessment.severityRecommendation) {
@@ -568,6 +623,7 @@ class AdminReportService {
     });
 
     const appliedTypes = [];
+    const offenderNotice = useDraftNotice ? (assessment.draftNotes?.reportedUserNotice || '').trim() : '';
     const failed = plan.blockers.map((b) => ({
       type: b.type,
       code: b.code,
@@ -578,16 +634,21 @@ class AdminReportService {
     if (failed.length === 0) {
       for (const sanction of plan.executable) {
         try {
-          await this.applyReportAction(adminUserId, id, {
-            type: sanction.type,
-            durationDays: sanction.durationDays,
-            note:
-              approvalNote ||
-              sanction.reason ||
-              assessment.draftNotes?.adminNote ||
-              `Thi hành theo đề xuất Sentinel (${policyClause})`,
-            isPolicyOverride: false,
-          });
+          await this.applyReportAction(
+            adminUserId,
+            id,
+            {
+              type: sanction.type,
+              durationDays: sanction.durationDays,
+              note:
+                approvalNote ||
+                sanction.reason ||
+                assessment.draftNotes?.adminNote ||
+                `Thi hành theo đề xuất Sentinel (${policyClause})`,
+              isPolicyOverride: false,
+            },
+            { isSilent: Boolean(offenderNotice) }
+          );
           appliedTypes.push(sanction.type);
         } catch (err) {
           if (err.code !== ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED) {
@@ -617,6 +678,10 @@ class AdminReportService {
       return { ...detail, sentinelApplyResult: { applied: appliedTypes, failed, notApplicable } };
     }
 
+    if (offenderNotice && appliedTypes.length > 0) {
+      await this._sendOffenderNotice(currentReport.reportedUserId, offenderNotice, currentReport._id);
+    }
+
     // The report stays open: the admin concludes it (notes, related reports) from the drawer
     await this._refreshRuleSnapshots(currentReport.reportedUserId);
     const detail = await this.getReportDetail(id);
@@ -635,12 +700,7 @@ class AdminReportService {
       limit: 20,
     });
 
-    const targets = items.filter((r) => {
-      if (r.status === REPORT_STATUS.REVIEWING && r.assignedTo && String(r.assignedTo) !== String(adminUserId)) {
-        return false;
-      }
-      return true;
-    });
+    const targets = items;
 
     const failedIds = [];
     const assessOne = async (item) => {
@@ -684,11 +744,7 @@ class AdminReportService {
       }
     }
 
-    const { items: refreshedItems } = await this.getReports({
-      page: 1,
-      limit: 20,
-      statuses: REPORT_OPEN_STATUSES,
-    });
+    const refreshedItems = await this._listOpenReports(20);
 
     return {
       scannedCount,
@@ -765,7 +821,12 @@ class AdminReportService {
       if (isHeavy) {
         violations.forEach((doc) => skip(doc, 'Đề xuất khóa tài khoản hoặc đình chỉ trên 7 ngày — cần Admin xác nhận trong chi tiết'));
       } else {
-        const applyResult = await this.applySentinelRecommendation(adminUserId, primaryId, { note: approvalNote });
+        const applyResult = await this.applySentinelRecommendation(
+          adminUserId,
+          primaryId,
+          { note: approvalNote },
+          { useDraftNotice: true }
+        );
         const { applied = [], failed = [] } = applyResult.sentinelApplyResult || {};
         result.applied = applied;
         if (failed.length > 0) {
@@ -778,16 +839,34 @@ class AdminReportService {
             approvalNote ||
             primaryDoc.sentinelAssessment?.draftNotes?.adminNote ||
             'Xử lý nhanh cụm báo cáo theo đề xuất của Sentinel AI.';
-          await this.resolveReport(adminUserId, primaryId, {
-            status: REPORT_STATUS.RESOLVED,
-            resolution: officialActions.length > 0 ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN : REPORT_RESOLUTION_TYPES.NO_ACTION,
-            adminNotes: notes,
-          });
+          const reporterNotice = primaryDoc.sentinelAssessment?.draftNotes?.reporterFeedback || '';
+          await this.resolveReport(
+            adminUserId,
+            primaryId,
+            {
+              status: REPORT_STATUS.RESOLVED,
+              resolution: officialActions.length > 0 ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN : REPORT_RESOLUTION_TYPES.NO_ACTION,
+              adminNotes: notes,
+            },
+            { reporterNotice }
+          );
           result.sanctionedReportId = primaryId;
           result.resolved.push(primaryId);
 
+          // Reports about the same content share a row of the queue
+          const caseIds = new Map([[caseKeyOf(primaryDoc), primaryDoc._id]]);
           for (const other of others) {
-            const closed = await this._closeAsSameCase(adminUserId, other._id, primaryDoc, officialActions, notes);
+            const key = caseKeyOf(other);
+            if (!caseIds.has(key)) caseIds.set(key, other._id);
+            const closed = await this._closeAsSameCase(
+              adminUserId,
+              other._id,
+              primaryDoc,
+              officialActions,
+              notes,
+              caseIds.get(key),
+              reporterNotice
+            );
             if (closed) result.resolved.push(other._id.toString());
             else skip(other, 'Báo cáo đã có chế tài riêng — cần Admin kết luận trong chi tiết');
           }
@@ -795,20 +874,31 @@ class AdminReportService {
       }
     }
 
+    const dismissedCaseIds = new Map();
     for (const doc of noViolations) {
       if ((doc.actions || []).some((action) => !action.isProvisional)) {
         skip(doc, 'AI kết luận không vi phạm nhưng báo cáo đã có chế tài — cần Admin kết luận');
         continue;
       }
       try {
-        await this.resolveReport(adminUserId, doc._id.toString(), {
-          status: REPORT_STATUS.DISMISSED,
-          resolution: REPORT_RESOLUTION_TYPES.DISMISSED,
-          adminNotes:
-            approvalNote ||
-            doc.sentinelAssessment?.draftNotes?.adminNote ||
-            'Bác bỏ theo kết luận của Sentinel AI: không có vi phạm.',
-        });
+        const key = caseKeyOf(doc);
+        if (!dismissedCaseIds.has(key)) dismissedCaseIds.set(key, doc._id);
+        await this.resolveReport(
+          adminUserId,
+          doc._id.toString(),
+          {
+            status: REPORT_STATUS.DISMISSED,
+            resolution: REPORT_RESOLUTION_TYPES.DISMISSED,
+            adminNotes:
+              approvalNote ||
+              doc.sentinelAssessment?.draftNotes?.adminNote ||
+              'Bác bỏ theo kết luận của Sentinel AI: không có vi phạm.',
+          },
+          {
+            closedCaseId: dismissedCaseIds.get(key),
+            reporterNotice: doc.sentinelAssessment?.draftNotes?.reporterFeedback || '',
+          }
+        );
         result.dismissed.push(doc._id.toString());
       } catch (err) {
         result.failed.push({ id: doc._id.toString(), code: err.code || 'INTERNAL_ERROR' });
@@ -828,7 +918,7 @@ class AdminReportService {
    * @private
    * @returns {Promise<boolean>} Whether the report was closed
    */
-  async _closeAsSameCase(adminUserId, reportId, sourceDoc, sourceActions, notes) {
+  async _closeAsSameCase(adminUserId, reportId, sourceDoc, sourceActions, notes, closedCaseId = null, reporterNotice = '') {
     const report = await this._getReportDocOrFail(reportId);
     if (!REPORT_OPEN_STATUSES.includes(report.status)) return false;
     if ((report.actions || []).some((action) => !action.isProvisional)) return false;
@@ -858,8 +948,8 @@ class AdminReportService {
       actorType: 'admin',
       at: now,
       note: shared.length > 0
-        ? `Xử lý chung cụm với báo cáo ${sourceDoc._id}: ${toActionLabels(shared.map((a) => a.type))}`
-        : `Xử lý chung cụm với báo cáo ${sourceDoc._id}`,
+        ? `Xử lý chung với báo cáo chính của cụm: ${toActionLabels(shared.map((a) => a.type))}`
+        : `Xử lý chung với báo cáo chính của cụm`,
       metadata: { sourceReportId: sourceDoc._id },
     });
     this._closeReport(report, {
@@ -867,11 +957,12 @@ class AdminReportService {
       status: REPORT_STATUS.RESOLVED,
       resolution: shared.length > 0 ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN : REPORT_RESOLUTION_TYPES.NO_ACTION,
       adminNotes: notes,
-      historyNote: `Đóng cùng cụm với báo cáo ${sourceDoc._id}: ${notes}`,
+      historyNote: `Đóng cùng báo cáo chính của cụm: ${notes}`,
       historyMetadata: { sourceReportId: sourceDoc._id },
+      closedCaseId,
     });
     await safetyService.saveReport(report);
-    await this._notifyReporter(report, REPORT_STATUS.RESOLVED);
+    await this._notifyReporter(report, REPORT_STATUS.RESOLVED, reporterNotice);
     return true;
   }
 
@@ -992,14 +1083,16 @@ class AdminReportService {
    * @param {string} id
    * @param {{ status: string, resolution: string, adminNotes: string, applyToRelatedReportIds?: string[] }} param2
    */
-  async resolveReport(adminUserId, id, { status, resolution, adminNotes, applyToRelatedReportIds = [] }) {
+  async resolveReport(
+    adminUserId,
+    id,
+    { status, resolution, adminNotes, applyToRelatedReportIds = [] },
+    { closedCaseId = null, reporterNotice = '' } = {}
+  ) {
     const report = await this._getReportDocOrFail(id);
 
     if (REPORT_CLOSED_STATUSES.includes(report.status)) {
       throw new AppError('Report is already closed', 409, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
-    }
-    if (status === REPORT_STATUS.RESOLVED && report.status !== REPORT_STATUS.REVIEWING) {
-      throw new AppError('A report must be reviewed before it is resolved', 400, ADMIN_REPORT_ERRORS.INVALID_STATUS_TRANSITION);
     }
     if ((status === REPORT_STATUS.DISMISSED) !== (resolution === REPORT_RESOLUTION_TYPES.DISMISSED)) {
       throw new AppError('The resolution does not match the status', 400, ADMIN_REPORT_ERRORS.INVALID_RESOLUTION);
@@ -1024,9 +1117,9 @@ class AdminReportService {
     }
 
     const note = adminNotes.trim();
-    this._closeReport(report, { adminUserId, status, resolution, adminNotes: note, historyNote: note });
+    this._closeReport(report, { adminUserId, status, resolution, adminNotes: note, historyNote: note, closedCaseId });
     await safetyService.saveReport(report);
-    await this._notifyReporter(report, status);
+    await this._notifyReporter(report, status, reporterNotice);
 
     if (closesRelatedReports) {
       const relatedReports = await safetyService.getOpenReportDocsAgainst(report.reportedUserId, applyToRelatedReportIds);
@@ -1048,7 +1141,7 @@ class AdminReportService {
             by: adminUserId,
             actorType: 'admin',
             at: new Date(),
-            note: `Áp dụng chế tài ${toActionLabels([action.type])} theo báo cáo ${report._id}`,
+            note: `Áp dụng chế tài ${toActionLabels([action.type])} theo báo cáo chính của cụm`,
             metadata: { actionType: action.type, sourceReportId: report._id },
           });
         });
@@ -1057,7 +1150,7 @@ class AdminReportService {
           status,
           resolution,
           adminNotes: note,
-          historyNote: `Đóng đồng loạt theo báo cáo ${report._id}: ${note}`,
+          historyNote: `Đóng đồng loạt theo báo cáo chính của cụm: ${note}`,
           historyMetadata: { sourceReportId: report._id },
         });
         await safetyService.saveReport(related);
@@ -1069,6 +1162,249 @@ class AdminReportService {
 
     await this._refreshRuleSnapshots(report.reportedUserId);
     return this.getReportDetail(id);
+  }
+
+  /**
+   * Decide a case in one step: every open report about the same content is closed by this decision.
+   * - violation: the chosen sanctions run ONCE, on the report the decision is taken on; the other reports of
+   *   the case are closed with it (propagated copies, never an extra strike). No sanction chosen means a
+   *   violation without discipline.
+   * - no_violation: every report of the case is dismissed.
+   * Other open cases against the same parent can be closed with it as the same matter (`alsoCloseReportIds`,
+   * one report of each): they get no sanction of their own.
+   * Everything is checked before anything runs, so a case is never left half-sanctioned.
+   * @param {string} adminUserId
+   * @param {string} id - A report of the case
+   * @param {{ outcome: string, sanctions?: Array<{ type: string, durationDays?: number }>, notes: string,
+   *   isPolicyOverride?: boolean, overrideReason?: string, alsoCloseReportIds?: string[] }} payload
+   * @returns {Promise<Object>} Report detail, with `decision: { closedCount, skipped, notApplicable }`
+   */
+  async decideReport(
+    adminUserId,
+    id,
+    {
+      outcome,
+      sanctions = [],
+      notes,
+      isPolicyOverride = false,
+      overrideReason = '',
+      alsoCloseReportIds = [],
+      reportedUserNotice = '',
+      reporterNotice = '',
+    }
+  ) {
+    const primary = await this._getReportDocOrFail(id);
+    if (REPORT_CLOSED_STATUSES.includes(primary.status)) {
+      throw new AppError('Report is already closed', 409, ADMIN_REPORT_ERRORS.REPORT_ALREADY_CLOSED);
+    }
+    const note = notes.trim();
+    const offenderNotice = (reportedUserNotice || '').trim();
+    const reporterText = (reporterNotice || '').trim();
+    const primaryId = primary._id.toString();
+    const isViolation = outcome === REPORT_DECISIONS.VIOLATION;
+
+    // The other open reports of this case, then the other cases closed with it (each keeps its own row)
+    const caseMembers = (await safetyService.getCaseReports(primary.toObject())).filter(
+      (member) => String(member._id) !== primaryId
+    );
+    const otherCases = await this._getCasesClosedTogether(primary, alsoCloseReportIds);
+    const followers = [
+      ...caseMembers.map((member) => ({ id: String(member._id), closedCaseId: primary._id, report: member })),
+      ...otherCases.flatMap(({ caseId, reports }) =>
+        reports.map((member) => ({ id: String(member._id), closedCaseId: caseId, report: member }))
+      ),
+    ];
+    const decision = { closedCount: 0, skipped: [], notApplicable: [] };
+
+    if (!isViolation) {
+      // A dismissal says there was no violation: impossible once a sanction was decided on one of the reports
+      const hasOfficialSanction = [primary, ...followers.map((follower) => follower.report)].some((report) =>
+        (report.actions || []).some((action) => !action.isProvisional)
+      );
+      if (hasOfficialSanction) {
+        throw new AppError(
+          'Sanctions were applied to this case: it cannot be dismissed',
+          400,
+          ADMIN_REPORT_ERRORS.RESOLUTION_CONFLICTS_WITH_ACTIONS
+        );
+      }
+      this._closeReport(primary, {
+        adminUserId,
+        status: REPORT_STATUS.DISMISSED,
+        resolution: REPORT_RESOLUTION_TYPES.DISMISSED,
+        adminNotes: note,
+        historyNote: note,
+        closedCaseId: primary._id,
+      });
+      await safetyService.saveReport(primary);
+      await this._notifyReporter(primary, REPORT_STATUS.DISMISSED, reporterText);
+      decision.closedCount += 1;
+
+      for (const follower of followers) {
+        const doc = await this._getReportDocOrFail(follower.id);
+        if (!REPORT_OPEN_STATUSES.includes(doc.status)) continue;
+        this._closeReport(doc, {
+          adminUserId,
+          status: REPORT_STATUS.DISMISSED,
+          resolution: REPORT_RESOLUTION_TYPES.DISMISSED,
+          adminNotes: note,
+          historyNote: `Bác bỏ cùng vụ việc: ${note}`,
+          historyMetadata: { sourceReportId: primary._id },
+          closedCaseId: follower.closedCaseId,
+        });
+        await safetyService.saveReport(doc);
+        await this._notifyReporter(doc, REPORT_STATUS.DISMISSED, reporterText);
+        decision.closedCount += 1;
+      }
+    } else {
+      const plan = await this._planDecisionSanctions(primary, sanctions, { isPolicyOverride, overrideReason });
+      decision.notApplicable = plan.notApplicable;
+      for (const sanction of plan.executable) {
+        await this._executeReportAction(adminUserId, primaryId, {
+          type: sanction.type,
+          durationDays: sanction.durationDays,
+          note,
+          isPolicyOverride: sanction.isOverride,
+          overrideReason: sanction.isOverride ? overrideReason : '',
+          // One notice for the whole decision instead of one per sanction
+          isSilent: Boolean(offenderNotice),
+        });
+      }
+      if (offenderNotice && plan.executable.length > 0) {
+        await this._sendOffenderNotice(primary.reportedUserId, offenderNotice, primary._id);
+      }
+
+      // Reload: each sanction saved a newer version of the report
+      const primaryDoc = await this._getReportDocOrFail(primaryId);
+      const officialActions = (primaryDoc.actions || []).filter((action) => !action.isProvisional);
+      this._closeReport(primaryDoc, {
+        adminUserId,
+        status: REPORT_STATUS.RESOLVED,
+        resolution: officialActions.length > 0 ? REPORT_RESOLUTION_TYPES.ACTION_TAKEN : REPORT_RESOLUTION_TYPES.NO_ACTION,
+        adminNotes: note,
+        historyNote: note,
+        closedCaseId: primaryDoc._id,
+      });
+      await safetyService.saveReport(primaryDoc);
+      await this._notifyReporter(primaryDoc, REPORT_STATUS.RESOLVED, reporterText);
+      decision.closedCount += 1;
+
+      for (const follower of followers) {
+        const isClosed = await this._closeAsSameCase(
+          adminUserId,
+          follower.id,
+          primaryDoc,
+          officialActions,
+          note,
+          follower.closedCaseId,
+          reporterText
+        );
+        if (isClosed) decision.closedCount += 1;
+        else decision.skipped.push({ id: follower.id, reason: 'Báo cáo đã có chế tài riêng hoặc đã đóng' });
+      }
+    }
+
+    await this._liftRestrictionIfNoneLeft(primary.reportedUserId);
+    await this._refreshRuleSnapshots(primary.reportedUserId);
+    return { ...(await this.getReportDetail(primaryId)), decision };
+  }
+
+  /**
+   * The other open cases closed with a decision: one entry per case, with its open reports.
+   * @private
+   * @param {Document} primary - Report the decision is taken on
+   * @param {string[]} reportIds - One report of each case
+   * @returns {Promise<Array<{ caseId: ObjectId, reports: Array<Object> }>>}
+   */
+  async _getCasesClosedTogether(primary, reportIds = []) {
+    const ownKey = caseKeyOf(primary);
+    const cases = new Map();
+    for (const reportId of [...new Set(reportIds.map(String))]) {
+      const report = await safetyService.getReportById(reportId);
+      if (!report || !REPORT_OPEN_STATUSES.includes(report.status)) continue;
+      if (String(report.reportedUserId) !== String(primary.reportedUserId)) {
+        throw new AppError('Cases closed together must be against the same parent', 400, ADMIN_REPORT_ERRORS.CLUSTER_MIXED_USERS);
+      }
+      const key = caseKeyOf(report);
+      if (key === ownKey || cases.has(key)) continue;
+      const reports = await safetyService.getCaseReports(report);
+      cases.set(key, { caseId: reports[0]._id, reports });
+    }
+    return [...cases.values()];
+  }
+
+  /**
+   * Check the sanctions of a decision before any of them runs: the policy matrix (a sanction outside it
+   * needs an override once the AI assessed the report), the target of each sanction and the account state.
+   * @private
+   * @returns {Promise<{ executable: Array<{ type: string, durationDays: number|null, isOverride: boolean }>, notApplicable: Array<Object> }>}
+   */
+  async _planDecisionSanctions(report, sanctions, { isPolicyOverride, overrideReason }) {
+    const applied = new Set((report.actions || []).map((action) => action.type));
+    // A sanction already on the report (e.g. applied provisionally by the Auto-Shield) is not run twice
+    const wanted = [...new Map(sanctions.map((sanction) => [sanction.type, sanction])).values()].filter(
+      (sanction) => !applied.has(sanction.type)
+    );
+    if (wanted.length === 0) return { executable: [], notApplicable: [] };
+
+    const hasAssessment = Boolean(report.sentinelAssessment?.assessedAt);
+    const priorCount = await safetyService.countUserPriorSanctions(report.reportedUserId, report);
+    const policyResult = hasAssessment
+      ? calculatePolicySanction(report.category, report.severity, priorCount, report.targetType)
+      : null;
+    const checked = wanted.map((sanction) => ({
+      type: sanction.type,
+      durationDays: sanction.type === REPORT_ACTION_TYPES.SUSPEND ? parseInt(sanction.durationDays, 10) : null,
+      isOverride: checkActionPolicyCompliance(sanction.type, policyResult, sanction.durationDays).isOverride,
+    }));
+    const outside = checked.filter((sanction) => sanction.isOverride);
+    if (outside.length > 0 && !isPolicyOverride) {
+      throw new AppError(
+        `Chế tài "${toActionLabels(outside.map((sanction) => sanction.type))}" không nằm trong khung quy chuẩn cho vi phạm này. Cần tích chọn "Áp dụng ngoại lệ chính sách" và giải trình lý do (ít nhất 20 ký tự).`,
+        400,
+        'POLICY_OVERRIDE_REQUIRED'
+      );
+    }
+    if (outside.length > 0 && (!overrideReason || overrideReason.trim().length < 20)) {
+      throw new AppError(
+        'Vui lòng nhập lý do giải trình ngoại lệ chính sách (tối thiểu 20 ký tự).',
+        400,
+        'OVERRIDE_REASON_REQUIRED'
+      );
+    }
+
+    const reportedParent = await parentService.getParentById(report.reportedUserId);
+    if (!reportedParent) {
+      throw new AppError('Reported parent not found', 404, ADMIN_REPORT_ERRORS.REPORTED_USER_NOT_FOUND);
+    }
+    const targetUser = await userService.liftExpiredSuspension(await userService.getUserById(reportedParent.userId));
+    const plan = await sanctionExecutorService.planSanctions({ report, targetUser, actions: checked });
+    if (plan.blockers.length > 0) {
+      throw new AppError('Reported account not found', 404, ADMIN_REPORT_ERRORS.REPORTED_USER_NOT_FOUND);
+    }
+    const types = new Set(plan.executable.map((sanction) => sanction.type));
+    if (types.has(REPORT_ACTION_TYPES.SUSPEND) && !plan.executable.find((s) => s.type === REPORT_ACTION_TYPES.SUSPEND).durationDays) {
+      throw new AppError('durationDays must be at least 1', 400, ADMIN_REPORT_ERRORS.DURATION_DAYS_REQUIRED);
+    }
+    if (types.has(REPORT_ACTION_TYPES.SUSPEND) && !targetUser.isActive) {
+      throw new AppError('This account is already locked', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+    }
+    if (types.has(REPORT_ACTION_TYPES.BAN) && targetUser.banReason) {
+      throw new AppError('User is already permanently banned', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
+    }
+
+    // Sanctions on the content first, the account lock last (it signs the parent out)
+    const order = [
+      REPORT_ACTION_TYPES.DELETE_MESSAGE,
+      REPORT_ACTION_TYPES.CANCEL_PLAYDATE,
+      REPORT_ACTION_TYPES.WARN,
+      REPORT_ACTION_TYPES.SUSPEND,
+      REPORT_ACTION_TYPES.BAN,
+    ];
+    return {
+      executable: [...plan.executable].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type)),
+      notApplicable: plan.notApplicable,
+    };
   }
 
   /**
@@ -1085,15 +1421,16 @@ class AdminReportService {
     }
 
     const fromStatus = report.status;
-    report.status = REPORT_STATUS.REVIEWING;
+    report.status = REPORT_STATUS.PENDING;
     report.resolution = null;
     report.adminNotes = '';
     report.resolvedBy = null;
     report.resolvedAt = null;
+    report.closedCaseId = null;
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.REOPEN,
       fromStatus,
-      toStatus: REPORT_STATUS.REVIEWING,
+      toStatus: REPORT_STATUS.PENDING,
       by: adminUserId,
       at: new Date(),
       note: note.trim(),
@@ -1120,7 +1457,6 @@ class AdminReportService {
    */
   async _getReportActors(reports) {
     const ids = reports.flatMap((report) => [
-      report.assignedTo,
       report.resolvedBy,
       ...(report.actions || []).map((action) => action.performedBy),
       ...(report.history || []).map((entry) => entry.by),
@@ -1156,13 +1492,15 @@ class AdminReportService {
   /**
    * @private
    */
-  _closeReport(report, { adminUserId, status, resolution, adminNotes, historyNote, historyMetadata = {} }) {
+  _closeReport(report, { adminUserId, status, resolution, adminNotes, historyNote, historyMetadata = {}, closedCaseId = null }) {
     const fromStatus = report.status;
     report.status = status;
     report.resolution = resolution;
     report.adminNotes = adminNotes;
     report.resolvedBy = adminUserId;
     report.resolvedAt = new Date();
+    // Reports closed by one decision stay one row of the queue
+    report.closedCaseId = closedCaseId || report._id;
     report.history.push({
       eventType: REPORT_HISTORY_EVENT_TYPES.STATUS_CHANGE,
       fromStatus,
@@ -1171,6 +1509,21 @@ class AdminReportService {
       at: new Date(),
       note: historyNote,
       metadata: { resolution, ...historyMetadata },
+    });
+  }
+
+  /**
+   * The notice of a decision, sent once to the sanctioned parent (instead of one per sanction)
+   * @private
+   */
+  async _sendOffenderNotice(reportedParentId, body, reportId) {
+    const reportedParent = await parentService.getParentById(reportedParentId).catch(() => null);
+    if (!reportedParent?.userId) return;
+    await this._sendReportNotification({
+      recipientId: reportedParent.userId,
+      title: 'Thông báo xử lý vi phạm',
+      body,
+      data: { reportId },
     });
   }
 
@@ -1188,16 +1541,22 @@ class AdminReportService {
   /**
    * @private
    */
-  async _notifyReporter(report, status) {
+  /**
+   * @param {Object} report
+   * @param {string} status
+   * @param {string} [body] - Text of the decision (e.g. written by the AI); the generic one when empty
+   */
+  async _notifyReporter(report, status, body = '') {
     const reporterParent = await parentService.getParentById(report.reporterId);
     if (!reporterParent?.userId) return;
     await this._sendReportNotification({
       recipientId: reporterParent.userId,
       title: 'Cập nhật báo cáo vi phạm',
       body:
-        status === REPORT_STATUS.RESOLVED
+        body ||
+        (status === REPORT_STATUS.RESOLVED
           ? 'Báo cáo của bạn đã được xử lý theo Quy chuẩn Cộng đồng BuddyLink. Cảm ơn bạn đã chung tay bảo vệ an toàn cho các bé.'
-          : 'Báo cáo của bạn đã được xem xét và lưu hồ sơ theo dõi.',
+          : 'Báo cáo của bạn đã được xem xét và lưu hồ sơ theo dõi.'),
       data: { reportId: report._id },
     });
   }
@@ -1205,9 +1564,9 @@ class AdminReportService {
   /**
    * @private
    */
-  async _warnReportedUser(report, targetUser) {
+  async _warnReportedUser(report, targetUser, isSilent = false) {
     await userService.addStrike(targetUser._id);
-    await this._sendReportNotification({
+    if (!isSilent) await this._sendReportNotification({
       recipientId: targetUser._id,
       title: 'Cảnh cáo vi phạm an toàn',
       body: `Bạn nhận được 1 cảnh cáo do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}. Vui lòng tuân thủ quy tắc để giữ an toàn cho cộng đồng.`,
@@ -1218,7 +1577,7 @@ class AdminReportService {
   /**
    * @private
    */
-  async _deleteReportedMessage(report, targetUser) {
+  async _deleteReportedMessage(report, targetUser, isSilent = false) {
     if (report.targetType !== REPORT_TARGET_TYPES.MESSAGE || !report.targetMessageId) {
       throw new AppError('Report is not targeting a message', 400, ADMIN_REPORT_ERRORS.INVALID_ACTION_TYPE);
     }
@@ -1230,7 +1589,7 @@ class AdminReportService {
       throw new AppError('Message is already deleted', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
     }
     await moderationRealtimeService.notifyMessageDeleted(message);
-    await this._sendReportNotification({
+    if (!isSilent) await this._sendReportNotification({
       recipientId: targetUser._id,
       title: 'Tin nhắn đã bị gỡ bỏ',
       body: `Một tin nhắn của bạn đã bị Quản trị viên gỡ do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}.`,
@@ -1261,7 +1620,7 @@ class AdminReportService {
   /**
    * @private
    */
-  async _suspendReportedUser(report, targetUser, durationDays) {
+  async _suspendReportedUser(report, targetUser, durationDays, isSilent = false) {
     const days = parseInt(durationDays, 10);
     if (!days || days < 1) {
       throw new AppError('durationDays must be at least 1', 400, ADMIN_REPORT_ERRORS.DURATION_DAYS_REQUIRED);
@@ -1273,7 +1632,7 @@ class AdminReportService {
     const suspensionUntil = new Date(Date.now() + days * DAY_MS);
     const updated = await userService.suspendAccount(targetUser._id, suspensionUntil);
     await this._afterAccountLocked(updated || { _id: targetUser._id, suspensionUntil }, targetUser);
-    await this._sendReportNotification({
+    if (!isSilent) await this._sendReportNotification({
       recipientId: targetUser._id,
       title: 'Tài khoản bị tạm đình chỉ',
       body: `Tài khoản của bạn bị tạm đình chỉ ${days} ngày, đến ${formatNoticeDate(suspensionUntil)}, do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}.`,
@@ -1284,14 +1643,14 @@ class AdminReportService {
   /**
    * @private
    */
-  async _banReportedUser(report, targetUser, note) {
+  async _banReportedUser(report, targetUser, note, isSilent = false) {
     if (targetUser.banReason) {
       throw new AppError('User is already permanently banned', 409, ADMIN_REPORT_ERRORS.ACTION_ALREADY_APPLIED);
     }
     const banReason = note || REPORT_CATEGORY_NOTICES[report.category];
     const updated = await userService.banAccount(targetUser._id, banReason);
     await this._afterAccountLocked(updated || { _id: targetUser._id, banReason }, targetUser);
-    await this._sendReportNotification({
+    if (!isSilent) await this._sendReportNotification({
       recipientId: targetUser._id,
       title: 'Tài khoản bị khóa vĩnh viễn',
       body: `Tài khoản của bạn đã bị khóa vĩnh viễn do vi phạm quy chuẩn cộng đồng: ${REPORT_CATEGORY_NOTICES[report.category]}.`,

@@ -57,6 +57,12 @@ export const ADMIN_REPORT_ERRORS = Object.freeze({
   TARGET_NOT_FOUND: 'TARGET_NOT_FOUND',
 });
 
+// Decision of a case (POST /reports/:id/decide)
+export const REPORT_DECISIONS = Object.freeze({
+  VIOLATION: 'violation',
+  NO_VIOLATION: 'no_violation',
+});
+
 export const ADMIN_NOTIFICATION_CATEGORIES = Object.freeze({
   USERS: 'users',
   PAYMENTS: 'payments',

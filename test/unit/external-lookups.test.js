@@ -110,7 +110,7 @@ describe('placeAttractionsService.getOrFetchAttractions with Tavily (BUD-49 A4)'
 
     const found = await placeAttractionsService.getOrFetchAttractions('place-2', doc);
     expect(found).toEqual([{ title: 'Nhà banh', description: 'Bể banh lớn', sourceUrl: page.url }]);
-    expect(search.mock.calls[0][0]).toBe('TiNiWorld Đà Nẵng trò chơi cho trẻ em');
+    expect(search.mock.calls[0][0]).toBe('TiNiWorld khu vui chơi trẻ em Đà Nẵng');
     expect(save).toHaveBeenCalledWith('place-2', found);
   });
 

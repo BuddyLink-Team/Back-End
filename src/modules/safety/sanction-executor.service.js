@@ -157,8 +157,11 @@ class SanctionExecutorService {
 
   /**
    * Notify reporter when report status updates
+   * @param {Object} report
+   * @param {string} status
+   * @param {string} [body] - Text of the decision (e.g. written by the AI); the generic one when empty
    */
-  async notifyReporter(report, status) {
+  async notifyReporter(report, status, body = '') {
     try {
       const reporterParent = await parentService.getParentById(report.reporterId).catch(() => null);
       if (!reporterParent?.userId) return;
@@ -166,9 +169,10 @@ class SanctionExecutorService {
         recipientId: reporterParent.userId,
         title: 'Cập nhật báo cáo vi phạm',
         body:
-          status === REPORT_STATUS.RESOLVED
+          body ||
+          (status === REPORT_STATUS.RESOLVED
             ? 'Báo cáo của bạn đã được xử lý theo Quy chuẩn Cộng đồng BuddyLink. Cảm ơn bạn đã chung tay bảo vệ an toàn cho các bé.'
-            : 'Báo cáo của bạn đã được xem xét và lưu hồ sơ theo dõi.',
+            : 'Báo cáo của bạn đã được xem xét và lưu hồ sơ theo dõi.'),
         data: { reportId: report._id },
       });
     } catch (err) {
@@ -186,7 +190,8 @@ class SanctionExecutorService {
 
     await userService.addStrike(targetUser._id);
 
-    await this.sendReportNotification({
+    // isSilent: the caller sends one notice of its own for the whole decision
+    if (!params.isSilent) await this.sendReportNotification({
       recipientId: targetUser._id,
       title: 'Cảnh cáo vi phạm an toàn',
       body: `Bạn nhận được 1 cảnh cáo do vi phạm quy chuẩn cộng đồng: ${
@@ -221,7 +226,7 @@ class SanctionExecutorService {
       moderationRealtimeService.notifyMessageDeleted(message);
     }
 
-    if (targetUser?._id) {
+    if (targetUser?._id && !params.isSilent) {
       await this.sendReportNotification({
         recipientId: targetUser._id,
         title: 'Tin nhắn đã bị gỡ bỏ',
@@ -286,7 +291,7 @@ class SanctionExecutorService {
       updated = await userService.suspendAccount(targetUser._id, suspensionUntil);
       await this.afterAccountLocked(updated || { _id: targetUser._id, suspensionUntil }, targetUser);
 
-      await this.sendReportNotification({
+      if (!params.isSilent) await this.sendReportNotification({
         recipientId: targetUser._id,
         title: 'Tài khoản bị tạm đình chỉ',
         body: `Tài khoản của bạn bị tạm đình chỉ ${days} ngày, đến ${formatNoticeDate(
@@ -327,7 +332,7 @@ class SanctionExecutorService {
     const updated = await userService.banAccount(targetUser._id, banReason);
     await this.afterAccountLocked(updated || { _id: targetUser._id }, targetUser);
 
-    await this.sendReportNotification({
+    if (!params.isSilent) await this.sendReportNotification({
       recipientId: targetUser._id,
       title: 'Tài khoản đã bị cấm vĩnh viễn',
       body: `Tài khoản của bạn đã bị cấm vĩnh viễn do vi phạm nghiêm trọng quy chuẩn cộng đồng: ${

@@ -9,6 +9,26 @@ const toArea = (location) => ({
   city: location?.city || '',
 });
 
+// Texts written before ids were left out of notes: a database id is never shown in the admin portal
+const DATABASE_ID = /\b[0-9a-f]{24}\b/gi;
+const withoutIds = (text) =>
+  String(text || '')
+    .replace(/(báo cáo)\s+[0-9a-f]{24}\b/gi, '$1 chính của cụm')
+    .replace(DATABASE_ID, '')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+
+// The report sanction an account is locked by (never the report id)
+const toLockSource = (source) =>
+  source
+    ? {
+        lockType: source.lockType,
+        suspensionUntil: source.suspensionUntil || null,
+        reason: source.reason || null,
+        decidedAt: source.decidedAt || null,
+      }
+    : null;
+
 const toVerification = (parent) => ({
   isEmailVerified: parent?.verification?.isEmailVerified || false,
   isPhoneVerified: parent?.verification?.isPhoneVerified || false,
@@ -41,7 +61,7 @@ export class AdminUserListItemDTO {
   /**
    * @param {{ user: Object, parent: Object|null, childrenCount: number, plan: Object }} data
    */
-  static toResponse({ user, parent, childrenCount, plan }) {
+  static toResponse({ user, parent, childrenCount, plan, lockSource = null }) {
     return {
       id: user._id,
       fullName: parent?.fullName || '',
@@ -53,6 +73,7 @@ export class AdminUserListItemDTO {
       isProfileHidden: parent?.privacySettings?.isProfileHidden === true,
       isVerifiedParent: parent?.verification?.isVerifiedParent || false,
       childrenCount,
+      lockSource: toLockSource(lockSource),
       currentPlan: {
         planCode: plan.planCode,
         isPremium: plan.isPremium,
@@ -74,7 +95,7 @@ export class AdminUserDetailDTO {
    * @param {string[]} data.loginMethods
    * @param {{ connections: number, playdates: Object, reports: Object, reliability: Object }} data.activity
    */
-  static toResponse({ user, parent, children = [], lockedChildIds = new Set(), plan, loginMethods, activity }) {
+  static toResponse({ user, parent, children = [], lockedChildIds = new Set(), plan, loginMethods, activity, lockSource = null }) {
     const activeChildrenCount = children.filter((child) => !child.isArchived).length;
 
     return {
@@ -88,6 +109,7 @@ export class AdminUserDetailDTO {
       location: toArea(parent.location),
       isActive: user.isActive !== false,
       isProfileHidden: parent.privacySettings?.isProfileHidden === true,
+      lockSource: toLockSource(lockSource),
       connectionPrivacy: parent.privacySettings?.connectionPrivacy || CONNECTION_PRIVACY.EVERYONE,
       loginMethods,
       verification: toVerification(parent),
@@ -501,7 +523,7 @@ const toReportActions = (actions, actorsById) =>
     isProvisional: Boolean(action.isProvisional),
     propagatedFrom: action.propagatedFrom?.toString() || null,
     performedAt: action.performedAt,
-    note: action.note || '',
+    note: withoutIds(action.note),
     isPolicyOverride: Boolean(action.isPolicyOverride),
     overrideReason: action.overrideReason || '',
     policyClause: action.policyClause || '',
@@ -535,11 +557,18 @@ export class AdminReportListItemDTO {
     actorsById,
     isOverdue,
     reportedMessageContent = null,
+    caseSummary = null,
   }) {
     return {
       id: report._id.toString(),
       category: report.category,
-      severity: report.severity,
+      // A case is as severe as its worst report
+      severity: caseSummary?.severity || report.severity,
+      // Reports about the same content, handled together (1 when the report is listed alone)
+      reportCount: caseSummary?.reportCount ?? 1,
+      reporterCount: caseSummary?.reporterCount ?? 1,
+      reporterNames: caseSummary?.reporterNames || [],
+      firstReportedAt: caseSummary?.firstReportedAt || report.createdAt,
       targetType: report.targetType,
       status: report.status,
       reason: report.reason || '',
@@ -552,10 +581,9 @@ export class AdminReportListItemDTO {
         strikeCount: reportedUser?.strikeCount || 0,
         isLocked: reportedUser ? !reportedUser.isActive : false,
       },
-      assignedTo: toReportActor(report.assignedTo, actorsById),
       isOverdue: Boolean(isOverdue),
       resolution: report.resolution || null,
-      adminNotes: report.adminNotes || '',
+      adminNotes: withoutIds(report.adminNotes),
       resolvedBy: report.resolvedBy
         ? toReportActor(report.resolvedBy, actorsById)
         : report.sentinelAssessment?.autoResolved
@@ -578,6 +606,11 @@ export class AdminReportListItemDTO {
             corroboration: report.sentinelAssessment.corroboration || null,
             verdict: report.sentinelAssessment.verdict || null,
             monitoring: report.sentinelAssessment.monitoring || null,
+            // Shown by the scan overview with the same content as the drawer
+            strikeCount: report.sentinelAssessment.strikeCount ?? null,
+            violationType: report.sentinelAssessment.violationType || '',
+            evidenceAnalysis: report.sentinelAssessment.evidenceAnalysis || null,
+            assessedAt: report.sentinelAssessment.assessedAt,
           }
         : null,
       createdAt: report.createdAt,
@@ -587,6 +620,22 @@ export class AdminReportListItemDTO {
 }
 
 export class AdminReportDetailDTO {
+  /**
+   * One report of a case, as its reporter wrote it
+   * @param {{ report: Object, reporterParent: Object, reporterUser: Object }} param0
+   */
+  static toCaseReport({ report, reporterParent, reporterUser }) {
+    return {
+      id: report._id.toString(),
+      reporter: toReportPerson(reporterParent, report.reporterId, reporterUser),
+      reason: report.reason || '',
+      description: report.description || '',
+      evidenceUrls: report.evidenceUrls || [],
+      status: report.status,
+      createdAt: report.createdAt,
+    };
+  }
+
   static toResponse({
     report,
     reporterParent,
@@ -599,8 +648,12 @@ export class AdminReportDetailDTO {
     pastReports = [],
     previousSanctions = [],
     policyGuidance = null,
+    isPolicyEnforced = false,
     isOverdue,
     totalReportsSubmitted = 0,
+    caseReports = [],
+    otherOpenCases = [],
+    priorViolationCount = 0,
   }) {
     return {
       id: report._id.toString(),
@@ -611,6 +664,12 @@ export class AdminReportDetailDTO {
       reason: report.reason || '',
       description: report.description || '',
       evidenceUrls: report.evidenceUrls || [],
+      // Every report of the case (this one included), oldest first: they are decided together
+      caseReports,
+      reportCount: caseReports.length || 1,
+      reporterCount: new Set(caseReports.map((item) => item.reporter.id)).size || 1,
+      // Other open cases against the same parent: they can be closed with this one as the same matter
+      otherOpenCases,
       reporter: {
         ...toReportPerson(reporterParent, report.reporterId, reporterUser),
         phone: reporterUser?.phone || '',
@@ -621,6 +680,8 @@ export class AdminReportDetailDTO {
         userId: reportedUser?._id?.toString() || reportedParent?.userId?.toString() || '',
         phone: reportedUser?.phone || '',
         strikeCount: reportedUser?.strikeCount || 0,
+        // Incidents already sanctioned (what the sanction matrix counts), this case excluded
+        priorViolationCount,
         isActive: reportedUser ? reportedUser.isActive !== false : true,
         suspensionUntil: reportedUser?.suspensionUntil || null,
         isBanned: Boolean(reportedUser?.banReason),
@@ -628,7 +689,6 @@ export class AdminReportDetailDTO {
         previousSanctions,
       },
       targetContext: targetContext || null,
-      assignedTo: toReportActor(report.assignedTo, actorsById),
       isOverdue: Boolean(isOverdue),
       actions: toReportActions(report.actions, actorsById),
       history: (report.history || []).map((entry) => ({
@@ -639,14 +699,16 @@ export class AdminReportDetailDTO {
         by: toReportActor(entry.by, actorsById, entry.actorType),
         actorType: entry.actorType || 'admin',
         at: entry.at,
-        note: entry.note || '',
+        note: withoutIds(entry.note),
         metadata: entry.metadata || null,
       })),
       relatedOpenReports,
       policyGuidance,
+      // Whether a sanction outside the matrix needs a policy override (only once the AI assessed the report)
+      isPolicyEnforced: Boolean(isPolicyEnforced),
       sentinelAssessment: report.sentinelAssessment?.assessedAt ? report.sentinelAssessment : null,
       resolution: report.resolution || null,
-      adminNotes: report.adminNotes || '',
+      adminNotes: withoutIds(report.adminNotes),
       resolvedBy: report.resolvedBy
         ? toReportActor(report.resolvedBy, actorsById)
         : report.sentinelAssessment?.autoResolved

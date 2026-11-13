@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { getAccountLockDetails } from '../safety/account-lock.service.js';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import env from '../../config/env.js';
@@ -177,7 +178,7 @@ class AuthService {
 
     await userService.liftExpiredSuspension(user);
     if (!user.isActive) {
-      throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
+      throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED', await getAccountLockDetails(user));
     }
 
     return user;
@@ -290,7 +291,7 @@ class AuthService {
     } else {
       await userService.liftExpiredSuspension(user);
       if (!user.isActive) {
-        throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED');
+        throw new AppError('User account is disabled', 403, 'ACCOUNT_DISABLED', await getAccountLockDetails(user));
       }
 
       if (user.role === USER_ROLES.ADMIN) {

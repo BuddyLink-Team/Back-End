@@ -27,8 +27,8 @@ import {
   REPORT_RESOLUTION_TYPES,
   REPORT_SORTS,
 } from '../safety/safety.constants.js';
+import { REPORT_DECISIONS } from './admin.constants.js';
 
-const MONGO_ID_PATTERN = /^[a-f\d]{24}$/i;
 
 /**
  * Validation rules for GET /api/v1/admin/users
@@ -83,6 +83,13 @@ export const updateUserStatusValidation = [
     .withMessage('isActive is required')
     .isBoolean()
     .withMessage('isActive must be a boolean'),
+  // Needed (10 characters at least) to unlock an account a report suspended or banned
+  body('reason')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('reason must be at most 500 characters'),
 ];
 
 /**
@@ -354,6 +361,10 @@ export const revenueSummaryValidation = [...dateRangeValidation];
 export const listReportsValidation = [
   ...pagingValidation,
   ...dateRangeValidation,
+  query('view')
+    .optional()
+    .isIn(['cases', 'reports'])
+    .withMessage("View must be either 'cases' or 'reports'"),
   query('status')
     .optional()
     .isIn(Object.values(REPORT_STATUS))
@@ -370,10 +381,6 @@ export const listReportsValidation = [
     .optional()
     .isIn(Object.values(REPORT_TARGET_TYPES))
     .withMessage(`Target type must be one of: ${Object.values(REPORT_TARGET_TYPES).join(', ')}`),
-  query('assignedTo')
-    .optional()
-    .custom((value) => value === 'me' || MONGO_ID_PATTERN.test(String(value)))
-    .withMessage("assignedTo must be 'me' or a valid admin ID"),
   query('isOverdue')
     .optional()
     .isBoolean()
@@ -405,17 +412,81 @@ export const reportIdParamValidation = [
 ];
 
 /**
- * Validation rules for PATCH /api/v1/admin/reports/:id/review
+ * Validation rules for POST /api/v1/admin/reports/:id/decide
  */
-export const reviewReportValidation = [
+export const decideReportValidation = [
   param('id')
     .isMongoId()
     .withMessage('Invalid report ID'),
-  body('action')
+  body('outcome')
     .notEmpty()
-    .withMessage('Action is required')
-    .isIn(['claim', 'takeover'])
-    .withMessage("Action must be either 'claim' or 'takeover'"),
+    .withMessage('Outcome is required')
+    .isIn(Object.values(REPORT_DECISIONS))
+    .withMessage(`Outcome must be one of: ${Object.values(REPORT_DECISIONS).join(', ')}`),
+  body('sanctions')
+    .optional()
+    .isArray({ max: 1 })
+    .withMessage('sanctions must be an array of at most one sanction')
+    .bail()
+    .custom((sanctions, { req }) => {
+      if (req.body.outcome === REPORT_DECISIONS.NO_VIOLATION && sanctions.length > 0) {
+        throw new Error('A case without a violation cannot have sanctions');
+      }
+      if (new Set(sanctions.map((sanction) => sanction?.type)).size !== sanctions.length) {
+        throw new Error('Each sanction can only be chosen once');
+      }
+      return true;
+    }),
+  body('sanctions.*.type')
+    .isIn(REPORT_SANCTION_TYPES)
+    .withMessage(`Sanction type must be one of: ${REPORT_SANCTION_TYPES.join(', ')}`),
+  body('sanctions.*.durationDays')
+    .optional({ nullable: true })
+    .isInt({ min: 1, max: 365 })
+    .withMessage('Duration days must be an integer between 1 and 365'),
+  body('sanctions')
+    .optional()
+    .custom((sanctions) => {
+      const isMissingDuration = (Array.isArray(sanctions) ? sanctions : []).some(
+        (sanction) => sanction?.type === REPORT_ACTION_TYPES.SUSPEND && !sanction.durationDays
+      );
+      if (isMissingDuration) throw new Error('durationDays is required for a suspension');
+      return true;
+    }),
+  body('notes')
+    .isString()
+    .withMessage('Notes are required')
+    .bail()
+    .custom((val) => {
+      if (val.trim().length < 10) throw new Error('notes must be at least 10 characters after trim');
+      return true;
+    }),
+  body('isPolicyOverride')
+    .optional()
+    .isBoolean()
+    .withMessage('isPolicyOverride must be a boolean'),
+  body('overrideReason')
+    .optional()
+    .isString()
+    .trim(),
+  // What the parents read: the sanctioned parent (instead of the notice of each sanction) and the reporters
+  body('reportedUserNotice')
+    .optional()
+    .isString()
+    .isLength({ max: 1000 })
+    .withMessage('reportedUserNotice must be at most 1000 characters'),
+  body('reporterNotice')
+    .optional()
+    .isString()
+    .isLength({ max: 1000 })
+    .withMessage('reporterNotice must be at most 1000 characters'),
+  body('alsoCloseReportIds')
+    .optional()
+    .isArray({ max: 50 })
+    .withMessage('alsoCloseReportIds must be an array of IDs'),
+  body('alsoCloseReportIds.*')
+    .isMongoId()
+    .withMessage('Each report ID must be a valid Mongo ID'),
 ];
 
 /**

@@ -331,6 +331,23 @@ class SafetyService {
   }
 
   /**
+   * Moderation queue page by case (options of safetyRepository.findCasePage)
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findCasePage(options) {
+    return safetyRepository.findCasePage(options);
+  }
+
+  /**
+   * Every report of the case of a report, oldest first
+   * @param {Object} report
+   * @returns {Promise<Array<Object>>}
+   */
+  async getCaseReports(report) {
+    return safetyRepository.findCaseReports(report);
+  }
+
+  /**
    * Queue counts of the admin stat strip (options of safetyRepository.getReportStats)
    */
   async getReportStats(options) {

@@ -72,6 +72,8 @@ export const REPORT_HISTORY_EVENT_TYPES = Object.freeze({
   AUTO_SHIELDED: 'auto_shielded',
   POLICY_OVERRIDDEN: 'policy_overridden',
   ACTION_FAILED: 'action_failed',
+  // An admin unlocked the account before the end of the sanction this report decided
+  SANCTION_LIFTED: 'sanction_lifted',
 });
 
 // What an admin can apply from POST /admin/reports/:id/action (closing a report has its own endpoint)

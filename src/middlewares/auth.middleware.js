@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import env from "../config/env.js";
 import userService from "../modules/user/user.service.js";
+import { getAccountLockDetails } from "../modules/safety/account-lock.service.js";
 import AppError from "../shared/exceptions/app-error.js";
 import {
   getAccessTokenFromRequest,
@@ -49,7 +50,7 @@ export const authenticate = async (req, _res, next) => {
 
     await userService.liftExpiredSuspension(user);
     if (!user.isActive) {
-      throw new AppError("User account is disabled", 403, "ACCOUNT_DISABLED");
+      throw new AppError("User account is disabled", 403, "ACCOUNT_DISABLED", await getAccountLockDetails(user));
     }
 
     req.user = user;

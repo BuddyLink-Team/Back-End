@@ -9,7 +9,7 @@ import userService from '../user/user.service.js';
 const STREAM_RETRY_MS = 5000;
 
 const toLockNotice = ({ banReason, suspensionUntil }) => {
-  if (suspensionUntil) {
+  if (suspensionUntil && !banReason) {
     const endsAt = new Date(suspensionUntil).toLocaleString('vi-VN', { timeZone: env.APP_TIMEZONE });
     return { reason: `Tài khoản của bạn bị tạm đình chỉ đến ${endsAt}.`, suspensionUntil };
   }

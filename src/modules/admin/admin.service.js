@@ -7,6 +7,8 @@ import connectionService from '../connection/connection.service.js';
 import playdateService from '../playdate/playdate.service.js';
 import safetyService from '../safety/safety.service.js';
 import moderationRealtimeService from '../safety/moderation-realtime.service.js';
+import { getLockSource, recordSanctionLifted } from '../safety/account-lock.service.js';
+import logger from '../../shared/logger/index.js';
 import aiAssistantService from '../ai-assistant/ai-assistant.service.js';
 import adminNotificationService from './admin-notification.service.js';
 import adminReportService from './admin-report.service.js';
@@ -168,6 +170,8 @@ const toAnalyticsRange = ({ fromDate, toDate }) => {
 
 const toCountByPeriod = (rows) => new Map(rows.map((row) => [row.period, row.count]));
 
+const UNLOCK_REASON_MIN_LENGTH = 10;
+
 class AdminService {
   /**
    * Get paginated parent accounts with their profile, active children count and plan in effect
@@ -206,7 +210,12 @@ class AdminService {
     ]);
     const subscriptionByParentId = new Map(subscriptions.map((sub) => [sub.parentId.toString(), sub]));
 
-    const items = users.map((user) => {
+    // Locked rows only: which report the lock comes from (the unlock asks to confirm ending it)
+    const lockSources = await Promise.all(
+      users.map((user) => (user.isActive === false ? getLockSource(user).catch(() => null) : null))
+    );
+
+    const items = users.map((user, index) => {
       const parent = parentByUserId.get(user._id.toString()) || null;
       const parentKey = parent?._id.toString();
       return AdminUserListItemDTO.toResponse({
@@ -214,6 +223,7 @@ class AdminService {
         parent,
         childrenCount: parentKey ? childrenCounts.get(parentKey) || 0 : 0,
         plan: subscriptionService.getEffectivePlan(parentKey ? subscriptionByParentId.get(parentKey) : null),
+        lockSource: lockSources[index],
       });
     });
 
@@ -247,7 +257,7 @@ class AdminService {
       throw new AppError('Parent profile not found', 404, 'PARENT_NOT_FOUND');
     }
 
-    const [children, lockedChildIds, subscription, connections, playdates, reports, reliability] = await Promise.all([
+    const [children, lockedChildIds, subscription, connections, playdates, reports, reliability, lockSource] = await Promise.all([
       childService.getAllChildrenByParentId(parent._id),
       childService.getLockedChildIds([parent._id]),
       // Same read as the parent app: an expired paid plan is moved to Free here (creates the Free row if missing)
@@ -256,6 +266,7 @@ class AdminService {
       playdateService.getPlaydateCountsForParent(parent._id),
       safetyService.countReportsAgainstParent(parent._id),
       playdateService.getReliabilityForParent(parent._id),
+      getLockSource(user).catch(() => null),
     ]);
 
     const loginMethods = [
@@ -271,6 +282,7 @@ class AdminService {
       plan: subscriptionService.getEffectivePlan(subscription),
       loginMethods,
       activity: { connections, playdates, reports, reliability },
+      lockSource,
     });
   }
 
@@ -280,9 +292,11 @@ class AdminService {
    * Admins cannot lock themselves or other admins.
    * @param {string} adminUserId
    * @param {string} targetUserId
-   * @param {{ isActive: boolean }} data
+   * Unlocking an account that a report suspended or banned ends that sanction early: it needs a reason,
+   * logged on the report.
+   * @param {{ isActive: boolean, reason?: string }} data
    */
-  async updateUserStatus(adminUserId, targetUserId, { isActive }) {
+  async updateUserStatus(adminUserId, targetUserId, { isActive, reason = '' }) {
     if (adminUserId && targetUserId.toString() === adminUserId.toString()) {
       throw new AppError('Admins cannot lock themselves', 403, 'CANNOT_LOCK_SELF');
     }
@@ -293,12 +307,27 @@ class AdminService {
     }
 
     const boolActive = isActive === true || isActive === 'true';
+    const unlockReason = String(reason || '').trim();
+    const lockSource = boolActive ? await getLockSource(targetUser) : null;
+    if (lockSource && unlockReason.length < UNLOCK_REASON_MIN_LENGTH) {
+      throw new AppError(
+        'Ending a sanction early needs a reason of at least 10 characters',
+        400,
+        'UNLOCK_REASON_REQUIRED'
+      );
+    }
     // Decided by hand: an unlock ends any sanction, and a lock has no end date
     const updated = await userService.updateById(targetUserId, {
       isActive: boolActive,
       suspensionUntil: null,
       banReason: null,
     });
+
+    if (lockSource) {
+      await recordSanctionLifted({ source: lockSource, adminUserId, reason: unlockReason }).catch((err) =>
+        logger.warn(`[Admin] Could not log the lifted sanction of user=${targetUserId}: ${err.message}`)
+      );
+    }
 
     if (!boolActive) {
       await authService.revokeAllUserRefreshTokens(targetUserId);
@@ -679,8 +708,8 @@ class AdminService {
     return adminReportService.getReportDetail(id);
   }
 
-  async reviewReport(adminUserId, id, data) {
-    return adminReportService.reviewReport(adminUserId, id, data);
+  async decideReport(adminUserId, id, data) {
+    return adminReportService.decideReport(adminUserId, id, data);
   }
 
   async updateReportSeverity(adminUserId, id, data) {

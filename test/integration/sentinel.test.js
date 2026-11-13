@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import adminApp from '../../src/admin-app.js';
 import User from '../../src/modules/user/user.model.js';
 import Parent from '../../src/modules/parent/parent.model.js';
+import Notification from '../../src/modules/notification/notification.model.js';
 import Report from '../../src/modules/safety/report.model.js';
 import Conversation from '../../src/modules/chat/conversation.model.js';
 import Message from '../../src/modules/chat/message.model.js';
@@ -163,7 +164,7 @@ describe('BuddyLink Sentinel AI Moderation Engine (/api/v1/admin/reports/sentine
 
       const res = await asAdmin(request(adminApp).get(`${REPORTS_URL}/${report._id}`));
       expect(res.status).toBe(200);
-      expect(res.body.data.status).toBe('reviewing'); // Must NOT be resolved!
+      expect(res.body.data.status).toBe('pending'); // Must NOT be resolved!
       expect(res.body.data.sentinelAssessment.autoShieldApplied).toBe(true);
       expect(res.body.data.sentinelAssessment.autoResolved).toBe(false);
       expect(res.body.data.sentinelAssessment.assessedByModel).toBe('gemini-test');
@@ -388,6 +389,32 @@ describe('BuddyLink Sentinel AI Moderation Engine (/api/v1/admin/reports/sentine
         const user = await User.findById(reported.user._id).lean();
         expect(user.strikeCount).toBe(1);
         expect(await safetyService.countUserPriorSanctions(reported.parent._id)).toBe(1);
+
+        // Each playdate is its own case: every closed report keeps a row of its own in the queue
+        const closed = await Report.find({ _id: { $in: reports.map((r) => r._id) } }).lean();
+        closed.forEach((r) => expect(String(r.closedCaseId)).toBe(String(r._id)));
+      });
+
+      it('sends the notices the AI wrote when it closes a case itself', async () => {
+        const { reported, reports } = await createNoShowReports('Drafted no-show', 3);
+        const offender = 'Bạn đã vắng mặt nhiều buổi hẹn mà không báo trước, tài khoản nhận một cảnh cáo.';
+        const reporterText = 'Cảm ơn bạn, chúng tôi đã cảnh cáo phụ huynh vắng mặt.';
+        const spy = jest.spyOn(sentinelGeminiAdapter, 'generateContent').mockResolvedValueOnce({
+          text: JSON.stringify({
+            ...noShowAssessment,
+            draftNotes: { adminNote: 'Vắng mặt lặp lại', reportedUserNotice: offender, reporterFeedback: reporterText },
+          }),
+        });
+        await sentinelService.assessReport(await Report.findById(reports[2]._id), null, { allowAutoEnforce: true });
+        spy.mockRestore();
+
+        const offenderNotices = await Notification.find({ recipientId: reported.user._id }).lean();
+        expect(offenderNotices.map((n) => n.body)).toEqual([offender]);
+        for (const report of reports) {
+          const reporter = await Parent.findById(report.reporterId).lean();
+          const [notice] = await Notification.find({ recipientId: reporter.userId }).lean();
+          expect(notice.body).toBe(reporterText);
+        }
       });
 
       it('runs no sanction at all when one of them cannot run (reported account missing)', async () => {
@@ -395,7 +422,7 @@ describe('BuddyLink Sentinel AI Moderation Engine (/api/v1/admin/reports/sentine
         await User.deleteOne({ _id: reported.user._id });
         const saved = await assessNew(reports[2]);
 
-        expect(saved.status).toBe(REPORT_STATUS.REVIEWING);
+        expect(saved.status).toBe(REPORT_STATUS.PENDING);
         expect(saved.actions).toHaveLength(0);
         expect(saved.history.some((h) => h.eventType === 'action_failed')).toBe(true);
         for (const other of reports.slice(0, 2)) {
@@ -576,11 +603,10 @@ describe('BuddyLink Sentinel AI Moderation Engine (/api/v1/admin/reports/sentine
           const { reports } = await createNoShowReports('Apply only', 1);
           await assessNew(reports[0]);
           const url = `${REPORTS_URL}/${reports[0]._id}`;
-          await asAdmin(request(adminApp).patch(`${url}/review`).send({ action: 'claim' }));
 
           const first = await asAdmin(request(adminApp).post(`${url}/sentinel-apply`).send({ note: 'Đồng ý theo AI' }));
           expect(first.status).toBe(200);
-          expect(first.body.data.status).toBe(REPORT_STATUS.REVIEWING);
+          expect(first.body.data.status).toBe(REPORT_STATUS.PENDING);
           expect(first.body.data.sentinelApplyResult.applied).toEqual([REPORT_ACTION_TYPES.WARN]);
           expect(first.body.data.sentinelApplyResult.notApplicable).toEqual([
             expect.objectContaining({ type: REPORT_ACTION_TYPES.CANCEL_PLAYDATE }),
@@ -591,7 +617,7 @@ describe('BuddyLink Sentinel AI Moderation Engine (/api/v1/admin/reports/sentine
           expect(second.body.data.sentinelApplyResult.applied).toEqual([]);
           const saved = await Report.findById(reports[0]._id).lean();
           expect(saved.actions.filter((a) => a.type === REPORT_ACTION_TYPES.WARN)).toHaveLength(1);
-          expect(saved.status).toBe(REPORT_STATUS.REVIEWING);
+          expect(saved.status).toBe(REPORT_STATUS.PENDING);
         });
 
         it('keeps what was decided on a closed report', async () => {
@@ -618,7 +644,6 @@ describe('BuddyLink Sentinel AI Moderation Engine (/api/v1/admin/reports/sentine
           severity: REPORT_SEVERITY.LOW,
           reason: 'Quảng cáo',
           status: REPORT_STATUS.REVIEWING,
-          assignedTo: adminUser._id,
           actions,
         });
         created.reports.push(report._id);

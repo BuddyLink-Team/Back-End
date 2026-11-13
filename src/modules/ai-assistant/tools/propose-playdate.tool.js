@@ -251,7 +251,7 @@ export const relatesToActivity = (item, activity) => {
  * A new place: the games written for the previous one may not fit, they are suggested again
  * (unless this same call brings its own agenda)
  */
-const resetAgendaOnNewPlace = (draft, previousPlace, fields) => {
+export const resetAgendaOnNewPlace = (draft, previousPlace, fields = {}) => {
   if (!previousPlace || !draft.location || draft.location.name === previousPlace || fields.agenda) return;
   draft.agenda = [];
   draft.agendaConfirmed = false;
@@ -382,6 +382,8 @@ export const applyPlanFields = async (ctx, fields) => {
       agenda = agenda.slice(0, max).map((item) => withAttractionSource(item, draft.location));
       // The parent's own games are their review of the list
       if (fields.agendaFromParent) draft.agendaConfirmed = true;
+      // Games the model changed after the parent's review: the agenda card is shown again for a new review
+      else if (agenda.join('|') !== draft.agenda.join('|')) draft.agendaConfirmed = false;
     }
     draft.agenda = agenda;
   }

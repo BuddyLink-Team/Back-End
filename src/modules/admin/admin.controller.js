@@ -311,16 +311,16 @@ class AdminController {
   }
 
   /**
-   * PATCH /api/v1/admin/reports/:id/review
+   * POST /api/v1/admin/reports/:id/decide
    */
-  async reviewReport(req, res, next) {
+  async decideReport(req, res, next) {
     try {
-      const data = await adminService.reviewReport(
+      const data = await adminService.decideReport(
         req.user?._id || req.userId,
         req.params.id,
         req.body
       );
-      return successResponse(res, data, 'Report review state updated successfully', 200);
+      return successResponse(res, data, 'Case decided successfully', 200);
     } catch (error) {
       return next(error);
     }

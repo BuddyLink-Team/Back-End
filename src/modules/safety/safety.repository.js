@@ -44,6 +44,45 @@ const toOverdueFilter = ({ critical, regular }) => ({
   ],
 });
 
+// Same rule as caseKeyOf (enforcement-metrics.rules.js), for aggregations
+const CASE_KEY_FIELD = {
+  $switch: {
+    branches: [
+      { case: { $ne: [{ $ifNull: ["$targetPlaydateId", null] }, null] }, then: { $concat: ["playdate:", { $toString: "$targetPlaydateId" }] } },
+      { case: { $ne: [{ $ifNull: ["$targetMessageId", null] }, null] }, then: { $concat: ["message:", { $toString: "$targetMessageId" }] } },
+    ],
+    default: { $concat: ["user:", { $toString: "$reportedUserId" }, ":", "$category"] },
+  },
+};
+
+// One row of the queue: the open reports of a case together, and the reports closed by one decision together
+const CASE_GROUP_FIELD = {
+  $cond: [
+    { $in: ["$status", REPORT_OPEN_STATUSES] },
+    { $concat: ["open:", CASE_KEY_FIELD] },
+    { $concat: ["closed:", { $toString: { $ifNull: ["$closedCaseId", "$_id"] } }] },
+  ],
+};
+
+/**
+ * Query matching the reports of the same case as a report (see caseKeyOf)
+ * @param {Object} report
+ */
+const toCaseFilter = (report) => {
+  if (report.targetPlaydateId) return { targetPlaydateId: report.targetPlaydateId };
+  if (report.targetMessageId) return { targetMessageId: report.targetMessageId };
+  return { reportedUserId: report.reportedUserId, category: report.category, targetPlaydateId: null, targetMessageId: null };
+};
+
+const countCases = async (match) => {
+  const [row] = await Report.aggregate([
+    { $match: match },
+    { $group: { _id: CASE_GROUP_FIELD } },
+    { $count: "count" },
+  ]);
+  return row?.count || 0;
+};
+
 const countByField = async (match, field) => {
   const rows = await Report.aggregate([{ $match: match }, { $group: { _id: `$${field}`, count: { $sum: 1 } } }]);
   return Object.fromEntries(rows.map((row) => [row._id, row.count]));
@@ -205,7 +244,6 @@ class SafetyRepository {
    * @param {string} [options.severity]
    * @param {string} [options.category]
    * @param {string} [options.targetType]
-   * @param {string|ObjectId} [options.assignedTo]
    * @param {Date} [options.from]
    * @param {Date} [options.to]
    * @param {string} [options.search] - Matched with the reason, literally
@@ -222,7 +260,6 @@ class SafetyRepository {
     severity,
     category,
     targetType,
-    assignedTo,
     from,
     to,
     search,
@@ -251,7 +288,6 @@ class SafetyRepository {
       ...(severity ? { severity } : {}),
       ...(category ? { category } : {}),
       ...(targetType ? { targetType } : {}),
-      ...(assignedTo ? { assignedTo: toObjectId(assignedTo) } : {}),
       ...toCreatedAtFilter({ from, to }),
       ...(conditions.length > 0 ? { $and: conditions } : {}),
     };
@@ -271,7 +307,97 @@ class SafetyRepository {
   }
 
   /**
-   * Queue counts of the stat strip
+   * Moderation queue page by case: the reports about the same content are one row (see CASE_GROUP_FIELD).
+   * Same options as findReportPage. Each item is the first report of the case that matches the filters,
+   * with `caseSeverityWeight` and `caseCreatedAt` (the case is as severe as its worst report and as old
+   * as its first one).
+   * @returns {Promise<{ items: Array<Object>, total: number }>}
+   */
+  async findCasePage({
+    status,
+    severity,
+    category,
+    targetType,
+    from,
+    to,
+    search,
+    searchParentIds = [],
+    overdueBefore,
+    sort = REPORT_SORTS.QUEUE,
+    page,
+    limit,
+  }) {
+    const conditions = [];
+    if (search) {
+      const parentIds = searchParentIds.map(toObjectId);
+      conditions.push({
+        $or: [
+          { reporterId: { $in: parentIds } },
+          { reportedUserId: { $in: parentIds } },
+          { reason: { $regex: escapeRegExp(search), $options: "i" } },
+        ],
+      });
+    }
+    if (overdueBefore) conditions.push(toOverdueFilter(overdueBefore));
+
+    const match = {
+      // An open case holds pending reports and, from before the single-step flow, reviewing ones
+      ...(status ? { status: REPORT_OPEN_STATUSES.includes(status) ? { $in: REPORT_OPEN_STATUSES } : status } : {}),
+      ...(severity ? { severity } : {}),
+      ...(category ? { category } : {}),
+      ...(targetType ? { targetType } : {}),
+      ...toCreatedAtFilter({ from, to }),
+      ...(conditions.length > 0 ? { $and: conditions } : {}),
+    };
+
+    const [result] = await Report.aggregate([
+      { $match: match },
+      { $addFields: { severityWeight: SEVERITY_WEIGHT_FIELD } },
+      { $sort: { createdAt: 1, _id: 1 } },
+      {
+        $group: {
+          _id: CASE_GROUP_FIELD,
+          report: { $first: "$$ROOT" },
+          severityWeight: { $max: "$severityWeight" },
+          createdAt: { $min: "$createdAt" },
+        },
+      },
+      { $sort: REPORT_SORT_STAGES[sort] || REPORT_SORT_STAGES[REPORT_SORTS.QUEUE] },
+      {
+        $facet: {
+          items: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ]);
+    return {
+      items: (result?.items || []).map((row) => ({
+        ...row.report,
+        caseSeverityWeight: row.severityWeight,
+        caseCreatedAt: row.createdAt,
+      })),
+      total: result?.totalCount?.[0]?.count || 0,
+    };
+  }
+
+  /**
+   * Every report of the case of a report, oldest first: the open reports about the same content while it
+   * is open, the reports closed by the same decision once it is closed.
+   * @param {Object} report
+   * @returns {Promise<Array<Object>>}
+   */
+  async findCaseReports(report) {
+    const isOpen = REPORT_OPEN_STATUSES.includes(report.status);
+    if (!isOpen && !report.closedCaseId) return [report];
+    const query = isOpen
+      ? { ...toCaseFilter(report), status: { $in: REPORT_OPEN_STATUSES } }
+      : { closedCaseId: report.closedCaseId };
+    const reports = await Report.find(query).sort({ createdAt: 1, _id: 1 }).lean();
+    return reports.length > 0 ? reports : [report];
+  }
+
+  /**
+   * Queue counts of the stat strip, by case
    * @param {Object} options
    * @param {Date} [options.from]
    * @param {Date} [options.to]
@@ -280,17 +406,24 @@ class SafetyRepository {
    */
   async getReportStats({ from, to, overdueBefore, weekStart }) {
     const range = toCreatedAtFilter({ from, to });
-    const [byStatus, bySeverity, overdue, criticalPending, resolvedThisWeek, averages] = await Promise.all([
-      countByField(range, "status"),
+    const [open, resolved, dismissed, bySeverity, overdue, criticalPending, resolvedThisWeek, averages] = await Promise.all([
+      countCases({ ...range, status: { $in: REPORT_OPEN_STATUSES } }),
+      countCases({ ...range, status: REPORT_STATUS.RESOLVED }),
+      countCases({ ...range, status: REPORT_STATUS.DISMISSED }),
       countByField(range, "severity"),
-      Report.countDocuments({ ...range, ...toOverdueFilter(overdueBefore) }),
-      Report.countDocuments({ ...range, status: REPORT_STATUS.PENDING, severity: REPORT_SEVERITY.CRITICAL }),
-      Report.countDocuments({ ...range, status: REPORT_STATUS.RESOLVED, resolvedAt: { $gte: weekStart } }),
+      countCases({ ...range, ...toOverdueFilter(overdueBefore) }),
+      countCases({ ...range, status: { $in: REPORT_OPEN_STATUSES }, severity: REPORT_SEVERITY.CRITICAL }),
+      countCases({ ...range, status: REPORT_STATUS.RESOLVED, resolvedAt: { $gte: weekStart } }),
       Report.aggregate([
         { $match: { ...range, status: { $in: REPORT_CLOSED_STATUSES }, resolvedAt: { $ne: null } } },
         { $group: { _id: null, avgMs: { $avg: { $subtract: ["$resolvedAt", "$createdAt"] } } } },
       ]),
     ]);
+    const byStatus = {
+      [REPORT_STATUS.PENDING]: open,
+      [REPORT_STATUS.RESOLVED]: resolved,
+      [REPORT_STATUS.DISMISSED]: dismissed,
+    };
     return { byStatus, bySeverity, overdue, criticalPending, resolvedThisWeek, avgResolutionMs: averages[0]?.avgMs || 0 };
   }
 
@@ -380,8 +513,44 @@ class SafetyRepository {
       reportedUserId,
       status: { $in: openStatuses },
     })
-      .select('reporterId targetType targetMessageId targetPlaydateId category reason evidenceUrls createdAt')
+      .select('reporterId reportedUserId targetType targetMessageId targetPlaydateId category severity reason evidenceUrls createdAt')
       .lean();
+  }
+
+  /**
+   * Latest sanction that suspended or banned a parent (provisional ones included), on the report it was
+   * decided on (copies on reports closed with it are skipped), or null when no report did
+   * @param {string|mongoose.Types.ObjectId} reportedUserId - parents._id
+   * @param {string[]} lockTypes - Sanctions that lock the account
+   * @returns {Promise<{ reportId: ObjectId, category: string, actionType: string, durationDays: number|null, performedAt: Date }|null>}
+   */
+  async findLatestLockAction(reportedUserId, lockTypes) {
+    const [row] = await Report.aggregate([
+      { $match: { reportedUserId: toObjectId(reportedUserId), "actions.type": { $in: lockTypes } } },
+      { $unwind: "$actions" },
+      { $match: { "actions.type": { $in: lockTypes }, "actions.propagatedFrom": null } },
+      { $sort: { "actions.performedAt": -1 } },
+      { $limit: 1 },
+      { $project: { category: 1, status: 1, action: "$actions" } },
+    ]);
+    if (!row) return null;
+    return {
+      reportId: row._id,
+      category: row.category,
+      status: row.status,
+      actionType: row.action.type,
+      durationDays: row.action.params?.durationDays ?? null,
+      performedAt: row.action.performedAt,
+    };
+  }
+
+  /**
+   * Add one entry to the log of a report, without loading and saving the whole report
+   * @param {string|mongoose.Types.ObjectId} reportId
+   * @param {Object} entry - A report history entry
+   */
+  async pushReportHistory(reportId, entry) {
+    return Report.updateOne({ _id: reportId }, { $push: { history: entry } });
   }
 
   /**
