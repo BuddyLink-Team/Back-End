@@ -341,6 +341,41 @@ describe('evaluateDraftWarnings', () => {
 });
 
 describe('pickAttractions', () => {
+  const helio = [
+    { title: 'Trượt băng', description: 'Sân băng trong nhà' },
+    { title: 'Nhà banh', description: 'Khu cầu trượt và nhà bóng cho bé' },
+    { title: 'Xe điện đụng', description: 'Trò chơi giải trí' },
+    { title: 'Vịnh Đại Dương', description: 'Khu vui chơi trong nhà' },
+    { title: 'Ga xe lửa', description: 'Phòng chơi lắp ráp xếp hình' },
+  ];
+
+  it('builds the whole agenda from the looked-up games of the place, sized to the playdate', () => {
+    const picked = pickAttractions({
+      children: [{ age: 6, interests: ['Lego'] }, { age: 6, interests: ['Xếp hình'] }],
+      durationMinutes: 120,
+      availableAttractions: helio,
+      placeType: 'playground',
+      activity: { key: 'Khu vui chơi trong nhà (Kids Cafe)', title: 'Vui chơi tại khu vui chơi trong nhà' },
+    });
+    const titles = helio.map((a) => a.title);
+    expect(picked.every((title) => titles.includes(title))).toBe(true);
+    expect(picked.length).toBe(5);
+    // Liked by both children (lắp ráp / xếp hình) first
+    expect(picked[0]).toBe('Ga xe lửa');
+  });
+
+  it('fits fewer looked-up games into a short playdate', () => {
+    const picked = pickAttractions({ children: [{ age: 6 }], durationMinutes: 45, availableAttractions: helio });
+    expect(picked.length).toBeLessThanOrEqual(3);
+    expect(picked.every((title) => helio.some((a) => a.title === title))).toBe(true);
+  });
+
+  it('completes with other games only up to the minimum when the place has too few', () => {
+    const picked = pickAttractions({ children: [{ age: 6 }], durationMinutes: 120, availableAttractions: [{ title: 'Trượt băng' }] });
+    expect(picked[0]).toBe('Trượt băng');
+    expect(picked.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('picks attractions within duration budget', () => {
     const picked = pickAttractions({
       attractions: [
@@ -364,6 +399,9 @@ describe('shouldSearchAttractions', () => {
     expect(shouldSearchAttractions({ placeType: 'library', name: 'Thư viện Khoa học' })).toBe('no');
     expect(shouldSearchAttractions({ placeType: 'home' })).toBe('no');
     expect(shouldSearchAttractions({ placeType: 'workshop', name: 'Nhà Thiếu Nhi Quận 1' })).toBe('uncertain');
+    // Amusement centers named as such are searched without the parent asking
+    expect(shouldSearchAttractions({ placeType: 'playground', name: 'Trung tâm Giải trí Phức hợp Helio Center' })).toBe('yes');
+    expect(shouldSearchAttractions({ placeType: 'playground', name: 'Sân chơi khu phố' })).toBe('no');
   });
 });
 
@@ -507,6 +545,16 @@ describe('BUD-49 Jira follow-up rules', () => {
       'Theo thông tin trên mạng về TiNiWorld: Chơi ở nhà banh khổng lồ (https://example.com/tini)'
     );
     expect(withAttractionSource('Thi xếp Lego', location)).toBe('Thi xếp Lego');
+    // Already sourced text is not prefixed twice
+    expect(withAttractionSource('Theo thông tin trên mạng về TiNiWorld: Chơi ở nhà banh khổng lồ (https://example.com/tini)', location)).toBe(
+      'Theo thông tin trên mạng về TiNiWorld: Chơi ở nhà banh khổng lồ (https://example.com/tini)'
+    );
+  });
+
+  it('keeps only the game in the agenda, the source goes to the note', () => {
+    expect(
+      normalizeAgenda(['Theo thông tin trên mạng về Helio Center: Trượt băng tại Helio Center (https://zalopay.vn/x)', 'Nhà banh'])
+    ).toEqual(['Trượt băng tại Helio Center', 'Nhà banh']);
   });
 
   it('uses the catalog risk, writes the supervision and counts adults like the group chat (B1, B5)', () => {

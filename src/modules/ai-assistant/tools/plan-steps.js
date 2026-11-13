@@ -31,7 +31,7 @@ import {
   defaultDurationFor,
   durationChoicesFor,
   youngestOf,
-  withAttractionSource,
+  attractionOf,
 } from '../plan-draft.rules.js';
 import { toPlaymateItem, toSuggestedPlaceItem, tagsOf } from './tool-sanitizer.js';
 
@@ -471,7 +471,11 @@ const buildAgendaStep = async (ctx) => {
     description: ctx.draft.activity?.title
       ? `Các trò chơi cho "${ctx.draft.activity.title}" trong ${formatDuration(ctx.draft.durationMinutes)}. Bạn sửa, thêm, bớt hoặc xin gợi ý khác nhé.`
       : '',
-    options: ctx.draft.agenda.map((item, index) => ({ id: `agenda:${index}`, label: item, description: '', data: {}, links: [] })),
+    options: ctx.draft.agenda.map((item, index) => {
+      // A real attraction of the place shows where it was read (the game itself stays editable)
+      const sourceUrl = attractionOf(item, ctx.draft.location)?.sourceUrl;
+      return { id: `agenda:${index}`, label: item, description: '', data: {}, links: sourceUrl ? [{ kind: 'source', href: sourceUrl }] : [] };
+    }),
     allowCustom: true,
   });
   card.canSearchAttractions = searchStatus === 'uncertain';
@@ -499,7 +503,7 @@ export const suggestAgenda = (draft, { exclude = [], variant = 0 } = {}) =>
     activity: draft.activity,
     exclude,
     variant,
-  }).map((title) => withAttractionSource(title, draft.location));
+  });
 
 const buildExtraStep = async () => ({
   card: makeChoiceCard({
@@ -684,7 +688,7 @@ export const advancePlan = async (ctx) => {
       childId: children[0].childId,
       displayName: children[0].displayName,
       age: children[0].age ?? null,
-      interests: children[0].interests || [],
+      interests: [...new Set([...(children[0].interests || []), ...(children[0].favoriteActivities || [])])],
     };
     draft.hostChildren = [draft.hostChild];
   }

@@ -382,6 +382,12 @@ export const shouldSearchAttractions = (place = {}) => {
     /water_park|climbing|bowling|ice_skating|trampoline|indoor_play|amusement_arcade|water_slide/i.test(tagString);
   if (type === 'sports_center' && hasPlayKeywords) return 'yes';
 
+  // Amusement / play centers named as such have their own games (e.g. "Trung tâm Giải trí Helio Center")
+  const isAmusementVenue =
+    /giải trí|vui chơi|khu trò chơi|family entertainment|fun ?zone|play ?land/i.test(name) ||
+    /amusement_arcade|indoor_play|theme_park/i.test(tagString);
+  if ((type === 'playground' || type === 'sports_center' || type === 'workshop' || !type) && isAmusementVenue) return 'yes';
+
   // Free self-directed or generic places
   if (type === 'park' || type === 'library' || type === 'home') return 'no';
 

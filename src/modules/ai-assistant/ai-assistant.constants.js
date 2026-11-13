@@ -155,7 +155,6 @@ export const AI_LIMITS = Object.freeze({
   FAR_PLACE_KM: 15, // FAR_PLACE above this distance from a family
   AGENDA_ITEM_MAX_LENGTH: 80,
   // An item of the real attractions of the place also carries its source link
-  SOURCED_AGENDA_ITEM_MAX_LENGTH: 400,
   MAX_EXTRA_SAFETY_NOTES: 3,
   SAFETY_NOTE_MAX_LENGTH: 200,
   MAX_EXTRA_ITEMS_TO_BRING: 4,

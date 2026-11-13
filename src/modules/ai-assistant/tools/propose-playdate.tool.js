@@ -15,7 +15,6 @@ import {
   isKnownAgendaItem,
   draftHostChildren,
   draftAgendaSize,
-  withAttractionSource,
   safetyContextKey,
 } from '../plan-draft.rules.js';
 import { PLAYDATE_RULES } from '../../playdate/playdate.constants.js';
@@ -53,11 +52,14 @@ export const startPlan = async (ctx) => {
   return true;
 };
 
+// Interests and favorite activities together: both tell which games the child will enjoy
+const likesOf = (child) => [...new Set([...(child?.interests || []), ...(child?.favoriteActivities || [])])];
+
 const toHostChild = (child) => ({
   childId: child.childId,
   displayName: child.displayName,
   age: child.age ?? null,
-  interests: child.interests || [],
+  interests: likesOf(child),
 });
 
 /**
@@ -113,7 +115,7 @@ const setParticipants = async (ctx, { childIds = [], names = [], mode = 'replace
     childName: friend.displayName,
     parentName: friend.parent.fullName,
     age: friend.age ?? null,
-    interests: friend.interests || [],
+    interests: likesOf(friend),
     warnings: friend.warnings,
   });
   if (mode === 'remove') {
@@ -138,7 +140,7 @@ const setParticipants = async (ctx, { childIds = [], names = [], mode = 'replace
       childName: friend.displayName,
       parentName: friend.parent.fullName,
       age: friend.age ?? null,
-      interests: friend.interests || [],
+      interests: likesOf(friend),
       warnings: friend.warnings,
     }));
     draft.playmatesSkipped = false;
@@ -352,6 +354,9 @@ export const applyPlanFields = async (ctx, fields) => {
         ...(draft.location?.attractions || []),
         ...(draft.activity ? [draft.activity] : []),
       ];
+      // The place was looked up: only its real games belong to the agenda (BUD-49 A4)
+      const placeAttractions = draft.location?.attractions || [];
+      const allowed = placeAttractions.length ? placeAttractions : references;
       const suited = pickAttractions({
         children: [
           ...draftHostChildren(draft).map((child) => ({ age: child.age, displayName: child.displayName, interests: child.interests })),
@@ -367,19 +372,25 @@ export const applyPlanFields = async (ctx, fields) => {
       let fallbackIndex = 0;
       agenda = agenda
         .map((item) => {
-          if (isKnownAgendaItem(item, references) || relatesToActivity(item, draft.activity)) return item;
+          if (isKnownAgendaItem(item, allowed) || (!placeAttractions.length && relatesToActivity(item, draft.activity))) return item;
           const replacement = fallbackList[fallbackIndex] || null;
           fallbackIndex += 1;
           return replacement;
         })
         .filter(Boolean);
       agenda = agenda.length ? [...new Set(agenda)] : suited;
+      // Too few games for the length of the playdate: completed with the suited ones
+      const { min } = draftAgendaSize(draft);
+      for (const title of suited) {
+        if (agenda.length >= min) break;
+        if (!agenda.includes(title)) agenda.push(title);
+      }
     }
     if (agenda.length) {
       // As many games as the playdate holds (A2; the parent's own list is kept whole), the real attractions
       // written with their source (A4)
       const max = fields.agendaFromParent ? AI_LIMITS.MAX_AGENDA_ITEMS : draftAgendaSize(draft).max;
-      agenda = agenda.slice(0, max).map((item) => withAttractionSource(item, draft.location));
+      agenda = normalizeAgenda(agenda).slice(0, max);
       // The parent's own games are their review of the list
       if (fields.agendaFromParent) draft.agendaConfirmed = true;
       // Games the model changed after the parent's review: the agenda card is shown again for a new review

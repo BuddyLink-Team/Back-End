@@ -200,6 +200,44 @@ const notifyPlaydateParticipantLeft = async ({ playdateId, hostParentId, leaverP
   });
 };
 
+// Playdate cancelled -> notify every family still invited or joined (and the host when an admin cancelled it)
+const notifyPlaydateCancelled = async ({
+  playdateId,
+  hostParentId,
+  participantParentIds = [],
+  activity,
+  cancelledByAdmin,
+  reason,
+}) => {
+  const recipientParentIds = [...participantParentIds];
+  if (cancelledByAdmin && hostParentId) recipientParentIds.push(hostParentId);
+  if (!recipientParentIds.length) return;
+
+  const host = cancelledByAdmin ? null : await parentService.getParentById(hostParentId);
+  const actorName = cancelledByAdmin ? 'Quản trị viên' : host?.fullName || DEFAULT_PARENT_NAME;
+  // An admin's reason may quote a report: only the host's own words are shown
+  const reasonPart = !cancelledByAdmin && reason ? ` Lý do: "${reason}".` : '';
+
+  const results = await Promise.allSettled(
+    [...new Set(recipientParentIds.map(String))].map(async (parentId) => {
+      const parent = await parentService.getParentById(parentId);
+      if (!parent?.userId) return;
+      await notificationService.createNotification({
+        recipientId: parent.userId,
+        type: NOTIFICATION_TYPES.PLAYDATE_CANCELLED,
+        title: 'Buổi hẹn chơi đã bị huỷ',
+        body: `${actorName} đã huỷ buổi "${activity || 'hẹn chơi'}".${reasonPart}`,
+        data: { senderId: cancelledByAdmin ? null : hostParentId, playdateId },
+      });
+    })
+  );
+  results
+    .filter((result) => result.status === 'rejected')
+    .forEach((result) =>
+      logger.error(`[NotificationListeners] Playdate cancelled notification failed: ${result.reason?.message}`)
+    );
+};
+
 // A playdate rated 4-5 stars -> a ready plan to meet the same friends again (BUD-49 D4), opened from the notification
 const notifyRebookingSuggestion = async ({ playdateId, raterParentId, rating }) => {
   if (!rating || rating < REBOOKING_MIN_RATING) return;
@@ -241,6 +279,9 @@ export const registerNotificationListeners = () => {
   );
   onPlaydateEvent(PLAYDATE_EVENTS.PARTICIPANT_LEFT, (payload) =>
     runInBackground('Playdate participant left notification', () => notifyPlaydateParticipantLeft(payload))
+  );
+  onPlaydateEvent(PLAYDATE_EVENTS.CANCELLED, (payload) =>
+    runInBackground('Playdate cancelled notification', () => notifyPlaydateCancelled(payload))
   );
   onPlaydateEvent(PLAYDATE_EVENTS.REMINDER_DUE, (payload) =>
     runInBackground('Playdate reminder notification', () => notifyPlaydateReminder(payload))

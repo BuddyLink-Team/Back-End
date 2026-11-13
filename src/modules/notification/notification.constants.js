@@ -5,6 +5,8 @@ export const NOTIFICATION_TYPES = Object.freeze({
   PLAYDATE_REMINDER: 'playdate_reminder',
   // A family who joined left the host's playdate
   PLAYDATE_LEFT: 'playdate_left',
+  // The host or an admin cancelled a playdate the parent was invited to / hosted
+  PLAYDATE_CANCELLED: 'playdate_cancelled',
   BADGE_UNLOCKED: 'badge_unlocked',
   STREAK_REMINDER: 'streak_reminder',
   // A plan prepared by the AI assistant (e.g. meeting the same friends again after a good playdate)

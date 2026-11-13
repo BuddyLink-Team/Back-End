@@ -137,9 +137,10 @@ export const activityGamesFor = (activity) => gamesOfActivity(activity, namesGam
 export const catalogGamesNamedBy = (text) => [...PLAYDATE_ACTIVITIES, ...GENERIC_GAMES].filter((game) => namesGame(text, game));
 
 /**
- * Games for a playdate (BUD-49 A2, A3): the place's real attractions when known, else the generic games
- * that can be played at this type of place; age-appropriate, the most shared interests first, as many as
- * fit the playdate (agendaSizeFor), each one shorter for young children.
+ * Games for a playdate (BUD-49 A2, A3, A4): only the place's real attractions when it was looked up (other
+ * games only fill up to the minimum when it has too few), else the chosen activity's games and the generic
+ * games of this type of place. Age-appropriate, the games liked by the most children first, as many as fit
+ * the playdate (agendaSizeFor), each one shorter for young children.
  * @param {Object} input
  * @param {Array<{ age?: number|null, interests?: string[], favoriteActivities?: string[] }>} [input.children]
  * @param {number[]} [input.childAges] - When the children are not known
@@ -175,16 +176,27 @@ export const pickAttractions = ({
   const { minutes: itemDuration, maxMinutes } = gameMinutesFor(youngestAge);
   const size = agendaSizeFor({ durationMinutes, youngestAge });
 
-  // Collect all interest/activity tags of the children
-  const allTags = effectiveChildren.flatMap((c) => [...(c.interests || []), ...(c.favoriteActivities || [])].map((t) => String(t).toLowerCase()));
+  // Interests + favorite activities of each child, normalized (one list per child, for the shared interests)
+  const childTagLists = effectiveChildren
+    .map((c) => [...(c.interests || []), ...(c.favoriteActivities || [])].map(normalizeText).filter((t) => t.length >= 2))
+    .filter((list) => list.length);
 
   const generic = GENERIC_GAMES.filter((game) => !placeType || !game.placeTypes?.length || game.placeTypes.includes(placeType));
-  const placeGames = effectiveAttractions.map((a) => ({
-    title: a.title || a.name,
-    minAge: a.minAge ?? 0,
-    maxAge: a.maxAge ?? 18,
-    durationMinutes: Math.min(a.durationMinutes || itemDuration, maxMinutes),
-  }));
+  // A real attraction has no tags: it borrows those of the catalog games it names ("Nhà banh" -> sân chơi, kids cafe)
+  const placeGames = effectiveAttractions
+    .map((a) => {
+      const title = a.title || a.name;
+      const text = [title, a.description].filter(Boolean).join(' ');
+      return {
+        title,
+        text,
+        tags: [...new Set(catalogGamesNamedBy(text).flatMap((game) => game.tags || []))],
+        minAge: a.minAge ?? 0,
+        maxAge: a.maxAge ?? 18,
+        durationMinutes: Math.min(a.durationMinutes || itemDuration, maxMinutes),
+      };
+    })
+    .filter((game) => game.title);
   // The games of the chosen activity come first: the agenda follows what the children will do
   const activityGames = gamesOfActivity(activity, namesGame, PLAYDATE_ACTIVITIES).map((g) => ({
     ...g,
@@ -197,14 +209,20 @@ export const pickAttractions = ({
 
   const excluded = new Set(exclude.map(normalizeText));
   const fitsAge = (item) => (youngestAge === null || item.maxAge >= youngestAge) && (oldestAge === null || item.minAge <= oldestAge);
-  const scoreOf = (item) => {
-    const text = item.title.toLowerCase();
-    const matches = (item.tags || []).filter((tag) => allTags.some((t) => t.includes(tag) || tag.includes(t))).length;
-    const nameMatch = allTags.some((t) => t && text.includes(t)) ? 1 : 0;
-    return matches + nameMatch;
+  // How well a game fits one child: tags of the game or words of its name / description the child likes
+  const childMatches = (item, childTags) => {
+    const text = ` ${normalizeText(item.text || item.title)} `;
+    const tags = (item.tags || []).map(normalizeText).filter(Boolean);
+    return childTags.filter((t) => text.includes(` ${t} `) || tags.some((tag) => tag.includes(t) || t.includes(tag))).length;
   };
-  // Age-appropriate games first, the children's interests first; `variant` rotates the games of equal score,
-  // so asking again gives other games
+  // Shared interests first: the number of children who like the game, then how much they like it
+  const scoreOf = (item) => {
+    const perChild = childTagLists.map((childTags) => childMatches(item, childTags));
+    const sharedBy = perChild.filter((count) => count > 0).length;
+    return sharedBy * 100 + perChild.reduce((sum, count) => sum + count, 0);
+  };
+  // Age-appropriate games first, the children's shared interests first; `variant` rotates the games of equal
+  // score, so asking again gives other games
   const rank = (list) => {
     const usable = list.filter((item) => item.title && !excluded.has(normalizeText(item.title)));
     const fitting = usable.filter(fitsAge);
@@ -216,21 +234,30 @@ export const pickAttractions = ({
       .map(({ item }) => item);
   };
 
-  // Up to two real attractions of the place, then the activity's games, then the games of this type of place
-  const ordered = activityGames.length
-    ? [...rank(placeGames).slice(0, 2), ...rank(activityGames), ...rank(placeGames).slice(2), ...rank(genericGames)]
-    : placeGames.length
-      ? [...rank(placeGames), ...rank(genericGames)]
-      : rank(genericGames);
+  const fill = (list, picked, state, { untilMin = false } = {}) => {
+    for (const item of list) {
+      if (picked.length >= size.max) break;
+      if (untilMin && picked.length >= size.min) break;
+      if (picked.some((title) => normalizeText(title) === normalizeText(item.title))) continue;
+      picked.push(item.title);
+      state.minutes += item.durationMinutes;
+      if (state.minutes >= playMinutes && picked.length >= size.min) break;
+    }
+  };
 
   const picked = [];
-  let currentMinutes = 0;
-  for (const item of ordered) {
-    if (picked.length >= size.max) break;
-    if (picked.some((title) => normalizeText(title) === normalizeText(item.title))) continue;
-    picked.push(item.title);
-    currentMinutes += item.durationMinutes;
-    if (currentMinutes >= playMinutes && picked.length >= size.min) break;
+  const state = { minutes: 0 };
+  let ordered;
+  if (placeGames.length) {
+    // The place was looked up (BUD-49 A4): the agenda is made of its real games only, as many as fit the
+    // playdate; other games only fill up to the minimum when the place has too few
+    ordered = rank(placeGames);
+    fill(ordered, picked, state);
+    fill([...rank(activityGames), ...rank(genericGames)], picked, state, { untilMin: true });
+  } else {
+    // The activity's games, then the games of this type of place
+    ordered = activityGames.length ? [...rank(activityGames), ...rank(genericGames)] : rank(genericGames);
+    fill(ordered, picked, state);
   }
 
   return picked.length ? picked : [ordered[0]?.title || 'Vui chơi tự do theo sở thích'];

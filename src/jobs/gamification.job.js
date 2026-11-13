@@ -6,6 +6,8 @@ import { emitSystemEvent, SYSTEM_EVENTS } from '../shared/events/system.events.j
 
 // Every Monday at 00:00 (Vietnam time): close the previous week
 const SCHEDULE = '0 0 * * 1';
+// Every Saturday at 09:00 (Vietnam time): the weekend is left to keep the streak
+const STREAK_REMINDER_SCHEDULE = '0 9 * * 6';
 
 let isRunning = false;
 
@@ -28,9 +30,25 @@ export const runGamificationJob = async () => {
 };
 
 /**
- * @returns {import('node-cron').ScheduledTask}
+ * Remind the parents whose weekly streak breaks unless they complete a playdate this week
+ * @returns {Promise<void>}
  */
-export const startGamificationJob = () =>
-  cron.schedule(SCHEDULE, runGamificationJob, { timezone: GAMIFICATION_TIMEZONE });
+export const runStreakReminderJob = async () => {
+  try {
+    const sent = await gamificationService.sendStreakReminders();
+    if (sent > 0) logger.info(`[StreakReminderJob] Sent ${sent} streak reminder(s)`);
+  } catch (error) {
+    logger.error(`[StreakReminderJob] Failed: ${error.message}`);
+    void emitSystemEvent(SYSTEM_EVENTS.CRON_JOB_FAILED, { jobName: 'StreakReminderJob', error: error.message });
+  }
+};
+
+/**
+ * @returns {import('node-cron').ScheduledTask[]}
+ */
+export const startGamificationJob = () => [
+  cron.schedule(SCHEDULE, runGamificationJob, { timezone: GAMIFICATION_TIMEZONE }),
+  cron.schedule(STREAK_REMINDER_SCHEDULE, runStreakReminderJob, { timezone: GAMIFICATION_TIMEZONE }),
+];
 
 export default startGamificationJob;

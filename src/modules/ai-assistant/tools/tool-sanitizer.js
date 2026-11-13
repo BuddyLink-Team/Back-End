@@ -109,6 +109,7 @@ export const toPlaymateItem = (entry, ownTags = new Set()) => ({
   gender: entry.child.gender,
   avatarUrl: entry.child.avatarUrl || '',
   interests: entry.child.interests || [],
+  favoriteActivities: entry.child.favoriteActivities || [],
   sharedInterests: (entry.child.interests || []).filter((tag) => ownTags.has(String(tag).toLowerCase())),
   matchScore: entry.matchScore ?? null,
   source: entry.source ? 'paired' : 'friend',

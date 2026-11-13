@@ -17,7 +17,7 @@ import {
   agendaSizeFor,
   activityGamesFor,
 } from '../playdate/playdate.activities.js';
-import { evaluateSafetyRules, isBadWeather, isIndoorPlace } from './safety-rules.js';
+import { evaluateSafetyRules, isBadWeather, isIndoorPlace, activityTextOf } from './safety-rules.js';
 import {
   AI_PLAN_STATUS,
   AI_STEPS,
@@ -160,9 +160,9 @@ export const formatDurationVi = (minutes) => {
 export const normalizeAgenda = (agenda) => {
   if (!Array.isArray(agenda)) return [];
   const items = agenda
-    // An item of the real attractions keeps its source link whole (BUD-49 A4)
-    .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
-    .map((item) => (item.startsWith('Theo thông tin trên mạng về') ? item.slice(0, AI_LIMITS.SOURCED_AGENDA_ITEM_MAX_LENGTH) : item.slice(0, AI_LIMITS.AGENDA_ITEM_MAX_LENGTH)))
+    // Only the game: the source of a real attraction is added to the playdate note (withAttractionSource)
+    .map((item) => activityTextOf(String(item || '').replace(/\s+/g, ' ')))
+    .map((item) => item.slice(0, AI_LIMITS.AGENDA_ITEM_MAX_LENGTH))
     .filter((item) => item && !FILLER_AGENDA_REGEX.test(item));
   return [...new Set(items)].slice(0, AI_LIMITS.MAX_AGENDA_ITEMS);
 };
@@ -208,15 +208,25 @@ export const draftAgendaSize = (draft) => {
  * @returns {string}
  */
 export const withAttractionSource = (item, location) => {
-  const text = String(item || '').trim();
-  if (!location?.name || text.startsWith(ATTRACTION_PREFIX)) return text;
-  const attraction = (location.attractions || []).find((candidate) => namesGame(text, candidate));
-  if (!attraction) return text;
+  const text = activityTextOf(item);
+  const attraction = attractionOf(text, location);
+  if (!location?.name || !attraction) return text;
   const sourced = `${ATTRACTION_PREFIX} ${location.name}: ${text}`;
   return attraction.sourceUrl ? `${sourced} (${attraction.sourceUrl})` : sourced;
 };
 
 const ATTRACTION_PREFIX = 'Theo thông tin trên mạng về';
+
+/**
+ * The real attraction of the place an agenda item names (BUD-49 A4), if any
+ * @param {string} item
+ * @param {{ attractions?: Array<{ title: string, sourceUrl?: string|null }> }} location
+ * @returns {Object|null}
+ */
+export const attractionOf = (item, location) => {
+  const text = activityTextOf(item);
+  return (text && (location?.attractions || []).find((candidate) => namesGame(text, candidate))) || null;
+};
 
 /**
  * Playdate note: the AI agenda as a numbered list, safety precautions, then the parent's own note,
@@ -821,7 +831,13 @@ export const toDraftResponse = (draft) => {
     itemsToBring: draft.itemsToBring || [],
     hasHighRisk: Boolean(draft.hasHighRisk),
     extraNote: draft.note || '',
-    note: buildNote(draft.agenda, draft.note, draft.safetyNotes, draft.itemsToBring),
+    // The real attractions are written with their source in the note only (never in the editable games)
+    note: buildNote(
+      (draft.agenda || []).map((item) => withAttractionSource(item, draft.location)),
+      draft.note,
+      draft.safetyNotes,
+      draft.itemsToBring
+    ),
     warnings: describedWarnings(draft),
     // Lengths the summary card can switch to
     durationChoices: durationChoicesFor(draft.durationMinutes, youngestOf(draft)),

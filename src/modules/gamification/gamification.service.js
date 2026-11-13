@@ -7,6 +7,7 @@ import logger from '../../shared/logger/index.js';
 import AppError from '../../shared/exceptions/app-error.js';
 import { AchievementsDTO } from './gamification.dto.js';
 import { BADGE_DEFINITIONS } from './gamification.constants.js';
+import { NOTIFICATION_TYPES } from '../notification/notification.constants.js';
 import { buildMetrics, calculateStreak, weekKey, weekStart } from './gamification.rules.js';
 
 class GamificationService {
@@ -97,6 +98,34 @@ class GamificationService {
     for await (const parentId of parentService.iterateParentIds()) {
       await this.syncParentAchievements(parentId);
     }
+  }
+
+  /**
+   * Remind the parents with a running streak and no completed playdate this week yet
+   * (weekly job, before the weekend). A failed notification is only logged.
+   * @param {Date} [now]
+   * @returns {Promise<number>} Reminders sent
+   */
+  async sendStreakReminders(now = new Date()) {
+    const currentWeek = weekKey(weekStart(now));
+    let sent = 0;
+    for await (const parent of parentService.iterateStreakAtRiskParents(currentWeek)) {
+      if (!parent.userId) continue;
+      const streak = parent.streak?.currentWeeklyStreak || 0;
+      try {
+        await notificationService.createNotification({
+          recipientId: parent.userId,
+          type: NOTIFICATION_TYPES.STREAK_REMINDER,
+          title: `Giữ chuỗi ${streak} tuần nhé!`,
+          body: `Bạn đang có chuỗi ${streak} tuần liên tiếp hẹn chơi. Hoàn thành một buổi hẹn trước hết Chủ nhật để không bị mất chuỗi.`,
+          data: {},
+        });
+        sent += 1;
+      } catch (error) {
+        logger.error(`[Gamification] streak_reminder notification failed for parent ${parent._id}: ${error.message}`);
+      }
+    }
+    return sent;
   }
 }
 

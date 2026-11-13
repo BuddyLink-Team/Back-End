@@ -723,6 +723,7 @@ class PlaydateService {
             age,
             gender: child.gender,
             interests: child.interests || [],
+            favoriteActivities: child.favoriteActivities || [],
           },
           matchScore: calculateChildPairScore(ownChild, parent, child, friendParent),
           source: pair?.source || null,
@@ -929,6 +930,7 @@ class PlaydateService {
       activity: before.activity,
       cancelledByAdmin: false,
       reason,
+      ...this._cancellationRecipients(before),
     });
 
     const updated = await playdateRepository.findById(id);
@@ -941,6 +943,20 @@ class PlaydateService {
    * @param {Object} playdate - The playdate as it was before the cancellation
    * @private
    */
+  /**
+   * Who hears about a cancellation: the host and every family still invited or joined
+   * (families who declined or left are no longer part of the playdate)
+   * @param {Object} playdate - The playdate as it was before the cancellation
+   * @returns {{ hostParentId: string, participantParentIds: string[] }}
+   */
+  _cancellationRecipients(playdate) {
+    const stillIn = (playdate.participants || []).filter((p) => p.status !== PARTICIPANT_STATUS.DECLINED);
+    return {
+      hostParentId: toId(playdate.hostParentId),
+      participantParentIds: uniqueParentIds(stillIn),
+    };
+  }
+
   async _refundJoinedParticipants(playdate) {
     const acceptedEntries = (playdate.participants || []).filter(
       (p) => p.status === PARTICIPANT_STATUS.ACCEPTED && p.quotaConsumedAt
@@ -1493,6 +1509,7 @@ class PlaydateService {
       activity: before.activity,
       cancelledByAdmin: true,
       reason,
+      ...this._cancellationRecipients(before),
     });
 
     return playdateRepository.findById(id);

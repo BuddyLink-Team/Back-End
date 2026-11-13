@@ -514,7 +514,11 @@ describe('AI assistant (/api/v1/ai-assistant)', () => {
       expect(third.status).toBe(200);
       const [agendaCard] = third.body.data.reply.cards;
       expect(agendaCard).toMatchObject({ type: 'choices', stepId: 'agenda', allowCustom: true });
-      expect(agendaCard.options.map((o) => o.label)).toEqual(['Vẽ tranh màu nước', 'Chơi cầu trượt']);
+      // The model's games first (the filler one removed), completed with suited games up to what the playdate holds
+      const agendaLabels = agendaCard.options.map((o) => o.label);
+      expect(agendaLabels.slice(0, 2)).toEqual(['Vẽ tranh màu nước', 'Chơi cầu trượt']);
+      expect(agendaLabels).not.toContain('Làm quen, chào hỏi');
+      expect(agendaLabels.length).toBeGreaterThan(2);
 
       // Edited agenda confirmed: last question before the summary
       mockModel(geminiText('Bạn có muốn thêm gì không?'));

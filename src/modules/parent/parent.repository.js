@@ -101,6 +101,21 @@ class ParentRepository {
   }
 
   /**
+   * Stream the parents with a running weekly streak and no completed playdate in the given week
+   * @param {string} currentWeek - Week key, e.g. "2026-W46"
+   * @returns {import('mongoose').Cursor}
+   */
+  findStreakAtRiskCursor(currentWeek) {
+    return Parent.find({
+      'streak.currentWeeklyStreak': { $gt: 0 },
+      'streak.lastCompletedPlaydateWeek': { $ne: currentWeek },
+    })
+      .select('_id userId streak.currentWeeklyStreak')
+      .lean()
+      .cursor();
+  }
+
+  /**
    * Stream the IDs of every parent (for batch jobs)
    * @returns {import('mongoose').Cursor}
    */

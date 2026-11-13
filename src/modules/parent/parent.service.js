@@ -100,6 +100,16 @@ class ParentService {
    * Iterate over the IDs of every parent (used by batch jobs)
    * @returns {AsyncGenerator<ObjectId>}
    */
+  /**
+   * Parents whose weekly streak breaks unless a playdate is completed this week
+   * @param {string} currentWeek - Week key, e.g. "2026-W46"
+   */
+  async *iterateStreakAtRiskParents(currentWeek) {
+    for await (const parent of parentRepository.findStreakAtRiskCursor(currentWeek)) {
+      yield parent;
+    }
+  }
+
   async *iterateParentIds() {
     for await (const parent of parentRepository.findAllIdsCursor()) {
       yield parent._id;
