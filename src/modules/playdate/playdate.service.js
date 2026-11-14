@@ -382,13 +382,21 @@ class PlaydateService {
    * Playdate for one parent, with canLeave: a family who joined can leave until the playdate starts.
    * isLateLeave: leaving now would be a late leave (counted in the reliability), unless the family
    * blocked the host or another joined family (who was blocked stays private).
+   * myLockedChildIds: own invited children locked by the Free plan while the invitation is pending
+   * (accepting is refused with CHILD_PROFILE_LOCKED, see respondToPlaydate).
    * @param {Object} playdate
    * @param {ObjectId} parentId
    * @returns {Promise<Object>}
    * @private
    */
   async _toViewerResponse(playdate, parentId) {
-    const response = PlaydateResponseDTO.toResponse(playdate, parentId);
+    const base = PlaydateResponseDTO.toResponse(playdate, parentId);
+    let myLockedChildIds = [];
+    if (base.myParticipantStatus === PARTICIPANT_STATUS.PENDING && base.myChildIds.length) {
+      const lockedIds = await childService.getLockedChildIds([parentId]);
+      myLockedChildIds = base.myChildIds.filter((childId) => lockedIds.has(childId));
+    }
+    const response = { ...base, myLockedChildIds };
     const now = new Date();
     const start = getScheduledStart(playdate.scheduledDate, playdate.time);
     const canLeave =
