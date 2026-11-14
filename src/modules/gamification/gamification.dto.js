@@ -10,7 +10,7 @@ export class AchievementsDTO {
    * @param {{ metrics?: Object, currentWeek?: string }} [context] - Current badge metrics and ISO week key
    */
   static toResponse(streak = {}, definitions = [], unlockedBadges = [], { metrics = {}, currentWeek = null } = {}) {
-    const unlockedByCode = new Map(unlockedBadges.map((item) => [item.badgeCode, item]));
+    const unlockedByCode = new Map(unlockedBadges.filter((item) => item.badgeId?.code).map((item) => [item.badgeId.code, item]));
     const lastCompletedPlaydateWeek = streak.lastCompletedPlaydateWeek ?? null;
 
     return {

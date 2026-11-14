@@ -541,6 +541,7 @@ const REPORT_PLAN = [
 
 // Same badges as the app (title / description / icon / requirement), without the metric used to evaluate them
 const BADGES = BADGE_DEFINITIONS.map(({ code, title, description, iconUrl, requirementCount }) => ({
+  _id: oid(),
   code,
   title,
   description,
@@ -621,7 +622,18 @@ const loadExistingAccounts = async () => {
   const seedUsers = users.filter((user) => user.role !== 'admin' && isSeedEmail(user.email));
   const parents = await Parent.find({ userId: { $in: seedUsers.map((user) => user._id) } }).lean();
   const children = await Child.find({ parentId: { $in: parents.map((parent) => parent._id) } }).lean();
+  // Current plan of each kept account: the seed gives it the same plan again
+  const subscriptions = await Subscription.find({ parentId: { $in: parents.map((parent) => parent._id) } }).sort({ createdAt: -1 }).lean();
+  const planKindByParent = new Map();
+  for (const sub of subscriptions) {
+    const key = sub.parentId.toString();
+    if (planKindByParent.has(key)) continue;
+    if (sub.planCode === 'premium_yearly') planKindByParent.set(key, 'yearly');
+    else if (sub.planCode === 'premium_monthly') planKindByParent.set(key, sub.purchasedMonths > 1 ? 'renewedMonthly' : 'monthly');
+    else planKindByParent.set(key, sub.lastPaymentId ? 'expired' : 'free');
+  }
   return {
+    planKindByParent,
     admin: users.find((user) => user.role === 'admin') || null,
     usersById: new Map(seedUsers.map((user) => [user._id.toString(), user])),
     parents,
@@ -658,6 +670,7 @@ const buildFamilies = (existing, passwordHash) => {
     families.push({
       user: { ...user, phone: phone || undefined },
       parent,
+      keptPlanKind: existing.planKindByParent.get(parent._id.toString()) || null,
       // 'other' is no longer a value of the child form: such a profile becomes boy or girl
       children: existing.children
         .filter((child) => sameId(child.parentId, parent._id))
@@ -841,7 +854,17 @@ export async function seedDatabase({ log = console.log } = {}) {
     monthly: addTime(WINDOW_END, -12 * DAY),
   };
   const keptSignupOf = (family) => (family.isExisting ? new Date(family.parent.createdAt) : null);
-  const planPool = [...planOrder];
+  // A kept account stays on the plan it had: it takes one of the plans of the mix (Free when none is left)
+  const planPool = [];
+  for (const family of planOrder) {
+    if (!family.keptPlanKind) {
+      planPool.push(family);
+      continue;
+    }
+    family.planKind = family.keptPlanKind;
+    const index = kinds.indexOf(family.planKind);
+    if (index !== -1) kinds.splice(index, 1);
+  }
   for (const kind of kinds) {
     // An account older than the window buys its plan from WINDOW_START
     const index = planPool.findIndex((family) => !keptSignupOf(family) || maxDate(keptSignupOf(family), WINDOW_START) < LATEST_SIGNUP[kind]);
@@ -1788,7 +1811,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       for (const badge of BADGE_DEFINITIONS) {
         if (unlocked.has(badge.code) || metrics[badge.metric] < badge.requirementCount) continue;
         unlocked.add(badge.code);
-        userBadges.push({ parentId, badgeCode: badge.code, unlockedAt: eventAt, createdAt: eventAt });
+        userBadges.push({ parentId, badgeId: BADGES.find((b) => b.code === badge.code)._id, unlockedAt: eventAt, createdAt: eventAt });
         notify(family, 'badge_unlocked', 'Bạn vừa mở khóa huy hiệu mới!', `Huy hiệu "${badge.title}": ${badge.description}`, { badgeCode: badge.code }, eventAt);
       }
     }

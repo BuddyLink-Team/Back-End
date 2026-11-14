@@ -18,7 +18,7 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 - Bỏ `activityCategory` và `endTime` trong `playdates`, đồng thời bỏ `newEndTime` trong `reschedule_requests` để tối giản và linh hoạt theo lịch thực tế của gia đình. Thời lượng lưu bằng `durationMinutes` (BUD-48); giờ kết thúc (`endTime`) chỉ được tính ra trong response, không lưu.
 - Kết nối vẫn ở cấp **phụ huynh**; các cặp bé được ghép (`childPairs`) là metadata trên `connections` (BUD-48).
 - Sơ đồ quan hệ thực thể (ERD) được phân tách chi tiết theo 7 Module nghiệp vụ độc lập bằng cú pháp **Mermaid ERD**, dễ dàng theo dõi và export hình ảnh.
-- Script khởi tạo toàn bộ 25 Collections, Indexes và Skeleton Documents nạp sẵn vào MongoDB được lưu độc lập tại file [`scripts/init-mongo.js`](scripts/init-mongo.js).
+- Script khởi tạo toàn bộ 26 Collections, Indexes và Skeleton Documents nạp sẵn vào MongoDB được lưu độc lập tại file [`scripts/init-mongo.js`](scripts/init-mongo.js).
 
 ### Bảng phân mục 26 Collections:
 
@@ -54,7 +54,7 @@ Hệ thống cơ sở dữ liệu BuddyLink được tổ chức theo chuẩn ph
 ---
 ## 2. Mermaid Entity Relationship Diagrams (Phân tách theo từng Module)
 
-Để sơ đồ không bị rối rắm và tiện theo dõi, hệ thống quan hệ thực thể (ERD) của 25 Collections được **phân tách thành 7 Module nghiệp vụ độc lập**. Bạn có thể sao chép riêng từng khối mã Mermaid để xem trên [mermaid.live](https://mermaid.live) hoặc xem trực tiếp qua Markdown Preview trong IDE.
+Để sơ đồ không bị rối rắm và tiện theo dõi, hệ thống quan hệ thực thể (ERD) của 26 Collections được **phân tách thành 7 Module nghiệp vụ độc lập**. Bạn có thể sao chép riêng từng khối mã Mermaid để xem trên [mermaid.live](https://mermaid.live) hoặc xem trực tiếp qua Markdown Preview trong IDE.
 
 ---
 
@@ -78,6 +78,8 @@ flowchart TD
     subgraph M3["Module 3: Playdates & Places"]
         P -.-> PD["playdates"]
         C -.-> PD
+        PD --- PL["playdate_leaves"]
+        P -.-> PL
         PD --- RR["reschedule_requests"]
         PD --- RF["ratings_feedbacks"]
         PC["places_cache"]
@@ -89,6 +91,7 @@ flowchart TD
         P -.-> CV
         CV --- MS["messages"]
         U -.-> NT["notifications"]
+        U -.-> AN["admin_notifications"]
         P -.-> AI["ai_chat_sessions"]
     end
 
@@ -242,24 +245,27 @@ erDiagram
 
 ### 2.4 Module 3: Sự kiện Playdate, Đổi lịch, Đánh giá & Địa điểm (Playdates, Reschedule, Feedback & Places)
 
-> **Collections:** `playdates`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`, `places_sync_tiles`  
-> **Nghiệp vụ:** Tổ chức lịch gặp gỡ (không có activityCategory và endTime), quy trình đồng thuận đổi lịch (không có newEndTime), đánh giá sau buổi chơi, cache địa điểm OpenStreetMaps.
+> **Collections:** `playdates`, `playdate_leaves`, `reschedule_requests`, `ratings_feedbacks`, `places_cache`, `places_sync_tiles`  
+> **Nghiệp vụ:** Tổ chức lịch gặp gỡ (không có activityCategory và endTime), lưu lịch sử rời buổi hẹn và tính độ tin cậy, quy trình đồng thuận đổi lịch (không có newEndTime), đánh giá sau buổi chơi, cache địa điểm OpenStreetMaps và đồng bộ ô lưới bản đồ.
 
 ```mermaid
 erDiagram
     PARENTS ||--o{ PLAYDATES : "hostParentId"
     CHILDREN ||--o{ PLAYDATES : "hostChildId"
+    PLAYDATES ||--o{ PLAYDATE_LEAVES : "tracks leaves (1:N)"
+    PARENTS ||--o{ PLAYDATE_LEAVES : "left by (parentId)"
     PLAYDATES ||--o{ RESCHEDULE_REQUESTS : "has requests (1:N)"
     PARENTS ||--o{ RESCHEDULE_REQUESTS : "requestedBy"
     PLAYDATES ||--o{ RATINGS_FEEDBACKS : "receives ratings (1:N)"
     PARENTS ||--o{ RATINGS_FEEDBACKS : "author (parentId)"
+    PLACES_SYNC_TILES }o..o{ PLACES_CACHE : "syncs bbox into cache"
 
     PLAYDATES {
         ObjectId _id PK
         ObjectId hostParentId FK "Ref: parents._id"
         ObjectId hostChildId FK "Ref: children._id (bé chính)"
         ObjectId[] hostChildIds FK "Mọi bé của chủ trì đi chơi (bé chính đứng đầu)"
-        array participants "Array of { parentId, childId, status, invitedAt, respondedAt, quotaConsumedAt }"
+        array participants "Array of { parentId, childId, status, invitedAt, respondedAt, leftAt, quotaConsumedAt }"
         array chaperones "Array of { parentId, confirmedAt } (người lớn xác nhận đi kèm)"
         date scheduledDate "Ngày tổ chức"
         string time "Giờ bắt đầu, ví dụ: 09:00"
@@ -272,6 +278,20 @@ erDiagram
         date completedAt
         ObjectId chatConversationId FK "Ref: conversations._id (1:1)"
         object reminders "h24SentAt, h1SentAt (job nhắc lịch)"
+        date createdAt
+        date updatedAt
+    }
+
+    PLAYDATE_LEAVES {
+        ObjectId _id PK
+        ObjectId playdateId FK "Ref: playdates._id"
+        ObjectId parentId FK "Ref: parents._id (gia đình rời)"
+        date leftAt
+        date scheduledStart "Giờ bắt đầu buổi hẹn lúc rời"
+        number hoursBeforeStart "Làm tròn 0.1 giờ"
+        boolean isLate "Rời khi còn < 24h; false khi safetyExempt"
+        boolean safetyExempt "Đã chặn host/gia đình khác: miễn tính độ tin cậy"
+        string reason "Lý do rời (tối đa 300 ký tự)"
         date createdAt
         date updatedAt
     }
@@ -317,6 +337,20 @@ erDiagram
         date attractionsFetchedAt "TTL 30 ngày, lưu cả khi rỗng, không lưu khi tìm lỗi"
         date lastFetchedAt "Kiểm tra TTL làm mới cache (30 ngày)"
     }
+
+    PLACES_SYNC_TILES {
+        ObjectId _id PK
+        string key UK "cellSizeDeg:row:col"
+        number cellSizeDeg "Kích thước ô lưới (mặc định 0.1 độ)"
+        array bbox "[south, west, north, east]"
+        string status "syncing | done | failed"
+        int placesCount "Số địa điểm ở lần sync gần nhất"
+        date startedAt "Thời điểm giữ khóa sync"
+        date syncedAt "Lần sync thành công gần nhất"
+        string lastError
+        date createdAt
+        date updatedAt
+    }
 ```
 
 ---
@@ -324,7 +358,7 @@ erDiagram
 ### 2.5 Module 4: Trò chuyện, Thông báo & Trợ lý AI (Chat, Notifications & AI Assistant)
 
 > **Collections:** `conversations`, `messages`, `notifications`, `admin_notifications`, `ai_chat_sessions`  
-> **Nghiệp vụ:** Nhắn tin trực tiếp 1-1, chat nhóm Playdate theo thời gian thực qua Socket.IO, thông báo in-app, hội thoại với AI Family Assistant.
+> **Nghiệp vụ:** Nhắn tin trực tiếp 1-1, chat nhóm Playdate theo thời gian thực qua Socket.IO, thông báo in-app cho phụ huynh và Admin Portal, hội thoại với AI Family Assistant.
 
 ```mermaid
 erDiagram
@@ -373,6 +407,22 @@ erDiagram
         date createdAt
     }
 
+    ADMIN_NOTIFICATIONS {
+        ObjectId _id PK
+        string category "users | payments | playdates | connections | safety | system"
+        string type "new_signup | account_locked | payment_succeeded | new_violation_report..."
+        string severity "info | warning | critical"
+        string title
+        string message
+        string entityType "User | Payment | Subscription | Playdate | Connection | Report | System"
+        ObjectId entityId "ID thực thể liên quan"
+        ObjectId[] readBy FK "Array of users._id (admin đã đọc)"
+        boolean isActive
+        date deletedAt
+        date createdAt "TTL Index 90 ngày"
+        date updatedAt
+    }
+
     AI_CHAT_SESSIONS {
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
@@ -415,7 +465,7 @@ erDiagram
     USER_BADGES {
         ObjectId _id PK
         ObjectId parentId FK "Ref: parents._id"
-        string badgeCode FK "Ref: badges.code (Unique compound with parentId)"
+        ObjectId badgeId FK "Ref: badges._id (Unique compound with parentId)"
         date unlockedAt "Thời điểm đạt huy hiệu"
     }
 ```
@@ -1105,7 +1155,7 @@ interface IBadge {
 interface IUserBadge {
   _id: ObjectId;
   parentId: ObjectId; // Tham chiếu parents._id
-  badgeCode: string; // Tham chiếu badges.code
+  badgeId: ObjectId; // Tham chiếu badges._id
   unlockedAt: Date; // Mở khóa vĩnh viễn
 }
 ```

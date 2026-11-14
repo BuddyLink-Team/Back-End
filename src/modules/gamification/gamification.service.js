@@ -48,10 +48,19 @@ class GamificationService {
       longestStreak: parent.streak.longestStreak,
     });
     const newlyUnlocked = [];
+    let badgeIds = null;
     for (const badge of BADGE_DEFINITIONS) {
       if (metrics[badge.metric] < badge.requirementCount) continue;
+      badgeIds ??= await gamificationRepository.findBadgeIdsByCode();
+      let badgeId = badgeIds.get(badge.code);
+      if (!badgeId) {
+        // badges collection not seeded yet (e.g. fresh database): create the definitions, then retry
+        await this.seedBadges();
+        badgeIds = await gamificationRepository.findBadgeIdsByCode();
+        badgeId = badgeIds.get(badge.code);
+      }
       try {
-        const result = await gamificationRepository.unlockUserBadge(parentId, badge.code, now);
+        const result = await gamificationRepository.unlockUserBadge(parentId, badgeId, now);
         if (result?.upsertedCount) newlyUnlocked.push(badge);
       } catch (error) {
         // Concurrent job / HTTP evaluations can only unlock once

@@ -36,7 +36,10 @@ async function loadService(relative, mocks) {
   await target.evaluate();
   return target.namespace;
 }
-const query = value => ({select(){return this;},sort(){return this;},lean: async () => value, distinct:async()=>value});
+import { BADGE_DEFINITIONS } from '../../src/modules/gamification/gamification.constants.js';
+// In these tests a badge _id is its code
+const BADGE_IDS = BADGE_DEFINITIONS.map(({ code }) => ({ _id: code, code }));
+const query = value => ({select(){return this;},populate(){return this;},sort(){return this;},lean: async () => value, distinct:async()=>value});
 
 test('badge unlocks are permanent and timestamps remain unchanged after metrics decrease', async () => {
   let playdates = Array.from({length:10}, (_,i) => ({completedAt:`2026-09-${String(1+i*3).padStart(2,'0')}`, location:{placeId:`p${i%5}`}}));
@@ -54,10 +57,10 @@ test('badge unlocks are permanent and timestamps remain unchanged after metrics 
     'index.js':{default:{error(){}}},
     'playdate.service.js':{default:{getCompletedPlaydatesForParent:async()=>playdates}},
     'connection.service.js':{default:{countAcceptedConnections:async()=>connectionCount}},
-    'badge.model.js':{default:{}},
-    'user-badge.model.js':{default:{find:()=>query([...badges.values()]),updateOne:async(filter,update)=>{
-      if(badges.has(filter.badgeCode))return {upsertedCount:0};
-      badges.set(filter.badgeCode,update.$setOnInsert);
+    'badge.model.js':{default:{find:()=>query(BADGE_IDS)}},
+    'user-badge.model.js':{default:{find:()=>query([...badges.values()].map(b=>({...b,badgeId:{_id:b.badgeId,code:b.badgeId}}))),updateOne:async(filter,update)=>{
+      if(badges.has(filter.badgeId))return {upsertedCount:0};
+      badges.set(filter.badgeId,update.$setOnInsert);
       return {upsertedCount:1};
     }}},
   });
@@ -85,7 +88,7 @@ test('achievements read playdates and connections of the given parent through th
     'connection.service.js':{default:{countAcceptedConnections:async id=>{calls.push(['connections',id]);return 3;}}},
     'notification.service.js':{default:{notifyBadgeUnlocked:async()=>{}}},
     'index.js':{default:{error(){}}},
-    'badge.model.js':{default:{}},
+    'badge.model.js':{default:{find:()=>query(BADGE_IDS)}},
     'user-badge.model.js':{default:{find:()=>query([]),updateOne:async()=>({upsertedCount:1})}},
   });
   const result = await service.default.syncParentAchievements('parent');

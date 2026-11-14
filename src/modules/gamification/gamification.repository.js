@@ -19,14 +19,25 @@ class GamificationRepository {
     );
   }
 
-  async findUserBadgesByParentId(parentId) {
-    return UserBadge.find({ parentId }).lean();
+  /**
+   * @returns {Promise<Map<string, ObjectId>>} badge _id by badge code
+   */
+  async findBadgeIdsByCode() {
+    const badges = await Badge.find({}, { code: 1 }).lean();
+    return new Map(badges.map((badge) => [badge.code, badge._id]));
   }
 
-  async unlockUserBadge(parentId, badgeCode, unlockedAt) {
+  /**
+   * user_badges of a parent, with the code of each badge (badgeId populated)
+   */
+  async findUserBadgesByParentId(parentId) {
+    return UserBadge.find({ parentId }).populate('badgeId', 'code').lean();
+  }
+
+  async unlockUserBadge(parentId, badgeId, unlockedAt) {
     return UserBadge.updateOne(
-      { parentId, badgeCode },
-      { $setOnInsert: { parentId, badgeCode, unlockedAt } },
+      { parentId, badgeId },
+      { $setOnInsert: { parentId, badgeId, unlockedAt } },
       { upsert: true }
     );
   }

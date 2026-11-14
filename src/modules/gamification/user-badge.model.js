@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import { BADGE_CODES } from './gamification.constants.js';
 
 const userBadgeSchema = new mongoose.Schema(
   {
@@ -9,11 +8,10 @@ const userBadgeSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    badgeCode: {
-      type: String,
-      enum: Object.values(BADGE_CODES),
-      required: true,
+    badgeId: {
+      type: mongoose.Schema.Types.ObjectId,
       ref: 'Badge',
+      required: true,
     },
     unlockedAt: {
       type: Date,
@@ -27,7 +25,7 @@ const userBadgeSchema = new mongoose.Schema(
 );
 
 // Ensure each badge is unlocked at most once per parent (permanent)
-userBadgeSchema.index({ parentId: 1, badgeCode: 1 }, { unique: true });
+userBadgeSchema.index({ parentId: 1, badgeId: 1 }, { unique: true });
 
 const UserBadge = mongoose.models.UserBadge || mongoose.model('UserBadge', userBadgeSchema);
 
