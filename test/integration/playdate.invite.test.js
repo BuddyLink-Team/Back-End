@@ -5,7 +5,6 @@ import Child from '../../src/modules/child/child.model.js';
 import Connection from '../../src/modules/connection/connection.model.js';
 import Notification from '../../src/modules/notification/notification.model.js';
 import Playdate from '../../src/modules/playdate/playdate.model.js';
-import Block from '../../src/modules/safety/block.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
 import { grantPremium } from '../helpers/subscriptionHelper.js';
 

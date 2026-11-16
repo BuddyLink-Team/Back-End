@@ -61,7 +61,8 @@ describe("Authentication & Onboarding Integration Flow", () => {
     // Verify free subscription was automatically created
     const subscription = await Subscription.findOne({ parentId: res.body.data.parent.id });
     expect(subscription).not.toBeNull();
-    expect(subscription.planCode).toBe("free");
+    const freePlanId = (await SubscriptionPlan.findOne({ planCode: "free" }).lean())._id;
+    expect(String(subscription.planId)).toBe(String(freePlanId));
     expect(subscription.status).toBe("active");
 
     // Verify quota summary can be retrieved
@@ -98,7 +99,8 @@ describe("Authentication & Onboarding Integration Flow", () => {
     // Verify free subscription was automatically created for google parent
     const subscription = await Subscription.findOne({ parentId: res.body.data.parent.id });
     expect(subscription).not.toBeNull();
-    expect(subscription.planCode).toBe("free");
+    const freePlanId = (await SubscriptionPlan.findOne({ planCode: "free" }).lean())._id;
+    expect(String(subscription.planId)).toBe(String(freePlanId));
     expect(subscription.status).toBe("active");
   });
 

@@ -28,14 +28,44 @@ const playdate = (host, overrides) =>
     ...overrides,
   });
 
+// A guest who accepted: the playdate is confirmed
+const acceptedBy = (guest) => [{ parentId: guest.parentId, childId: guest.childId, status: 'accepted', respondedAt: new Date() }];
+
 describe('Playdate list order', () => {
+  it('"Sắp tới" only lists the confirmed playdates that have not started yet', async () => {
+    const host = await registerParent('upcoming');
+    const guest = await registerParent('upcoming-guest');
+    // Confirmed, started earlier today (still "upcoming" until the 00:00 job closes it)
+    await playdate(host, { activity: 'started today', scheduledDate: new Date(isoDay(0)), time: '00:00', participants: acceptedBy(guest) });
+    // Nobody answered yet / nobody invited
+    await playdate(host, {
+      activity: 'pending',
+      scheduledDate: new Date(isoDay(3)),
+      time: '09:00',
+      participants: [{ parentId: guest.parentId, childId: guest.childId, status: 'pending' }],
+    });
+    await playdate(host, { activity: 'alone', scheduledDate: new Date(isoDay(4)), time: '09:00' });
+    await playdate(host, { activity: 'confirmed', scheduledDate: new Date(isoDay(3)), time: '15:00', participants: acceptedBy(guest) });
+
+    const res = await request(app).get('/api/v1/playdates?status=upcoming').set('Authorization', `Bearer ${host.token}`);
+    expect(res.body.data.playdates.map((p) => p.activity)).toEqual(['confirmed']);
+    expect(res.body.data.counts.upcoming).toBe(1);
+    expect(res.body.data.counts.all).toBe(4);
+
+    // The guest sees the same: the playdates they accepted and that have not started
+    const forGuest = await request(app).get('/api/v1/playdates?status=upcoming').set('Authorization', `Bearer ${guest.token}`);
+    expect(forGuest.body.data.playdates.map((p) => p.activity)).toEqual(['confirmed']);
+  });
+
   it('lists upcoming playdates soonest first (date and time), then past ones most recent first', async () => {
     const host = await registerParent('order');
-    await playdate(host, { activity: 'in 5 days 15:00', scheduledDate: new Date(isoDay(5)), time: '15:00' });
+    const guest = await registerParent('order-guest');
+    const participants = acceptedBy(guest);
+    await playdate(host, { activity: 'in 5 days 15:00', scheduledDate: new Date(isoDay(5)), time: '15:00', participants });
     await playdate(host, { activity: 'completed 10 days ago', scheduledDate: new Date(isoDay(-10)), time: '09:00', status: 'completed' });
-    await playdate(host, { activity: 'in 5 days 09:00', scheduledDate: new Date(isoDay(5)), time: '09:00' });
+    await playdate(host, { activity: 'in 5 days 09:00', scheduledDate: new Date(isoDay(5)), time: '09:00', participants });
     await playdate(host, { activity: 'cancelled yesterday', scheduledDate: new Date(isoDay(-1)), time: '09:00', status: 'cancelled' });
-    await playdate(host, { activity: 'in 2 days 10:00', scheduledDate: new Date(isoDay(2)), time: '10:00' });
+    await playdate(host, { activity: 'in 2 days 10:00', scheduledDate: new Date(isoDay(2)), time: '10:00', participants });
     await playdate(host, { activity: 'completed 3 days ago', scheduledDate: new Date(isoDay(-3)), time: '16:00', status: 'completed' });
 
     const list = (status, extra = '') =>

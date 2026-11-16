@@ -31,7 +31,8 @@ const connect = (a, b) =>
 
 const auth = (parent) => ({ Authorization: `Bearer ${parent.token}` });
 
-let nextDayOffset = 40;
+// Each playdate on its own day, inside the booking window (at most 30 days ahead)
+let nextDayOffset = 3;
 const createPlaydate = async (host, guests) => {
   const res = await request(app)
     .post('/api/v1/playdates')

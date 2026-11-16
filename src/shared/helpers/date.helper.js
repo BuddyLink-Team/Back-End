@@ -110,6 +110,21 @@ export const getScheduledEnd = (scheduledDate, time, durationMinutes, timeZone =
 export const intervalsOverlap = (startA, endA, startB, endB) => startA < endB && startB < endA;
 
 /**
+ * Whether two intervals are closer than a gap: they overlap, or one starts less than gapMinutes after
+ * the other ends. With a 30 min gap, 10:00-12:00 conflicts with 12:15-13:00 but not with 12:30-13:00.
+ * @param {Date|number} startA
+ * @param {Date|number} endA
+ * @param {Date|number} startB
+ * @param {Date|number} endB
+ * @param {number} [gapMinutes]
+ * @returns {boolean}
+ */
+export const conflictsWithGap = (startA, endA, startB, endB, gapMinutes = 0) => {
+  const gap = gapMinutes * 60 * 1000;
+  return intervalsOverlap(new Date(startA).getTime() - gap, new Date(endA).getTime() + gap, new Date(startB).getTime(), new Date(endB).getTime());
+};
+
+/**
  * Wall-clock time "HH:mm" plus some minutes, wrapping past midnight ("23:00" + 120 -> "01:00").
  * @param {string} time - "HH:mm"
  * @param {number} minutes

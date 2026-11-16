@@ -1,23 +1,40 @@
 import Subscription from './subscription.model.js';
+import subscriptionPlanRepository from './subscription-plan.repository.js';
 import { SUBSCRIPTION_PLAN_CODES, SUBSCRIPTION_STATUS } from './subscription.constants.js';
 
-// Paid subscription in effect: active and not past its end date
-const activePaidFilter = (now) => ({
+// Paid subscription in effect: active, not on the Free plan and not past its end date
+const activePaidFilter = (now, freePlanId) => ({
   status: SUBSCRIPTION_STATUS.ACTIVE,
-  planCode: { $ne: SUBSCRIPTION_PLAN_CODES.FREE },
+  planId: { $ne: freePlanId },
   endDate: { $gt: now },
 });
+
+const toPlain = (doc) => (doc && typeof doc.toObject === 'function' ? doc.toObject() : doc);
+
+/**
+ * Subscriptions reference their plan by id (planId). Every subscription this repository returns is a plain
+ * object that also carries the code of its plan (planCode), read by the plan rules and the API responses.
+ * @param {Object|Array<Object>|null} docOrDocs
+ */
+const withPlanCode = async (docOrDocs) => {
+  const docs = [].concat(docOrDocs || []).filter(Boolean).map(toPlain);
+  const codes = await subscriptionPlanRepository.getPlanCodesByIds(docs.map((doc) => doc.planId));
+  docs.forEach((doc) => {
+    doc.planCode = codes.get(String(doc.planId)) || null;
+  });
+  return Array.isArray(docOrDocs) ? docs : docs[0] || null;
+};
 
 class SubscriptionRepository {
   /**
    * Find subscription by parentId with optional mongoose session
    */
   async findByParentId(parentId, session = null) {
-    const query = Subscription.findOne({ parentId });
+    const query = Subscription.findOne({ parentId }).lean();
     if (session) {
       query.session(session);
     }
-    return query;
+    return withPlanCode(await query);
   }
 
   /**
@@ -26,14 +43,15 @@ class SubscriptionRepository {
    */
   async findByParentIds(parentIds) {
     if (!parentIds.length) return [];
-    return Subscription.find({ parentId: { $in: parentIds } }).lean();
+    return withPlanCode(await Subscription.find({ parentId: { $in: parentIds } }).lean());
   }
 
   /**
    * Paid subscriptions in effect (active and not past their end date)
    */
   async countActivePaid(now = new Date()) {
-    return Subscription.countDocuments(activePaidFilter(now));
+    const freePlanId = await subscriptionPlanRepository.getFreePlanId();
+    return Subscription.countDocuments(activePaidFilter(now, freePlanId));
   }
 
   /**
@@ -41,18 +59,21 @@ class SubscriptionRepository {
    * @returns {Promise<Array<ObjectId>>}
    */
   async findActivePaidParentIds(now = new Date()) {
-    return Subscription.distinct('parentId', activePaidFilter(now));
+    const freePlanId = await subscriptionPlanRepository.getFreePlanId();
+    return Subscription.distinct('parentId', activePaidFilter(now, freePlanId));
   }
 
   /**
    * Paid subscriptions still marked active whose end date has passed
    */
   async findDueForExpiry(now = new Date()) {
-    return Subscription.find({
+    const freePlanId = await subscriptionPlanRepository.getFreePlanId();
+    const due = await Subscription.find({
       status: SUBSCRIPTION_STATUS.ACTIVE,
-      planCode: { $ne: SUBSCRIPTION_PLAN_CODES.FREE },
+      planId: { $ne: freePlanId },
       endDate: { $ne: null, $lte: now },
-    });
+    }).lean();
+    return withPlanCode(due);
   }
 
   /**
@@ -61,24 +82,26 @@ class SubscriptionRepository {
    * @returns {Promise<Object|null>} Downgraded subscription, or null when nothing changed
    */
   async downgradeToFree(id, now = new Date()) {
-    return Subscription.findOneAndUpdate(
+    const freePlanId = await subscriptionPlanRepository.getFreePlanId();
+    const downgraded = await Subscription.findOneAndUpdate(
       {
         _id: id,
         status: SUBSCRIPTION_STATUS.ACTIVE,
-        planCode: { $ne: SUBSCRIPTION_PLAN_CODES.FREE },
+        planId: { $ne: freePlanId },
         endDate: { $ne: null, $lte: now },
       },
       {
         $set: {
-          planCode: SUBSCRIPTION_PLAN_CODES.FREE,
+          planId: freePlanId,
           startDate: now,
           endDate: null,
           calendarAnchorAt: null,
           purchasedMonths: 0,
         },
       },
-      { new: true }
+      { new: true, lean: true }
     );
+    return withPlanCode(downgraded);
   }
 
   /**
@@ -87,51 +110,53 @@ class SubscriptionRepository {
   async create(subscriptionData, session = null) {
     if (session) {
       const created = await Subscription.create([subscriptionData], { session });
-      return created[0];
+      return withPlanCode(created[0]);
     }
-    return Subscription.create(subscriptionData);
+    return withPlanCode(await Subscription.create(subscriptionData));
   }
 
   /**
    * Update subscription by parentId
    */
   async updateByParentId(parentId, updateData, session = null) {
-    const options = { new: true, runValidators: true };
+    const options = { new: true, runValidators: true, lean: true };
     if (session) {
       options.session = session;
     }
-    return Subscription.findOneAndUpdate({ parentId }, { $set: updateData }, options);
+    return withPlanCode(await Subscription.findOneAndUpdate({ parentId }, { $set: updateData }, options));
   }
 
   /**
    * Upsert subscription by parentId
    */
   async upsertSubscription(parentId, subscriptionData, session = null) {
-    const options = { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true };
+    const options = { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true, lean: true };
     if (session) {
       options.session = session;
     }
-    return Subscription.findOneAndUpdate(
+    const subscription = await Subscription.findOneAndUpdate(
       { parentId },
       { $set: subscriptionData },
       options
     );
+    return withPlanCode(subscription);
   }
 
   /**
    * Safe upsert for Free subscription if parent does not have one
    */
   async upsertFreeSubscription(parentId, session = null) {
-    const options = { upsert: true, new: true, setDefaultsOnInsert: true };
+    const freePlanId = await subscriptionPlanRepository.getFreePlanId();
+    const options = { upsert: true, new: true, setDefaultsOnInsert: true, lean: true };
     if (session) {
       options.session = session;
     }
-    return Subscription.findOneAndUpdate(
+    const subscription = await Subscription.findOneAndUpdate(
       { parentId },
       {
         $setOnInsert: {
           parentId,
-          planCode: SUBSCRIPTION_PLAN_CODES.FREE,
+          planId: freePlanId,
           status: SUBSCRIPTION_STATUS.ACTIVE,
           startDate: new Date(),
           endDate: null,
@@ -141,21 +166,26 @@ class SubscriptionRepository {
       },
       options
     );
+    return withPlanCode(subscription);
   }
 
   async findByIdLean(id) {
-    return Subscription.findById(id).lean();
+    return withPlanCode(await Subscription.findById(id).lean());
   }
 
   /**
    * Page of subscriptions for the admin portal, newest first
    * @param {{ planCode?: string, status?: string, parentIds?: Array<ObjectId>|null, page: number, limit: number }} options
-   *   parentIds null = any parent
+   *   parentIds null = any parent; planCode is resolved to the plan id
    * @returns {Promise<{ items: Array<Object>, total: number }>}
    */
   async findPageForAdmin({ planCode, status, parentIds = null, page, limit }) {
     const filter = {};
-    if (planCode) filter.planCode = planCode;
+    if (planCode) {
+      const planId = await subscriptionPlanRepository.getPlanIdByCode(planCode);
+      if (!planId) return { items: [], total: 0 };
+      filter.planId = planId;
+    }
     if (status) filter.status = status;
     if (parentIds) filter.parentId = { $in: parentIds };
 
@@ -167,28 +197,31 @@ class SubscriptionRepository {
         .lean(),
       Subscription.countDocuments(filter),
     ]);
-    return { items, total };
+    return { items: await withPlanCode(items), total };
   }
 
   /**
-   * Count subscriptions active as of date grouped by planCode
+   * Count subscriptions active as of date grouped by plan
    * @param {Date} [asOfDate]
    * @returns {Promise<{ free: number, premiumMonthly: number, premiumYearly: number }>}
    */
   async countActiveByPlan(asOfDate = new Date()) {
+    const freePlanId = await subscriptionPlanRepository.getFreePlanId();
     const rows = await Subscription.aggregate([
       {
         $match: {
           status: SUBSCRIPTION_STATUS.ACTIVE,
           $or: [
-            { planCode: SUBSCRIPTION_PLAN_CODES.FREE },
+            { planId: freePlanId },
             { endDate: { $gt: asOfDate } },
           ],
         },
       },
-      { $group: { _id: '$planCode', count: { $sum: 1 } } },
+      { $group: { _id: '$planId', count: { $sum: 1 } } },
     ]);
-    const countOf = (code) => rows.find((r) => r._id === code)?.count || 0;
+    const codes = await subscriptionPlanRepository.getPlanCodesByIds(rows.map((row) => row._id));
+    const countOf = (code) =>
+      rows.filter((row) => codes.get(String(row._id)) === code).reduce((sum, row) => sum + row.count, 0);
     return {
       free: countOf(SUBSCRIPTION_PLAN_CODES.FREE),
       premiumMonthly: countOf(SUBSCRIPTION_PLAN_CODES.PREMIUM_MONTHLY),

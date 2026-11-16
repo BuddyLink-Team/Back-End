@@ -1,0 +1,719 @@
+{
+  "description": "Kid-friendly places of Đà Nẵng and Hội An taken from buddylink_db.places_cache, each a real OpenStreetMap element. Coordinates are written by `node scripts/migrate-places.js --verify --write-json` from OpenStreetMap (node position, way/relation center) and never edited by hand.",
+  "verifiedAt": "2026-11-16",
+  "places": [
+    {
+      "osmId": "osm-way-834422404",
+      "name": "Sân chơi EKOCENTER",
+      "address": "Phường Thanh Khê, Thành phố Đà Nẵng",
+      "placeType": "playground",
+      "coordinates": [
+        108.1700083,
+        16.0741088
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962134785",
+      "name": "Quảng trường Tượng Đài Hòa Khánh",
+      "address": "Đường Tôn Đức Thắng, Phường Hòa Khánh, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.1536394,
+        16.0654551
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-780440810",
+      "name": "Công viên Biển Mỹ Khê",
+      "address": "53 Đường Võ Nguyên Giáp, Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2489008,
+        16.0505945
+      ],
+      "tags": {
+        "leisure": "park"
+      },
+      "openingHours": "24/7"
+    },
+    {
+      "osmId": "osm-way-961973763",
+      "name": "Công viên Đầm Rong",
+      "address": "Đường Ngô Chi Lan, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2178648,
+        16.0835868
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-961973996",
+      "name": "Công viên Thanh Bình",
+      "address": "Đường Thanh Thủy, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2118706,
+        16.0794713
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962129075",
+      "name": "Công viên Hà Thân",
+      "address": "Đường Triệu Việt Vương, Phường An Hải, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2318255,
+        16.0649082
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962129076",
+      "name": "Công viên An Hải",
+      "address": "117 Đường Nguyễn Trung Trực, Phường An Hải, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2303846,
+        16.0815021
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962129077",
+      "name": "Công viên An Nhơn",
+      "address": "Đường An Nhơn 8, Phường An Hải, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2330704,
+        16.0688547
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962129079",
+      "name": "Công viên K20",
+      "address": "Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2430172,
+        16.0225341
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962130353",
+      "name": "Công viên Hồ Nghinh",
+      "address": "Đường Phước Trường 15, Phường An Hải, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2424022,
+        16.0762001
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-962134784",
+      "name": "Công viên Lê Cơ",
+      "address": "25 Đường Lê Bá Trinh, Phường Hòa Cường, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2195746,
+        16.043477
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-1169531150",
+      "name": "Công viên Hói Kiểng",
+      "address": "Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.244771,
+        16.0053772
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-1252368755",
+      "name": "Công viên cầu Bờ Quan",
+      "address": "Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2463408,
+        16.0117056
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-1252486503",
+      "name": "Công viên Bờ Quan",
+      "address": "Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2386636,
+        16.0146753
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-1254909519",
+      "name": "Công viên Nguyễn Văn Linh",
+      "address": "Đường Nguyễn Văn Linh, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2204316,
+        16.0613021
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-1384907056",
+      "name": "Công viên Nam Dương",
+      "address": "Đường Huỳnh Thúc Kháng, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2177257,
+        16.060441
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-way-1384911812",
+      "name": "Công viên Như Nguyệt",
+      "address": "Đường Như Nguyệt, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.219673,
+        16.0906977
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-relation-21792623",
+      "name": "Công viên Đầm Sen",
+      "address": "Đường Hòa Quý, Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.2511528,
+        15.9996352
+      ],
+      "tags": {
+        "leisure": "park"
+      },
+      "openingHours": "24/7"
+    },
+    {
+      "osmId": "osm-way-1280820647",
+      "name": "Sân bóng Golden Hill",
+      "address": "Đường A-02, Phường Hải Vân, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.119936,
+        16.103746
+      ],
+      "tags": {
+        "leisure": "sports_centre"
+      }
+    },
+    {
+      "osmId": "osm-way-846695791",
+      "name": "Trung tâm Văn hóa - Thể thao Thanh Khê",
+      "address": "Đường Hồ Tương, Phường An Khê, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.183214,
+        16.0615545
+      ],
+      "tags": {
+        "leisure": "park"
+      },
+      "openingHours": "Mo-Su 07:00-22:00"
+    },
+    {
+      "osmId": "osm-way-1554188424",
+      "name": "Trung tâm Thể thao SHB Đà Nẵng",
+      "address": "Đường Trần Đức, Phường Hòa Khánh, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.1559596,
+        16.0433646
+      ],
+      "tags": {
+        "leisure": "sports_centre"
+      }
+    },
+    {
+      "osmId": "osm-way-303011147",
+      "name": "CLB Bơi lội Đà Nẵng",
+      "address": "Đường 2 Tháng 9, Phường Hòa Cường, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.224672,
+        16.0350703
+      ],
+      "tags": {
+        "leisure": "sports_centre",
+        "sport": "swimming"
+      }
+    },
+    {
+      "osmId": "osm-way-303333275",
+      "name": "Làng Thể thao Tuyên Sơn",
+      "address": "Đường Vũ Duy Thanh, Phường Hòa Cường, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.2270945,
+        16.0347184
+      ],
+      "tags": {
+        "leisure": "sports_centre"
+      }
+    },
+    {
+      "osmId": "osm-way-1208699441",
+      "name": "Danang Climbing Gym",
+      "address": "Đường Mai Am, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.2169205,
+        16.0833572
+      ],
+      "tags": {
+        "leisure": "sports_centre",
+        "sport": "climbing"
+      },
+      "openingHours": "Mon-Sun 08:00:22:00",
+      "website": "https://www.danangclimbing.com/"
+    },
+    {
+      "osmId": "osm-way-1098017450",
+      "name": "Công viên nước 365 Mikazuki",
+      "address": "Kiệt 5 Phan Văn Định, Phường Hải Vân, Thành phố Đà Nẵng",
+      "placeType": "playground",
+      "coordinates": [
+        108.1436589,
+        16.0926497
+      ],
+      "tags": {
+        "leisure": "water_park"
+      }
+    },
+    {
+      "osmId": "osm-way-1484919513",
+      "name": "Minto Farm Cafe & Kid Playground",
+      "address": "Đường Trung Lương 9, Phường Hòa Xuân, Thành phố Đà Nẵng",
+      "placeType": "kids_cafe",
+      "coordinates": [
+        108.2360059,
+        16.0190328
+      ],
+      "tags": {
+        "amenity": "cafe"
+      }
+    },
+    {
+      "osmId": "osm-node-5817580453",
+      "name": "Bảo tàng Tranh 3D Art in Paradise Đà Nẵng",
+      "address": "Đường Trần Nhân Tông, Phường Sơn Trà, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2430769,
+        16.0953807
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-12622064034",
+      "name": "Bảo tàng Ngũ Hành Sơn",
+      "address": "Đường Huyền Trân Công Chúa, Phường Ngũ Hành Sơn, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2660314,
+        16.003907
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-way-118691767",
+      "name": "Bảo tàng Quân khu 5",
+      "address": "Đường Duy Tân, Phường Hòa Cường, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2173603,
+        16.0478741
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-way-303341669",
+      "name": "Bảo tàng Hồ Chí Minh (Đà Nẵng)",
+      "address": "Đường Tiểu La, Phường Hòa Cường, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2182471,
+        16.0464824
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-way-1368599361",
+      "name": "Bảo tàng Đà Nẵng",
+      "address": "42 Đường Trần Phú, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2239805,
+        16.0748319
+      ],
+      "tags": {
+        "tourism": "museum"
+      },
+      "openingHours": "08:00-17:00",
+      "phone": "+84 236 3886 236"
+    },
+    {
+      "osmId": "osm-way-1474583779",
+      "name": "Nhà Trưng bày Hoàng Sa",
+      "address": "284 Đường Hoàng Sa, Phường Sơn Trà, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2512057,
+        16.0934685
+      ],
+      "tags": {
+        "tourism": "museum"
+      },
+      "website": "https://nhatrungbayhoangsa.danang.gov.vn/"
+    },
+    {
+      "osmId": "osm-way-1574932306",
+      "name": "Bảo tàng Mỹ thuật Đà Nẵng",
+      "address": "78 Đường Lê Duẩn, Phường Hải Châu, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2177449,
+        16.0712703
+      ],
+      "tags": {
+        "tourism": "museum"
+      },
+      "openingHours": "08:00-17:00",
+      "website": "https://dnfam.vn/"
+    },
+    {
+      "osmId": "osm-node-13149084101",
+      "name": "Mini-Golf Hội An",
+      "address": "Đường Nguyễn Phan Vinh, Phường Hội An Tây, Thành phố Đà Nẵng",
+      "placeType": "playground",
+      "coordinates": [
+        108.3386895,
+        15.912947
+      ],
+      "tags": {
+        "tourism": "theme_park"
+      }
+    },
+    {
+      "osmId": "osm-way-14131302",
+      "name": "Hoi An Memories Land",
+      "address": "Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "playground",
+      "coordinates": [
+        108.3398171,
+        15.8750613
+      ],
+      "tags": {
+        "tourism": "theme_park"
+      }
+    },
+    {
+      "osmId": "osm-node-13594995701",
+      "name": "Demen cà phê",
+      "address": "Đường Trần Nhân Tông, Phường Hội An Đông, Thành phố Đà Nẵng",
+      "placeType": "kids_cafe",
+      "coordinates": [
+        108.3434737,
+        15.881012
+      ],
+      "tags": {
+        "leisure": "indoor_play"
+      },
+      "openingHours": "Mo-Sa 16:00-21:00; Su 08:30-11:30, 16:00-21:30"
+    },
+    {
+      "osmId": "osm-node-13637932001",
+      "name": "Khủng Long Xanh",
+      "address": "Đường 28 Tháng 3, Phường Hội An Tây, Thành phố Đà Nẵng",
+      "placeType": "kids_cafe",
+      "coordinates": [
+        108.3131146,
+        15.8897283
+      ],
+      "tags": {
+        "leisure": "indoor_play"
+      },
+      "openingHours": "Mo-Fr 07:00-11:30, 16:00-22:00; Sa-Su 07:00-11:30, 15:00-22:00"
+    },
+    {
+      "osmId": "osm-node-13586132302",
+      "name": "Cà phê - Khu vui chơi trong nhà Bờ Hồ",
+      "address": "Đường Bờ Hồ 1, Phường Hội An Tây, Thành phố Đà Nẵng",
+      "placeType": "kids_cafe",
+      "coordinates": [
+        108.3183959,
+        15.8959879
+      ],
+      "tags": {
+        "amenity": "cafe"
+      }
+    },
+    {
+      "osmId": "osm-node-4476186940",
+      "name": "CLB Võ thuật Hoàng Dũng",
+      "address": "61 Đường Nguyễn Trường Tộ, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "sports_center",
+      "coordinates": [
+        108.3306176,
+        15.8849411
+      ],
+      "tags": {
+        "leisure": "sports_centre",
+        "amenity": "dojo",
+        "sport": "taekwondo;kickboxing;boxing;fitness"
+      },
+      "openingHours": "Mo-Su 05:00-20:00",
+      "phone": "+84935497579",
+      "website": "https://facebook.com/vothuathoangdung"
+    },
+    {
+      "osmId": "osm-way-565325074",
+      "name": "Công viên Tượng đài Nguyễn Duy Hiệu",
+      "address": "Phường Hội An Tây, Thành phố Đà Nẵng",
+      "placeType": "park",
+      "coordinates": [
+        108.3253262,
+        15.8850606
+      ],
+      "tags": {
+        "leisure": "park"
+      }
+    },
+    {
+      "osmId": "osm-node-2076855866",
+      "name": "Nhà cổ Đức An",
+      "address": "129 Đường Trần Phú, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3273582,
+        15.8770533
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-2076855954",
+      "name": "Nhà cổ Quân Thắng",
+      "address": "77 Đường Trần Phú, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3292876,
+        15.8770968
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-4279640089",
+      "name": "Nhà cổ Phùng Hưng",
+      "address": "4 Đường Nguyễn Thị Minh Khai, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3257902,
+        15.8772193
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-way-595299310",
+      "name": "Nhà cổ Tấn Ký",
+      "address": "Đường Nguyễn Thái Học, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3278311,
+        15.8764553
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-5674096859",
+      "name": "Nhà cổ Diệp Đồng Nguyên",
+      "address": "58 Đường Nguyễn Thái Học, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3285601,
+        15.8766285
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-2076856032",
+      "name": "Bảo tàng Gốm sứ Mậu dịch Hội An",
+      "address": "80 Đường Trần Phú, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.329548,
+        15.8772671
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-3189923484",
+      "name": "Bảo tàng Văn hóa Sa Huỳnh",
+      "address": "Đường Trần Phú, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3264247,
+        15.8770347
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-node-7127464285",
+      "name": "Bảo tàng Nghề Y truyền thống Hội An",
+      "address": "Đường Nguyễn Thái Học, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3298384,
+        15.8766492
+      ],
+      "tags": {
+        "tourism": "museum"
+      },
+      "openingHours": "Mo-Su 07:00-11:00"
+    },
+    {
+      "osmId": "osm-node-12344125229",
+      "name": "Bảo tàng Di sản Vô giá Hội An",
+      "address": "26 Đường Phan Bội Châu, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3342411,
+        15.8771754
+      ],
+      "tags": {
+        "tourism": "museum"
+      },
+      "openingHours": "Mo-Su 08:00-20:00",
+      "phone": "05106558382",
+      "website": "https://www.rehahnphotographer.com"
+    },
+    {
+      "osmId": "osm-node-13293830517",
+      "name": "Bảo tàng Thổ sản Hội An",
+      "address": "Đường Trần Phú, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3297946,
+        15.8771924
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    },
+    {
+      "osmId": "osm-way-565592419",
+      "name": "Bảo tàng Hội An",
+      "address": "10B Đường Trần Hưng Đạo, Phường Hội An, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3294674,
+        15.8803099
+      ],
+      "tags": {
+        "tourism": "museum"
+      },
+      "openingHours": "Mo-Su 07:30-11:30,13:30-17:30"
+    },
+    {
+      "osmId": "osm-way-565303849",
+      "name": "Nhà hát Hội An",
+      "address": "Đường Hai Bà Trưng, Phường Hội An Tây, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.3258178,
+        15.8855649
+      ],
+      "tags": {
+        "amenity": "arts_centre"
+      }
+    },
+    {
+      "osmId": "osm-way-584941415",
+      "name": "Bảo tàng Điện Bàn",
+      "address": "Đường Hồ Xuân Hương, Phường Điện Bàn, Thành phố Đà Nẵng",
+      "placeType": "workshop",
+      "coordinates": [
+        108.2551164,
+        15.8874257
+      ],
+      "tags": {
+        "tourism": "museum"
+      }
+    }
+  ]
+}

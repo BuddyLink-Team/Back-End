@@ -144,7 +144,8 @@ describe('plan-draft.rules', () => {
   });
 
   it('marks a complete draft ready with its age-gap and past-date warnings', () => {
-    const ready = refreshDraft(complete());
+    // A day before the draft date: inside the booking window (at most 30 days ahead)
+    const ready = refreshDraft(complete(), new Date('2099-01-01T00:00:00+07:00'));
     expect(ready.status).toBe('ready');
     expect(ready.warnings).toEqual([{ code: 'AGE_GAP', ageGapYears: 4, childId: 'c2' }]);
 
@@ -666,7 +667,7 @@ describe('AI planning upgrade (duration, agenda, warnings, calendar)', () => {
     };
     expect(
       describeWarning({ code: 'SCHEDULE_CONFLICT', childName: 'Bin', start: '08:00', end: '10:00', severity: 'warn' }, draft)
-    ).toBe('Bé Bin đã có hẹn khác lúc 08:00–10:00, có thể chưa nhận lời được');
+    ).toBe('Gia đình bé Bin đã có hẹn khác lúc 08:00–10:00, có thể chưa nhận lời được');
     expect(describeWarning({ code: 'TOO_LONG_FOR_AGE', params: { maxMinutes: 180 } }, draft)).toContain('tối đa 3 giờ');
     expect(describeWarning({ code: 'FAR_PLACE', distanceKm: 18 }, draft)).toBe('Công viên Lê Văn Tám cách nhà bạn khoảng 18 km');
     expect(toDraftResponse(draft).durationChoices).toContain(240);

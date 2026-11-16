@@ -10,7 +10,7 @@ import PlacesCache from '../../src/modules/places/places-cache.model.js';
 import Swipe from '../../src/modules/discovery/discovery.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import Subscription from '../../src/modules/subscription/subscription.model.js';
-import { grantPremium } from '../helpers/subscriptionHelper.js';
+import { grantPremium, planIdOf } from '../helpers/subscriptionHelper.js';
 import AIChatSession from '../../src/modules/ai-assistant/ai-assistant.model.js';
 import geminiAdapter from '../../src/integrations/ai/gemini.adapter.js';
 import AppError from '../../src/shared/exceptions/app-error.js';
@@ -270,7 +270,7 @@ describe('AI assistant (/api/v1/ai-assistant)', () => {
       const parent = await registerParent('premium');
       await Subscription.updateOne(
         { parentId: parent.parentId },
-        { $set: { planCode: 'premium_monthly', status: 'active', startDate: new Date(), endDate: new Date(Date.now() + 20 * DAY) } }
+        { $set: { planId: await planIdOf('premium_monthly'), status: 'active', startDate: new Date(), endDate: new Date(Date.now() + 20 * DAY) } }
       );
       const sessionId = await newSession(parent);
       mockModel(geminiText('Chào Premium'));

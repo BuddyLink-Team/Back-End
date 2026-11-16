@@ -6,6 +6,41 @@ import '../child/child.model.js';
 import { PLAYDATE_STATUS, PARTICIPANT_STATUS } from './playdate.constants.js';
 import { PAGINATION } from '../../shared/constants/index.js';
 import { escapeRegExp } from '../../shared/helpers/regex.helper.js';
+import env from '../../config/env.js';
+
+const TIME_ZONE = env.APP_TIMEZONE || 'Asia/Ho_Chi_Minh';
+
+// Instant a playdate starts, in an aggregation: the calendar day of scheduledDate in the business time zone
+// at its "HH:mm" time, as getScheduledStart computes it
+const START_AT_EXPR = {
+  $dateFromParts: {
+    year: { $year: { date: '$scheduledDate', timezone: TIME_ZONE } },
+    month: { $month: { date: '$scheduledDate', timezone: TIME_ZONE } },
+    day: { $dayOfMonth: { date: '$scheduledDate', timezone: TIME_ZONE } },
+    hour: { $convert: { input: { $substrBytes: ['$time', 0, 2] }, to: 'int', onError: 0, onNull: 0 } },
+    minute: { $convert: { input: { $substrBytes: ['$time', 3, 2] }, to: 'int', onError: 0, onNull: 0 } },
+    timezone: TIME_ZONE,
+  },
+};
+
+/**
+ * Query of the playdates "confirmed" for a parent (same rule as the displayStatus): their own playdate once
+ * someone accepted and nobody is pending, or a playdate they accepted
+ * @param {mongoose.Types.ObjectId} parentId
+ */
+const confirmedMatch = (parentId) => ({
+  status: PLAYDATE_STATUS.UPCOMING,
+  $or: [
+    {
+      hostParentId: parentId,
+      $and: [
+        { 'participants.status': PARTICIPANT_STATUS.ACCEPTED },
+        { 'participants.status': { $ne: PARTICIPANT_STATUS.PENDING } },
+      ],
+    },
+    { participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.ACCEPTED } } },
+  ],
+});
 
 class PlaydateRepository {
   /**
@@ -94,22 +129,10 @@ class PlaydateRepository {
       } else if (normalizedStatus === 'cancelled') {
         andConditions.push({ status: PLAYDATE_STATUS.CANCELLED });
       } else if (normalizedStatus === 'upcoming') {
-        andConditions.push({ status: PLAYDATE_STATUS.UPCOMING });
+        // "Sắp tới": confirmed and not started yet
+        andConditions.push({ ...confirmedMatch(parentId), $expr: { $gt: [START_AT_EXPR, new Date()] } });
       } else if (normalizedStatus === 'confirmed') {
-        // Same rule as the displayStatus: the host's playdate once someone accepted and nobody is pending
-        andConditions.push({
-          status: PLAYDATE_STATUS.UPCOMING,
-          $or: [
-            {
-              hostParentId: parentId,
-              $and: [
-                { 'participants.status': PARTICIPANT_STATUS.ACCEPTED },
-                { 'participants.status': { $ne: PARTICIPANT_STATUS.PENDING } },
-              ],
-            },
-            { participants: { $elemMatch: { parentId, status: PARTICIPANT_STATUS.ACCEPTED } } },
-          ],
-        });
+        andConditions.push(confirmedMatch(parentId));
       } else if (normalizedStatus === 'pending') {
         andConditions.push({
           status: PLAYDATE_STATUS.UPCOMING,
@@ -149,12 +172,6 @@ class PlaydateRepository {
 
     // Order: upcoming playdates first, the soonest first (date AND start time); then the past ones
     // (completed / cancelled), the most recent first. Same rule on every tab.
-    const startMinutes = {
-      $add: [
-        { $multiply: [{ $convert: { input: { $substrBytes: ['$time', 0, 2] }, to: 'int', onError: 0, onNull: 0 } }, 60] },
-        { $convert: { input: { $substrBytes: ['$time', 3, 2] }, to: 'int', onError: 0, onNull: 0 } },
-      ],
-    };
     const [total, ordered] = await Promise.all([
       Playdate.countDocuments(query),
       Playdate.aggregate([
@@ -162,7 +179,7 @@ class PlaydateRepository {
         {
           $addFields: {
             _isPast: { $cond: [{ $eq: ['$status', PLAYDATE_STATUS.UPCOMING] }, 0, 1] },
-            _startMs: { $add: [{ $toLong: '$scheduledDate' }, { $multiply: [startMinutes, 60000] }] },
+            _startMs: { $toLong: START_AT_EXPR },
           },
         },
         { $addFields: { _sortKey: { $cond: [{ $eq: ['$_isPast', 0] }, '$_startMs', { $multiply: ['$_startMs', -1] }] } } },
@@ -216,6 +233,43 @@ class PlaydateRepository {
    */
   async countByStatusesForParent(parentId) {
     const parentObjId = new mongoose.Types.ObjectId(parentId);
+    const now = new Date();
+    // Same rule as the displayStatus 'confirmed'
+    const CONFIRMED_COND = {
+      $and: [
+        { $eq: ['$status', PLAYDATE_STATUS.UPCOMING] },
+        {
+          $or: [
+            {
+              $and: [
+                { $eq: ['$hostParentId', parentObjId] },
+                { $in: [PARTICIPANT_STATUS.ACCEPTED, { $ifNull: ['$participants.status', []] }] },
+                { $not: [{ $in: [PARTICIPANT_STATUS.PENDING, { $ifNull: ['$participants.status', []] }] }] },
+              ],
+            },
+            {
+              $gt: [
+                {
+                  $size: {
+                    $filter: {
+                      input: { $ifNull: ['$participants', []] },
+                      as: 'p',
+                      cond: {
+                        $and: [
+                          { $eq: ['$$p.parentId', parentObjId] },
+                          { $eq: ['$$p.status', PARTICIPANT_STATUS.ACCEPTED] },
+                        ],
+                      },
+                    },
+                  },
+                },
+                0,
+              ],
+            },
+          ],
+        },
+      ],
+    };
     const results = await Playdate.aggregate([
       {
         $match: {
@@ -299,45 +353,17 @@ class PlaydateRepository {
               ],
             },
           },
+          // Confirmed and not started yet (the "Sắp tới" tab)
+          upcoming: {
+            $sum: {
+              $cond: [{ $and: [CONFIRMED_COND, { $gt: [START_AT_EXPR, now] }] }, 1, 0],
+            },
+          },
           // Same rule as the displayStatus 'confirmed'
           confirmed: {
             $sum: {
               $cond: [
-                {
-                  $and: [
-                    { $eq: ['$status', PLAYDATE_STATUS.UPCOMING] },
-                    {
-                      $or: [
-                        {
-                          $and: [
-                            { $eq: ['$hostParentId', parentObjId] },
-                            { $in: [PARTICIPANT_STATUS.ACCEPTED, { $ifNull: ['$participants.status', []] }] },
-                            { $not: [{ $in: [PARTICIPANT_STATUS.PENDING, { $ifNull: ['$participants.status', []] }] }] },
-                          ],
-                        },
-                        {
-                          $gt: [
-                            {
-                              $size: {
-                                $filter: {
-                                  input: { $ifNull: ['$participants', []] },
-                                  as: 'p',
-                                  cond: {
-                                    $and: [
-                                      { $eq: ['$$p.parentId', parentObjId] },
-                                      { $eq: ['$$p.status', PARTICIPANT_STATUS.ACCEPTED] },
-                                    ],
-                                  },
-                                },
-                              },
-                            },
-                            0,
-                          ],
-                        },
-                      ],
-                    },
-                  ],
-                },
+                CONFIRMED_COND,
                 1,
                 0,
               ],
@@ -347,12 +373,11 @@ class PlaydateRepository {
       },
     ]);
 
-    const stats = results[0] || { all: 0, completed: 0, cancelled: 0, pending: 0, confirmed: 0 };
-    const upcomingCount = stats.all - stats.completed - stats.cancelled;
+    const stats = results[0] || { all: 0, upcoming: 0, completed: 0, cancelled: 0, pending: 0, confirmed: 0 };
 
     return {
       all: stats.all,
-      upcoming: upcomingCount,
+      upcoming: stats.upcoming,
       confirmed: stats.confirmed,
       pending: stats.pending,
       completed: stats.completed,
@@ -530,22 +555,21 @@ class PlaydateRepository {
   }
 
   /**
-   * Upcoming playdates of some children (as the host child, or an accepted participant child)
+   * Upcoming playdates of some families (the parent is the host, or an accepted participant)
    * scheduled between two dates
-   * @param {Array<string|ObjectId>} childIds
+   * @param {Array<string|ObjectId>} parentIds
    * @param {{ from: Date, to: Date, excludePlaydateId?: string|ObjectId }} window - scheduledDate range
    * @returns {Promise<Array<Object>>}
    */
-  async findUpcomingForChildren(childIds, { from, to, excludePlaydateId } = {}) {
-    if (!childIds.length) return [];
+  async findUpcomingForParents(parentIds, { from, to, excludePlaydateId } = {}) {
+    if (!parentIds.length) return [];
     return Playdate.find({
       status: PLAYDATE_STATUS.UPCOMING,
       scheduledDate: { $gte: from, $lte: to },
       ...(excludePlaydateId ? { _id: { $ne: excludePlaydateId } } : {}),
       $or: [
-        { hostChildId: { $in: childIds } },
-        { hostChildIds: { $in: childIds } },
-        { participants: { $elemMatch: { childId: { $in: childIds }, status: PARTICIPANT_STATUS.ACCEPTED } } },
+        { hostParentId: { $in: parentIds } },
+        { participants: { $elemMatch: { parentId: { $in: parentIds }, status: PARTICIPANT_STATUS.ACCEPTED } } },
       ],
     })
       .select('_id hostParentId hostChildId hostChildIds participants scheduledDate time durationMinutes')

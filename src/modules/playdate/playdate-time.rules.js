@@ -1,6 +1,7 @@
 import opening_hours from 'opening_hours';
 import { getScheduledStart, getZonedParts } from '../../shared/helpers/date.helper.js';
-import { PLAYDATE_TIME_RULES, OUTDOOR_PLACE_TYPES, HOURS_EXPECTED_PLACE_TYPES } from './playdate.constants.js';
+import { PLAYDATE_RULES, PLAYDATE_TIME_RULES, OUTDOOR_PLACE_TYPES, HOURS_EXPECTED_PLACE_TYPES } from './playdate.constants.js';
+import AppError from '../../shared/exceptions/app-error.js';
 
 /**
  * Rules on the time of a playdate (pure functions), shared by every place that picks or checks a time:
@@ -68,6 +69,9 @@ export const TIME_ISSUE_SEVERITY = Object.freeze({
 
 export const TIME_ISSUE_CODES = Object.freeze({
   PAST_DATE: 'PAST_DATE',
+  // Less than MIN_LEAD_HOURS ahead / more than MAX_ADVANCE_DAYS ahead
+  TOO_SOON: 'TOO_SOON',
+  TOO_FAR: 'TOO_FAR',
   UNUSUAL_HOUR: 'UNUSUAL_HOUR',
   NAP_TIME: 'NAP_TIME',
   SCHOOL_HOURS: 'SCHOOL_HOURS',
@@ -85,6 +89,42 @@ export const TIME_ISSUE_CODES = Object.freeze({
 const SLOT_INDEPENDENT_CODES = new Set([TIME_ISSUE_CODES.TOO_LONG_FOR_AGE, TIME_ISSUE_CODES.HOURS_UNKNOWN]);
 
 const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * Where a start time stands against the booking window [now + MIN_LEAD_HOURS, now + MAX_ADVANCE_DAYS]
+ * @param {Date} start
+ * @param {Date} [now]
+ * @returns {'past'|'too_soon'|'too_far'|null} null = can be booked
+ */
+export const startWindowIssue = (start, now = new Date()) => {
+  const ahead = start.getTime() - now.getTime();
+  if (ahead <= 0) return 'past';
+  if (ahead < PLAYDATE_RULES.MIN_LEAD_HOURS * HOUR_MS) return 'too_soon';
+  if (ahead > PLAYDATE_RULES.MAX_ADVANCE_DAYS * DAY_MS) return 'too_far';
+  return null;
+};
+
+/**
+ * Fail with 400 when a playdate cannot start at this time (creation and reschedule)
+ * @param {Date} start
+ * @param {{ now?: Date, prefix?: 'PLAYDATE'|'RESCHEDULE' }} [options]
+ */
+export const assertStartWindow = (start, { now = new Date(), prefix = 'PLAYDATE' } = {}) => {
+  const issue = startWindowIssue(start, now);
+  if (issue === 'past') {
+    throw prefix === 'RESCHEDULE'
+      ? new AppError('The new schedule must be in the future', 400, 'RESCHEDULE_IN_PAST')
+      : new AppError('The playdate must start in the future', 400, 'PLAYDATE_IN_PAST');
+  }
+  if (issue === 'too_soon') {
+    throw new AppError(`A playdate must start at least ${PLAYDATE_RULES.MIN_LEAD_HOURS} hours from now`, 400, `${prefix}_TOO_SOON`);
+  }
+  if (issue === 'too_far') {
+    throw new AppError(`A playdate can be scheduled at most ${PLAYDATE_RULES.MAX_ADVANCE_DAYS} days ahead`, 400, `${prefix}_TOO_FAR`);
+  }
+};
 
 const toMinutes = (time) => {
   const [hours, minutes] = String(time).split(':').map(Number);
@@ -135,7 +175,13 @@ export const evaluateTimeIssues = ({ date, time, durationMinutes, ages = [], pla
   const endsAt = new Date(startsAt.getTime() + duration * MINUTE_MS);
   const rules = PLAYDATE_TIME_RULES;
 
-  if (startsAt <= now) add(TIME_ISSUE_CODES.PAST_DATE, TIME_ISSUE_SEVERITY.BLOCK);
+  const windowIssue = startWindowIssue(startsAt, now);
+  if (windowIssue === 'past') add(TIME_ISSUE_CODES.PAST_DATE, TIME_ISSUE_SEVERITY.BLOCK);
+  else if (windowIssue === 'too_soon') {
+    add(TIME_ISSUE_CODES.TOO_SOON, TIME_ISSUE_SEVERITY.BLOCK, { minLeadHours: PLAYDATE_RULES.MIN_LEAD_HOURS });
+  } else if (windowIssue === 'too_far') {
+    add(TIME_ISSUE_CODES.TOO_FAR, TIME_ISSUE_SEVERITY.BLOCK, { maxAdvanceDays: PLAYDATE_RULES.MAX_ADVANCE_DAYS });
+  }
   if (isUnusualHour(time, duration, youngestAge)) add(TIME_ISSUE_CODES.UNUSUAL_HOUR, TIME_ISSUE_SEVERITY.WARN);
   if (youngestAge !== null && youngestAge <= rules.NAP.maxAge && overlaps(start, end, rules.NAP)) {
     add(TIME_ISSUE_CODES.NAP_TIME, TIME_ISSUE_SEVERITY.WARN);
@@ -154,7 +200,7 @@ export const evaluateTimeIssues = ({ date, time, durationMinutes, ages = [], pla
   }
   if (rules.MEALS.some((range) => overlaps(start, end, range))) add(TIME_ISSUE_CODES.MEAL_TIME, TIME_ISSUE_SEVERITY.INFO);
   const notice = startsAt.getTime() - now.getTime();
-  if (notice > 0 && notice < rules.SHORT_NOTICE_HOURS * 60 * MINUTE_MS) add(TIME_ISSUE_CODES.SHORT_NOTICE, TIME_ISSUE_SEVERITY.INFO);
+  if (windowIssue === null && notice < rules.SHORT_NOTICE_HOURS * 60 * MINUTE_MS) add(TIME_ISSUE_CODES.SHORT_NOTICE, TIME_ISSUE_SEVERITY.INFO);
   if (rules.HOLIDAYS.includes(date.slice(5, 10))) add(TIME_ISSUE_CODES.HOLIDAY, TIME_ISSUE_SEVERITY.INFO);
 
   if (place) {

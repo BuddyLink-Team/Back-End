@@ -479,7 +479,7 @@ erDiagram
 
 ```mermaid
 erDiagram
-    SUBSCRIPTION_PLANS ||--o{ SUBSCRIPTIONS : "plan blueprint (planCode)"
+    SUBSCRIPTION_PLANS ||--o{ SUBSCRIPTIONS : "plan blueprint (planId)"
     PARENTS ||--|| SUBSCRIPTIONS : "subscribes (1:1)"
     SUBSCRIPTIONS ||--o{ PAYMENTS : "invoices (1:N)"
     PARENTS ||--o{ PAYMENTS : "payer (parentId)"
@@ -500,7 +500,7 @@ erDiagram
     SUBSCRIPTIONS {
         ObjectId _id PK
         ObjectId parentId FK,UK "Ref: parents._id (1 document / parent)"
-        string planCode FK "Ref: subscription_plans.planCode"
+        ObjectId planId FK "Ref: subscription_plans._id"
         string status "active | expired"
         date startDate
         date endDate "null nếu gói Free"
@@ -945,7 +945,7 @@ interface IPlaydate {
 
   scheduledDate: Date; // Ngày tổ chức
   time: string; // Giờ bắt đầu (ví dụ: "09:00", "15:30")
-  durationMinutes: number; // 30 - 480, mặc định 120; playdate cũ không có -> đọc là 120. Dùng phát hiện trùng lịch
+  durationMinutes: number; // 30 - 480, mặc định 120; playdate cũ không có -> đọc là 120. Dùng phát hiện trùng lịch theo gia đình (hai buổi cách nhau ≥ 30 phút)
   activity: string; // Hoạt động: Picnic, công viên, vẽ tranh, đá bóng...
 
   location: {
@@ -1371,6 +1371,8 @@ _Indexes:_
 - `{ osmId: 1 }` (unique)
 - `{ coordinates: "2dsphere" }` (Tìm kiếm địa điểm vui chơi xung quanh tọa độ phụ huynh)
 
+Các địa điểm thêm tay (`source: "manual"`) nằm ở `scripts/data/places.seed.json`: địa điểm thân thiện với trẻ ở Đà Nẵng / Hội An lấy từ DB cũ `buddylink_db`, mỗi chỗ là một phần tử OpenStreetMap có thật, tọa độ lấy nguyên từ OpenStreetMap (vị trí node, tâm way / relation). `npm run migrate:places -- --verify` đối chiếu lại file với OpenStreetMap, `npm run migrate:places` (dry run) / `-- --apply` thêm vào `places_cache` theo `osmId`.
+
 #### E. `places_sync_tiles` Collection (Mục 7.2)
 
 Bản đồ được chia thành lưới cố định gồm các ô `cellSizeDeg` độ (mặc định 0.1°, khoảng 11 km), căn theo bội số của kích thước ô. Mỗi ô đã nạp địa điểm từ OpenStreetMap vào `places_cache` có một bản ghi, do lệnh `npm run places:sync` (`--city`, `--area`, `--bbox`) hoặc do server tự sync quanh phụ huynh khi họ tìm địa điểm (`PLACES_AUTO_SYNC`).
@@ -1442,7 +1444,7 @@ Mô hình **trả trước từng lần** qua PayOS (payOS không hỗ trợ tr�
 interface ISubscription {
   _id: ObjectId;
   parentId: ObjectId; // Tham chiếu parents._id (unique)
-  planCode: "free" | "premium_monthly" | "premium_yearly"; // Default: "free"
+  planId: ObjectId; // Tham chiếu subscription_plans._id (gói Free khi tạo tài khoản). API vẫn trả planCode, đọc từ gói
   status: "active" | "expired";
   startDate: Date;
   endDate?: Date; // null nếu là gói Free
@@ -1458,6 +1460,10 @@ _Indexes:_
 
 - `{ parentId: 1 }` (unique)
 - `{ parentId: 1, status: 1 }`
+- `{ planId: 1 }`
+- `{ status: 1, planId: 1, endDate: 1 }` (gói trả phí còn hiệu lực, gói đến hạn, đếm theo gói)
+
+> Dữ liệu cũ lưu `planCode` (chuỗi): chạy `npm run migrate:subscription-plans` (dry run) rồi `-- --apply` để chuyển sang `planId`. `payments.planSnapshot.planCode` giữ nguyên vì là bản chụp gói lúc thanh toán.
 
 #### C. `payments` Collection (Mục 14.2 & 15.6)
 

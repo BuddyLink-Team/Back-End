@@ -15,6 +15,8 @@
     "migrate:bud48": "node scripts/migrate-bud48-child-pairs.js",
     "migrate:report-cases": "node scripts/migrate-report-cases.js",
     "geocode:parents": "node scripts/regeocode-parents.js",
+    "migrate:subscription-plans": "node scripts/migrate-subscription-plan-ids.js",
+    "migrate:places": "node scripts/migrate-places.js",
     "ai:check": "node scripts/check-gemini.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch --verbose",

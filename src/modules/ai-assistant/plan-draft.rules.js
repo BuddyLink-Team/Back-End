@@ -576,6 +576,10 @@ export const describeWarning = (warning, draft) => {
   switch (warning.code) {
     case AI_DRAFT_WARNING_CODES.PAST_DATE:
       return 'Thời gian này đã qua, bạn chọn giờ khác nhé';
+    case AI_DRAFT_WARNING_CODES.TOO_SOON:
+      return `Buổi chơi cần được hẹn trước ít nhất ${params.minLeadHours || 2} giờ, bạn chọn giờ muộn hơn nhé`;
+    case AI_DRAFT_WARNING_CODES.TOO_FAR:
+      return `Chỉ hẹn được buổi chơi trong ${params.maxAdvanceDays || 30} ngày tới, bạn chọn ngày gần hơn nhé`;
     case AI_DRAFT_WARNING_CODES.UNUSUAL_HOUR:
       return `Khung ${draft?.time || ''}–${endTimeOf(draft?.time, duration) || ''} khá sớm hoặc khá muộn với các bé`;
     case AI_DRAFT_WARNING_CODES.NAP_TIME:
@@ -618,10 +622,10 @@ export const describeWarning = (warning, draft) => {
     case AI_DRAFT_WARNING_CODES.AGENDA_TOO_THIN:
       return 'Buổi chơi dài nhưng mới có ít hoạt động';
     case AI_DRAFT_WARNING_CODES.SCHEDULE_CONFLICT: {
-      const name = warning.childName ? `Bé ${warning.childName}` : 'Một bé';
-      const when = warning.start && warning.end ? ` lúc ${warning.start}–${warning.end}` : ' trùng giờ này';
+      const name = warning.childName ? `Gia đình bé ${warning.childName}` : 'Một gia đình';
+      const when = warning.start && warning.end ? ` lúc ${warning.start}–${warning.end}` : ' sát giờ này';
       return warning.severity === AI_WARNING_SEVERITY.BLOCK
-        ? `${name} đã có hẹn khác${when}, bạn cần đổi giờ`
+        ? `${name} đã có hẹn khác${when} (hai buổi cần cách nhau ít nhất 30 phút), bạn cần đổi giờ`
         : `${name} đã có hẹn khác${when}, có thể chưa nhận lời được`;
     }
     case AI_DRAFT_WARNING_CODES.INVITEE_NOT_FRIEND:

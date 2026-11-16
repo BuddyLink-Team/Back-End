@@ -88,6 +88,8 @@ export const AI_WARNING_SEVERITY = Object.freeze({
 export const AI_DRAFT_WARNING_CODES = Object.freeze({
   // Time
   PAST_DATE: 'PAST_DATE',
+  TOO_SOON: 'TOO_SOON',
+  TOO_FAR: 'TOO_FAR',
   UNUSUAL_HOUR: 'UNUSUAL_HOUR',
   NAP_TIME: 'NAP_TIME',
   SCHOOL_HOURS: 'SCHOOL_HOURS',

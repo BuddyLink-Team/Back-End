@@ -6,6 +6,7 @@ import Subscription from '../../src/modules/subscription/subscription.model.js';
 import UsageQuota from '../../src/modules/subscription/usage-quota.model.js';
 import { errorHandler } from '../../src/middlewares/error.middleware.js';
 import AppError from '../../src/shared/exceptions/app-error.js';
+import { planIdOf } from '../helpers/subscriptionHelper.js';
 
 const createResStub = () => {
   const res = {};
@@ -88,7 +89,7 @@ describe('Subscription quota', () => {
       { parentId },
       {
         $set: {
-          planCode: 'premium_monthly',
+          planId: await planIdOf('premium_monthly'),
           status: 'active',
           startDate: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
           endDate: new Date(Date.now() - 60 * 1000),
@@ -101,7 +102,8 @@ describe('Subscription quota', () => {
     expect(active.planCode).toBe('free');
 
     const stored = await Subscription.findOne({ parentId }).lean();
-    expect(stored.planCode).toBe('free');
+    expect(String(stored.planId)).toBe(String(await planIdOf('free')));
+    expect(stored).not.toHaveProperty('planCode');
     expect(stored.endDate).toBeNull();
   });
 
@@ -109,7 +111,7 @@ describe('Subscription quota', () => {
     const { parentId } = await register('expiry-job');
     await Subscription.updateOne(
       { parentId },
-      { $set: { planCode: 'premium_yearly', status: 'active', endDate: new Date(Date.now() - 1000) } },
+      { $set: { planId: await planIdOf('premium_yearly'), status: 'active', endDate: new Date(Date.now() - 1000) } },
     );
 
     const count = await subscriptionService.expireDueSubscriptions();
@@ -117,7 +119,7 @@ describe('Subscription quota', () => {
 
     const active = await Subscription.find({ parentId, status: 'active' }).lean();
     expect(active).toHaveLength(1);
-    expect(active[0].planCode).toBe('free');
+    expect(String(active[0].planId)).toBe(String(await planIdOf('free')));
   });
 });
 

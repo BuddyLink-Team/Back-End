@@ -14,7 +14,7 @@ import {
   getScheduledEnd,
   getStartOfZonedDay,
   getZonedParts,
-  intervalsOverlap,
+  conflictsWithGap,
 } from '../../shared/helpers/date.helper.js';
 import { PlaydateResponseDTO, RescheduleResponseDTO } from './playdate.dto.js';
 import {
@@ -35,7 +35,7 @@ import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { PAGINATION } from '../../shared/constants/index.js';
 import { emitPlaydateEvent, PLAYDATE_EVENTS } from './playdate.events.js';
 import { hostChildIdsOf, computeChaperoneSummary, isLateLeave, reliabilityLevelOf } from './playdate.rules.js';
-import { checkPlaceOpeningHours } from './playdate-time.rules.js';
+import { checkPlaceOpeningHours, assertStartWindow } from './playdate-time.rules.js';
 import placesService from '../places/places.service.js';
 
 const toId = (ref) => (ref?._id || ref)?.toString();
@@ -137,19 +137,24 @@ class PlaydateService {
   }
 
   /**
-   * When some children are busy: their upcoming playdates (as host child or accepted participant)
-   * around a time window, one entry per child and playdate
+   * When some children are busy. A family is busy during every upcoming playdate of the parent (as the host or an
+   * accepted participant), whichever child goes: each queried child gets one entry per playdate of their family.
    * @param {Array<string|ObjectId>} childIds
    * @param {Date} from
    * @param {Date} to
    * @param {string|ObjectId} [excludePlaydateId] - The playdate being rescheduled / answered
-   * @returns {Promise<Array<{ childId: string, playdateId: string, start: Date, end: Date }>>}
+   * @returns {Promise<Array<{ childId: string, parentId: string, playdateId: string, start: Date, end: Date }>>}
    */
   async getBusyIntervals(childIds, from, to, excludePlaydateId = null) {
     const ids = [...new Set(childIds.filter(Boolean).map(String))];
     if (!ids.length) return [];
 
-    const playdates = await playdateRepository.findUpcomingForChildren(ids, {
+    const children = await childService.getActiveChildrenByIds(ids);
+    const parentByChild = new Map(children.map((child) => [toId(child._id), toId(child.parentId)]));
+    const parentIds = [...new Set(parentByChild.values())];
+    if (!parentIds.length) return [];
+
+    const playdates = await playdateRepository.findUpcomingForParents(parentIds, {
       from: new Date(from.getTime() - CONFLICT_WINDOW_MS),
       to: new Date(to.getTime() + CONFLICT_WINDOW_MS),
       excludePlaydateId,
@@ -158,35 +163,38 @@ class PlaydateService {
     return playdates.flatMap((playdate) => {
       const start = getScheduledStart(playdate.scheduledDate, playdate.time);
       const end = endOf(start, durationOf(playdate));
-      const involved = new Set([
-        ...hostChildIdsOf(playdate),
+      const busyParents = new Set([
+        toId(playdate.hostParentId),
         ...(playdate.participants || [])
           .filter((p) => p.status === PARTICIPANT_STATUS.ACCEPTED)
-          .map((p) => toId(p.childId)),
+          .map((p) => toId(p.parentId)),
       ]);
-      return ids.filter((id) => involved.has(id)).map((childId) => ({ childId, playdateId: toId(playdate._id), start, end }));
+      return ids
+        .filter((id) => busyParents.has(parentByChild.get(id)))
+        .map((childId) => ({ childId, parentId: parentByChild.get(childId), playdateId: toId(playdate._id), start, end }));
     });
   }
 
   /**
-   * Upcoming playdates overlapping [start, end) for some children (host child or accepted participant)
+   * Upcoming playdates of the families of some children too close to [start, end): overlapping it, or less than
+   * MIN_GAP_MINUTES before / after it
    * @param {Array<string|ObjectId>} childIds
    * @param {Date} start
    * @param {Date} end
    * @param {string|ObjectId} [excludePlaydateId] - The playdate being rescheduled / answered
-   * @returns {Promise<Array<{ childId: string, playdateId: string }>>}
+   * @returns {Promise<Array<{ childId: string, parentId: string, playdateId: string }>>}
    * @private
    */
   async _findConflicts(childIds, start, end, excludePlaydateId = null) {
     const busy = await this.getBusyIntervals(childIds, start, end, excludePlaydateId);
     return busy
-      .filter((interval) => intervalsOverlap(start, end, interval.start, interval.end))
-      .map(({ childId, playdateId }) => ({ childId, playdateId }));
+      .filter((interval) => conflictsWithGap(start, end, interval.start, interval.end, PLAYDATE_RULES.MIN_GAP_MINUTES))
+      .map(({ childId, parentId, playdateId }) => ({ childId, parentId, playdateId }));
   }
 
   /**
-   * Fail with 409 when one of the caller's own children already has an overlapping playdate.
-   * The caller is a member of that playdate (their child is in it), so its id may be shared.
+   * Fail with 409 when the caller's family already has a playdate overlapping this one or less than
+   * MIN_GAP_MINUTES before / after it. The caller is a member of that playdate, so its id may be shared.
    * @param {string|ObjectId|Array<string|ObjectId>} childIds
    * @private
    */
@@ -194,7 +202,7 @@ class PlaydateService {
     const conflicts = await this._findConflicts([].concat(childIds), start, end, excludePlaydateId);
     if (conflicts.length > 0) {
       throw new AppError(
-        'Your child already has a playdate at this time',
+        `You already have a playdate at this time or less than ${PLAYDATE_RULES.MIN_GAP_MINUTES} minutes before / after it`,
         409,
         PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
         conflicts.map(({ playdateId }) => ({ playdateId }))
@@ -278,9 +286,11 @@ class PlaydateService {
    */
   async _inviteeWarnings(invitees, start, end, excludePlaydateId = null) {
     const conflicts = await this._findConflicts(invitees.map((p) => toId(p.childId)), start, end, excludePlaydateId);
-    return [...new Set(conflicts.map((c) => c.childId))].map((childId) => ({
+    // One warning per invited child of a busy family (the family is busy, whichever child goes)
+    return [...new Map(conflicts.map((c) => [c.childId, c])).values()].map(({ childId, parentId }) => ({
       code: PLAYDATE_WARNING_CODES.SCHEDULE_CONFLICT,
       childId,
+      parentId,
     }));
   }
 
@@ -764,18 +774,16 @@ class PlaydateService {
       await childService.assertChildUsable(childId, hostParentId);
     }
 
-    // 2. The playdate must start in the future
+    // 2. The playdate starts between MIN_LEAD_HOURS and MAX_ADVANCE_DAYS from now
     const durationMinutes = data.durationMinutes ?? PLAYDATE_RULES.DEFAULT_DURATION_MINUTES;
     const start = getScheduledStart(data.scheduledDate, data.time);
     const end = getScheduledEnd(data.scheduledDate, data.time, durationMinutes);
-    if (start <= new Date()) {
-      throw new AppError('The playdate must start in the future', 400, 'PLAYDATE_IN_PAST');
-    }
+    assertStartWindow(start);
 
     // 3. Filter, deduplicate, and validate participants
     const uniqueParticipants = await this._validateInvitees(hostParentId, data.participants);
 
-    // 4. The host's child cannot be in two playdates at once; invited children only get a warning
+    // 4. The host's family cannot have two playdates less than MIN_GAP_MINUTES apart; invited families only get a warning
     //    (they are checked again when their parent accepts). Nothing is created or sent before this.
     await this._assertNoConflict(hostChildIds, start, end);
     await this._assertPlaceOpen(data.location, start, end);
@@ -1016,8 +1024,12 @@ class PlaydateService {
       // A child locked by the Free plan (invited while the parent was Premium) cannot join
       await Promise.all(childIds.map((childId) => childService.assertChildUsable(childId, parentId)));
 
-      // An invited child cannot join two playdates at once (declining is always allowed)
+      // An invitation cannot be accepted once the playdate has started (declining is always allowed)
       const start = getScheduledStart(playdate.scheduledDate, playdate.time);
+      if (start <= new Date()) {
+        throw new AppError('The playdate has already started', 400, 'PLAYDATE_ALREADY_STARTED');
+      }
+      // The family cannot have two playdates less than MIN_GAP_MINUTES apart
       await this._assertNoConflict(childIds, start, endOf(start, durationOf(playdate)), id);
 
       // Participation quota (Free plan: 3/month): check now, consume once the answer is saved
@@ -1259,9 +1271,7 @@ class PlaydateService {
     }
 
     const newStart = getScheduledStart(newDate, newStartTime);
-    if (newStart <= new Date()) {
-      throw new AppError('The new schedule must be in the future', 400, 'RESCHEDULE_IN_PAST');
-    }
+    assertStartWindow(newStart, { prefix: 'RESCHEDULE' });
 
     const duration = newDurationMinutes ?? durationOf(playdate);
     const isSameTime =
@@ -1340,7 +1350,7 @@ class PlaydateService {
       throw new AppError('No pending reschedule request found to vote on', 404, 'RESCHEDULE_NOT_FOUND');
     }
 
-    // Accepting: the voter's children must be free at the new time (declining is always allowed)
+    // Accepting: the voter's family must be free at the new time, with the gap (declining is always allowed)
     const voterChildIds = (playdate.participants || [])
       .filter((p) => toId(p.parentId) === parentId.toString())
       .map((p) => toId(p.childId));

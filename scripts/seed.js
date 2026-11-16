@@ -624,12 +624,15 @@ const loadExistingAccounts = async () => {
   const children = await Child.find({ parentId: { $in: parents.map((parent) => parent._id) } }).lean();
   // Current plan of each kept account: the seed gives it the same plan again
   const subscriptions = await Subscription.find({ parentId: { $in: parents.map((parent) => parent._id) } }).sort({ createdAt: -1 }).lean();
+  const planCodeById = new Map((await SubscriptionPlan.find({}).lean()).map((plan) => [plan._id.toString(), plan.planCode]));
   const planKindByParent = new Map();
   for (const sub of subscriptions) {
     const key = sub.parentId.toString();
     if (planKindByParent.has(key)) continue;
-    if (sub.planCode === 'premium_yearly') planKindByParent.set(key, 'yearly');
-    else if (sub.planCode === 'premium_monthly') planKindByParent.set(key, sub.purchasedMonths > 1 ? 'renewedMonthly' : 'monthly');
+    // planCode: a database not migrated yet (scripts/migrate-subscription-plan-ids.js)
+    const planCode = planCodeById.get(sub.planId?.toString()) || sub.planCode;
+    if (planCode === 'premium_yearly') planKindByParent.set(key, 'yearly');
+    else if (planCode === 'premium_monthly') planKindByParent.set(key, sub.purchasedMonths > 1 ? 'renewedMonthly' : 'monthly');
     else planKindByParent.set(key, sub.lastPaymentId ? 'expired' : 'free');
   }
   return {
@@ -974,7 +977,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       const endDate = calculateCalendarEndDate(startDate, 12);
       const payment = successfulPayment(family, 'premium_yearly', startDate, startDate, endDate, 12);
       payments.push(payment);
-      subscriptions.push({ ...base, planCode: 'premium_yearly', startDate, endDate, calendarAnchorAt: startDate, purchasedMonths: 12, lastPaymentId: payment._id, updatedAt: startDate });
+      subscriptions.push({ ...base, planId: planOf('premium_yearly')._id, startDate, endDate, calendarAnchorAt: startDate, purchasedMonths: 12, lastPaymentId: payment._id, updatedAt: startDate });
       family.premium = { from: startDate, until: endDate };
     } else if (family.planKind === 'monthly') {
       // Bought less than a month ago: still running
@@ -982,7 +985,7 @@ export async function seedDatabase({ log = console.log } = {}) {
       const endDate = calculateCalendarEndDate(startDate, 1);
       const payment = successfulPayment(family, 'premium_monthly', startDate, startDate, endDate, 1);
       payments.push(payment);
-      subscriptions.push({ ...base, planCode: 'premium_monthly', startDate, endDate, calendarAnchorAt: startDate, purchasedMonths: 1, lastPaymentId: payment._id, updatedAt: startDate });
+      subscriptions.push({ ...base, planId: planOf('premium_monthly')._id, startDate, endDate, calendarAnchorAt: startDate, purchasedMonths: 1, lastPaymentId: payment._id, updatedAt: startDate });
       family.premium = { from: startDate, until: endDate };
     } else if (family.planKind === 'renewedMonthly') {
       // Pays again before each month ends: same anchor, one more purchased month
@@ -1000,7 +1003,7 @@ export async function seedDatabase({ log = console.log } = {}) {
         payment = successfulPayment(family, 'premium_monthly', renewedAt, previousEnd, end, 1);
         payments.push(payment);
       }
-      subscriptions.push({ ...base, planCode: 'premium_monthly', startDate, endDate: end, calendarAnchorAt: anchor, purchasedMonths: months, lastPaymentId: payment._id, updatedAt: payment.createdAt });
+      subscriptions.push({ ...base, planId: planOf('premium_monthly')._id, startDate, endDate: end, calendarAnchorAt: anchor, purchasedMonths: months, lastPaymentId: payment._id, updatedAt: payment.createdAt });
       family.premium = { from: anchor, until: end };
     } else if (family.planKind === 'expired') {
       // One paid month, not renewed: downgraded to Free by the expiry job (subscriptionRepository.downgradeToFree)
@@ -1009,11 +1012,11 @@ export async function seedDatabase({ log = console.log } = {}) {
       const payment = successfulPayment(family, 'premium_monthly', anchor, anchor, end, 1);
       payments.push(payment);
       const downgradedAt = addTime(end, int(5, 55) * MINUTE);
-      subscriptions.push({ ...base, planCode: 'free', startDate: downgradedAt, endDate: null, calendarAnchorAt: null, purchasedMonths: 0, lastPaymentId: payment._id, updatedAt: downgradedAt });
+      subscriptions.push({ ...base, planId: planOf('free')._id, startDate: downgradedAt, endDate: null, calendarAnchorAt: null, purchasedMonths: 0, lastPaymentId: payment._id, updatedAt: downgradedAt });
       family.premium = { from: anchor, until: end };
       family.expiredAt = end;
     } else {
-      subscriptions.push({ ...base, planCode: 'free', startDate: family.signupAt, endDate: null, updatedAt: family.signupAt });
+      subscriptions.push({ ...base, planId: planOf('free')._id, startDate: family.signupAt, endDate: null, updatedAt: family.signupAt });
     }
   }
 

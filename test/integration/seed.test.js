@@ -268,7 +268,8 @@ describe('Demo data seed', () => {
   });
 
   it('covers every kind of subscription and valid paid plans', async () => {
-    const subscriptions = await Subscription.find({}).lean();
+    const codeOf = new Map((await SubscriptionPlan.find({}).lean()).map((p) => [String(p._id), p.planCode]));
+    const subscriptions = (await Subscription.find({}).lean()).map((s) => ({ ...s, planCode: codeOf.get(String(s.planId)) }));
     const now = new Date();
     for (const planCode of ['free', 'premium_monthly', 'premium_yearly']) {
       expect(subscriptions.some((s) => s.planCode === planCode)).toBe(true);
@@ -282,10 +283,11 @@ describe('Demo data seed', () => {
   });
 
   it('respects the Free plan limits for families who never paid', async () => {
-    const free = await Subscription.find({ planCode: 'free', lastPaymentId: null }).lean();
+    const freePlan = await SubscriptionPlan.findOne({ planCode: 'free' }).lean();
+    const free = await Subscription.find({ planId: freePlan._id, lastPaymentId: null }).lean();
     const freeIds = free.map((s) => s.parentId);
     const quotas = await UsageQuota.find({ parentId: { $in: freeIds } }).lean();
-    const limits = (await SubscriptionPlan.findOne({ planCode: 'free' }).lean()).features;
+    const limits = freePlan.features;
     for (const { counters, periodType } of quotas) {
       if (periodType === 'daily') {
         expect(counters.discoveryViews).toBeLessThanOrEqual(limits.discoveryViewLimitPerDay);

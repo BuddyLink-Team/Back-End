@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { SUBSCRIPTION_PLAN_CODES, SUBSCRIPTION_STATUS } from './subscription.constants.js';
+import { SUBSCRIPTION_STATUS } from './subscription.constants.js';
 
 const subscriptionSchema = new mongoose.Schema(
   {
@@ -10,11 +10,12 @@ const subscriptionSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
-    planCode: {
-      type: String,
-      enum: Object.values(SUBSCRIPTION_PLAN_CODES),
-      default: SUBSCRIPTION_PLAN_CODES.FREE,
+    // Plan of the subscription (Free when the account is created); its code is read from subscription_plans
+    planId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SubscriptionPlan',
       required: true,
+      index: true,
     },
     status: {
       type: String,
@@ -52,6 +53,8 @@ const subscriptionSchema = new mongoose.Schema(
 );
 
 subscriptionSchema.index({ parentId: 1, status: 1 });
+// Paid subscriptions in effect / due for expiry / active count by plan
+subscriptionSchema.index({ status: 1, planId: 1, endDate: 1 });
 
 const Subscription =
   mongoose.models.Subscription ||

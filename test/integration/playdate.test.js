@@ -84,15 +84,22 @@ describe('Playdate Management Integration Flow', () => {
     createdPlaydateId = res.body.data.id;
   });
 
-  it('3. GET /api/v1/playdates?status=upcoming: should retrieve the upcoming playdate', async () => {
-    const res = await request(app)
+  it('3. GET /api/v1/playdates: the new playdate is listed, but not in "Sắp tới" until someone accepted', async () => {
+    const all = await request(app)
+      .get('/api/v1/playdates?status=all')
+      .set('Authorization', `Bearer ${hostToken}`);
+    expect(all.status).toBe(200);
+    expect(all.body.data.playdates.length).toBe(1);
+    expect(all.body.data.playdates[0].id).toBe(createdPlaydateId);
+    expect(all.body.data.counts.all).toBe(1);
+
+    // "Sắp tới" = confirmed and not started yet: nobody accepted this one
+    const upcoming = await request(app)
       .get('/api/v1/playdates?status=upcoming')
       .set('Authorization', `Bearer ${hostToken}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.data.playdates.length).toBe(1);
-    expect(res.body.data.playdates[0].id).toBe(createdPlaydateId);
-    expect(res.body.data.counts.all).toBe(1);
+    expect(upcoming.status).toBe(200);
+    expect(upcoming.body.data.playdates).toHaveLength(0);
+    expect(upcoming.body.data.counts.upcoming).toBe(0);
   });
 
   it('4. PATCH /api/v1/playdates/:id/complete: should fail if caller is not the host (403)', async () => {

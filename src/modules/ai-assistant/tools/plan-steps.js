@@ -1,11 +1,11 @@
 import playdateService from '../../playdate/playdate.service.js';
 import playdateSuggestionService from '../../playdate/playdate-suggestion.service.js';
 import { PLAYDATE_ACTIVITIES, pickAttractions, activityGamesFor } from '../../playdate/playdate.activities.js';
-import { INDOOR_PLACE_TYPES } from '../../playdate/playdate.constants.js';
+import { INDOOR_PLACE_TYPES, PLAYDATE_RULES } from '../../playdate/playdate.constants.js';
 import { shouldSearchAttractions } from '../../playdate/playdate-suggestion.rules.js';
 import openMeteoAdapter from '../../../integrations/weather/open-meteo.adapter.js';
 import { distanceKmBetween } from '../../discovery/matching.rules.js';
-import { getScheduledStart, getZonedParts, intervalsOverlap } from '../../../shared/helpers/date.helper.js';
+import { getScheduledStart, getZonedParts, conflictsWithGap } from '../../../shared/helpers/date.helper.js';
 import AppError from '../../../shared/exceptions/app-error.js';
 import {
   AI_CARD_TYPES,
@@ -279,13 +279,13 @@ const buildPlaymatesStep = async (ctx) => {
   const ownTags = tagsOf(children.find((child) => child.childId === childId));
   let candidates = [...matched, ...others].map((entry) => toPlaymateItem(entry, ownTags));
 
-  // Only children free at the chosen time (their other playdates)
+  // Only children whose family is free at the chosen time (other playdates, with the gap between two playdates)
   if (draft.date && draft.time && candidates.length) {
     const start = getScheduledStart(new Date(draft.date), draft.time);
     const end = new Date(start.getTime() + draft.durationMinutes * MINUTE_MS);
     const busy = await playdateService.getBusyIntervals(candidates.map((child) => child.childId), start, end);
     const busyIds = new Set(
-      busy.filter((interval) => intervalsOverlap(start, end, interval.start, interval.end)).map((interval) => interval.childId)
+      busy.filter((interval) => conflictsWithGap(start, end, interval.start, interval.end, PLAYDATE_RULES.MIN_GAP_MINUTES)).map((interval) => interval.childId)
     );
     candidates = candidates.filter((child) => !busyIds.has(child.childId));
   }
@@ -570,7 +570,7 @@ const addScheduleConflicts = async (draft) => {
   const names = childNamesOf(draft);
   const seen = new Set();
   const conflicts = busy
-    .filter((interval) => intervalsOverlap(start, end, interval.start, interval.end))
+    .filter((interval) => conflictsWithGap(start, end, interval.start, interval.end, PLAYDATE_RULES.MIN_GAP_MINUTES))
     .filter((interval) => {
       const id = String(interval.childId);
       if (seen.has(id)) return false;
