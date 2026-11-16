@@ -446,6 +446,7 @@ export class AdminSubscriptionDTO {
     return {
       id: subscription._id,
       parent: toParentSummary({ parentId: subscription.parentId, parent, email }),
+      planId: subscription.planId,
       planCode: subscription.planCode,
       status: subscription.status,
       startDate: subscription.startDate,

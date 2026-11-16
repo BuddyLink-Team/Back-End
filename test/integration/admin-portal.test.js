@@ -11,7 +11,7 @@ import RescheduleRequest from '../../src/modules/playdate/reschedule-request.mod
 import Parent from '../../src/modules/parent/parent.model.js';
 import Subscription from '../../src/modules/subscription/subscription.model.js';
 import subscriptionService from '../../src/modules/subscription/subscription.service.js';
-import { grantPremium } from '../helpers/subscriptionHelper.js';
+import { grantPremium, planIdOf } from '../helpers/subscriptionHelper.js';
 import SubscriptionPlan from '../../src/modules/subscription/subscription-plan.model.js';
 import { SUBSCRIPTION_PLAN_DEFAULTS } from '../../src/modules/subscription/subscription.constants.js';
 import AdminNotification from '../../src/modules/admin/admin-notification.model.js';
@@ -227,7 +227,7 @@ describe('Admin portal parent and child management (/api/v1/admin)', () => {
         { parentId: parent._id },
         {
           $set: {
-            planCode: 'premium_monthly',
+            planId: await planIdOf('premium_monthly'),
             status: 'active',
             startDate: new Date(pastDate.getTime() - 30 * 24 * 60 * 60 * 1000),
             endDate: pastDate,
@@ -642,7 +642,8 @@ describe('Admin Playdates & Connections Oversight', () => {
           respondedAt: new Date(),
         },
       ],
-      scheduledDate: new Date('2026-11-15'),
+      // Always ahead of today: an upcoming playdate
+      scheduledDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
       time: '10:00',
       activity: 'Lego Building Workshop',
       location: {
@@ -657,7 +658,7 @@ describe('Admin Playdates & Connections Oversight', () => {
     await RescheduleRequest.create({
       playdateId: upcomingPlaydate._id,
       requestedBy: parentA.id,
-      newDate: new Date('2026-11-16'),
+      newDate: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000),
       newStartTime: '11:00',
       reason: 'Need one hour later',
       status: 'pending',
@@ -1018,7 +1019,7 @@ describe('Admin Subscription Plans & Revenue Management (/api/v1/admin)', () => 
     // Create a subscription for this parent
     await Subscription.create({
       parentId: testParent._id,
-      planCode: 'premium_monthly',
+      planId: await planIdOf('premium_monthly'),
       status: 'active',
       startDate: new Date('2026-10-01T00:00:00Z'),
       endDate: new Date('2099-01-01T00:00:00Z'),

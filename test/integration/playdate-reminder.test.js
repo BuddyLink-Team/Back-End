@@ -8,6 +8,8 @@ import Notification from '../../src/modules/notification/notification.model.js';
 import playdateService from '../../src/modules/playdate/playdate.service.js';
 import { getZonedParts } from '../../src/shared/helpers/date.helper.js';
 
+const isoDay = (offsetDays) => new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 const PASSWORD = 'Password123!';
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -137,7 +139,7 @@ describe('Playdate reminders (BUD-48)', () => {
       .set('Authorization', `Bearer ${solo.token}`)
       .send({
         hostChildId: solo.childId,
-        scheduledDate: '2031-04-01',
+        scheduledDate: isoDay(10),
         time: '09:00',
         activity: 'Vẽ tranh',
         location: { name: 'Park', address: 'Đà Nẵng' },
@@ -148,7 +150,7 @@ describe('Playdate reminders (BUD-48)', () => {
     const moved = await request(app)
       .post(`/api/v1/playdates/${created.body.data.id}/reschedule`)
       .set('Authorization', `Bearer ${solo.token}`)
-      .send({ newDate: '2031-04-02', newStartTime: '10:00' });
+      .send({ newDate: isoDay(11), newStartTime: '10:00' });
     expect(moved.status).toBe(201);
     expect(moved.body.data.isAutoApplied).toBe(true);
 

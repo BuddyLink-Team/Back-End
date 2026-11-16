@@ -1,10 +1,11 @@
-import { getZonedParts, getScheduledStart, intervalsOverlap } from '../../shared/helpers/date.helper.js';
+import { getZonedParts, getScheduledStart, conflictsWithGap } from '../../shared/helpers/date.helper.js';
 import { calculateAgeYears } from '../../shared/helpers/age.helper.js';
 import { distanceKmBetween } from '../discovery/matching.rules.js';
 import {
   TIME_SLOT_START,
   TIME_SLOT_RANGES,
   SUGGESTION_LIMITS,
+  PLAYDATE_RULES,
   PLAYDATE_TIME_RULES,
   OUTDOOR_PLACE_TYPES,
   PLACE_TYPE_MIN_AGE,
@@ -150,7 +151,7 @@ export const suggestTimeSlots = ({
       const start = getScheduledStart(day.noon, time);
       const end = new Date(start.getTime() + durationMinutes * MINUTE_MS);
       if (start <= now) continue;
-      if (busy.some((interval) => intervalsOverlap(start, end, interval.start, interval.end))) continue;
+      if (busy.some((interval) => conflictsWithGap(start, end, interval.start, interval.end, PLAYDATE_RULES.MIN_GAP_MINUTES))) continue;
 
       const issues = evaluateTimeIssues({ date: day.date, time, durationMinutes, ages, place: placeOfSlots, now });
       if (!isSuggestableSlot(issues)) continue;

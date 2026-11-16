@@ -259,6 +259,7 @@ class SubscriptionService {
       effectivePlanCode,
       subscription: {
         _id: subscription._id,
+        planId: subscription.planId,
         planCode: subscription.planCode,
         status: subscription.status,
         startDate: subscription.startDate,
@@ -734,9 +735,13 @@ class SubscriptionService {
         const endDate = calculateCalendarEndDate(calendarAnchorAt, purchasedMonths);
 
         // Update / Upsert Subscription via repository (No direct .save())
+        const planId = await subscriptionPlanRepository.getPlanIdByCode(payment.planSnapshot.planCode);
+        if (!planId) {
+          throw new AppError('The subscription plan of this order no longer exists', 500, 'PLAN_NOT_FOUND');
+        }
         const subData = {
           parentId: payment.parentId,
-          planCode: payment.planSnapshot.planCode,
+          planId,
           status: SUBSCRIPTION_STATUS.ACTIVE,
           startDate,
           endDate,
@@ -810,8 +815,8 @@ class SubscriptionService {
         if (!isRenewal) {
           void emitSubscriptionEvent(SUBSCRIPTION_EVENTS.SUBSCRIPTION_CREATED, {
             subscriptionId: updatedSub._id.toString(),
-            planCode: updatedSub.planCode,
-            planName: payment.planSnapshot?.name || updatedSub.planCode,
+            planCode: payment.planSnapshot.planCode,
+            planName: payment.planSnapshot?.name || payment.planSnapshot.planCode,
             parentId: payment.parentId?.toString(),
           });
         }

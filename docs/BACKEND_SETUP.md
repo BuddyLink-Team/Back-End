@@ -274,6 +274,15 @@ Render's free instances **sleep after 15 minutes without requests** and take ~30
 
 > Full step-by-step guide (Render + Vercel, env variables, checklist): [DEPLOYMENT.md](DEPLOYMENT.md).
 
+## Data migrations
+
+Every script runs as a dry run first; add `--apply` to write. `--db <name>` targets another database of the same cluster.
+
+| Command | What it does |
+|---|---|
+| `npm run migrate:subscription-plans` | `subscriptions.planCode` -> `subscriptions.planId` (ref `subscription_plans._id`). Run it once on a database created before this change, **before** starting the new API version. `--rollback` goes back to `planCode`. |
+| `npm run migrate:places` | Adds the kid-friendly places of `scripts/data/places.seed.json` to `places_cache` (upsert by `osmId`, `source: manual`). `--verify` checks the file against OpenStreetMap; `--verify --write-json` rewrites its coordinates from OpenStreetMap. |
+
 ## Two web services
 
 Render exposes one port per service, so the admin API is its own Web Service from the same repo:

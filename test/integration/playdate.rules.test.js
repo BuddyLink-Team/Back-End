@@ -12,7 +12,7 @@ import subscriptionService from '../../src/modules/subscription/subscription.ser
 import playdateService from '../../src/modules/playdate/playdate.service.js';
 import rescheduleRepository from '../../src/modules/playdate/reschedule.repository.js';
 import { QUOTA_PERIOD_TYPES } from '../../src/modules/subscription/subscription.constants.js';
-import { getScheduledStart, getStartOfZonedDay } from '../../src/shared/helpers/date.helper.js';
+import { getScheduledStart, getStartOfZonedDay, getZonedParts } from '../../src/shared/helpers/date.helper.js';
 
 const PASSWORD = 'Password123!';
 const DAY = 24 * 60 * 60 * 1000;
@@ -131,6 +131,36 @@ describe('Playdate rules', () => {
     const res = await createPlaydate(host, [guestA], { scheduledDate: isoDay(0), time: '00:00' });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('PLAYDATE_IN_PAST');
+  });
+
+  it('only books between 2 hours and 30 days ahead', async () => {
+    const at = (ms) => {
+      const parts = getZonedParts(new Date(Date.now() + ms));
+      const pad = (n) => String(n).padStart(2, '0');
+      return { scheduledDate: `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`, time: `${pad(parts.hour)}:${pad(parts.minute)}` };
+    };
+    const HOUR = 60 * 60 * 1000;
+    // Own host: the playdate created here must not use the creation quota of the other tests
+    const host = await registerParent('window');
+
+    const tooSoon = await createPlaydate(host, [], at(HOUR));
+    expect(tooSoon.status).toBe(400);
+    expect(tooSoon.body.error.code).toBe('PLAYDATE_TOO_SOON');
+
+    const tooFar = await createPlaydate(host, [], { scheduledDate: isoDay(32), time: '09:00' });
+    expect(tooFar.status).toBe(400);
+    expect(tooFar.body.error.code).toBe('PLAYDATE_TOO_FAR');
+
+    // 3 hours ahead is fine (rounded to the next minute so it is never under 3h)
+    const ok = await createPlaydate(host, [], at(3 * HOUR + 60 * 1000));
+    expect(ok.status).toBe(201);
+
+    const moved = await reschedule(host, ok.body.data.id, { newDate: isoDay(32), newStartTime: '09:00' });
+    expect(moved.status).toBe(400);
+    expect(moved.body.error.code).toBe('RESCHEDULE_TOO_FAR');
+    const movedSoon = await reschedule(host, ok.body.data.id, { ...(({ scheduledDate, time }) => ({ newDate: scheduledDate, newStartTime: time }))(at(HOUR)) });
+    expect(movedSoon.status).toBe(400);
+    expect(movedSoon.body.error.code).toBe('RESCHEDULE_TOO_SOON');
   });
 
   it('keeps the invitation pending when the participation quota is used up', async () => {
@@ -396,7 +426,7 @@ describe('Schedule conflicts (BUD-48)', () => {
     await connect(host, guest);
   });
 
-  it('blocks a second playdate of the host child at an overlapping time, but not a touching one', async () => {
+  it('keeps two playdates of the host family at least 30 minutes apart', async () => {
     expect((await createPlaydate(host, [], { time: '10:00' })).status).toBe(201);
 
     const overlapping = await createPlaydate(host, [], { time: '11:00' });
@@ -404,8 +434,25 @@ describe('Schedule conflicts (BUD-48)', () => {
     expect(overlapping.body.error.code).toBe('SCHEDULE_CONFLICT');
     expect(overlapping.body.error.details[0].playdateId).toBeDefined();
 
-    // 10:00-12:00 then 12:00-14:00: edges touch, no conflict
-    expect((await createPlaydate(host, [], { time: '12:00' })).status).toBe(201);
+    // 10:00-12:00 then 12:00 or 12:15: less than 30 minutes between them
+    expect((await createPlaydate(host, [], { time: '12:00' })).status).toBe(409);
+    expect((await createPlaydate(host, [], { time: '12:15' })).status).toBe(409);
+    // Ends at 09:45, 15 minutes before 10:00
+    expect((await createPlaydate(host, [], { time: '08:15', durationMinutes: 90 })).status).toBe(409);
+    // Exactly 30 minutes after / before
+    expect((await createPlaydate(host, [], { time: '12:30', durationMinutes: 60 })).status).toBe(201);
+    expect((await createPlaydate(host, [], { time: '08:00', durationMinutes: 90 })).status).toBe(201);
+  });
+
+  it('checks the family, not only the child: another child of the parent is busy too', async () => {
+    const secondChild = await Child.create({ parentId: host.parentId, displayName: 'Kid second', dateOfBirth: new Date('2021-01-01'), gender: 'boy' });
+    const { grantPremium } = await import('../helpers/subscriptionHelper.js');
+    await grantPremium(host.parentId);
+
+    expect((await createPlaydate(host, [], { time: '10:00' })).status).toBe(201);
+    const other = await createPlaydate(host, [], { time: '12:10', hostChildId: secondChild._id.toString() });
+    expect(other.status).toBe(409);
+    expect(other.body.error.code).toBe('SCHEDULE_CONFLICT');
   });
 
   it('only warns when an invited child is busy, and blocks that child on accept (decline stays possible)', async () => {
@@ -416,7 +463,7 @@ describe('Schedule conflicts (BUD-48)', () => {
 
     const created = await createPlaydate(host, [guest], { time: '11:00' });
     expect(created.status).toBe(201);
-    expect(created.body.data.warnings).toEqual([{ code: 'SCHEDULE_CONFLICT', childId: guest.childId }]);
+    expect(created.body.data.warnings).toEqual([{ code: 'SCHEDULE_CONFLICT', childId: guest.childId, parentId: guest.parentId }]);
 
     const accept = await respond(guest, created.body.data.id, 'accepted');
     expect(accept.status).toBe(409);

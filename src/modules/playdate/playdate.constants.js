@@ -62,6 +62,12 @@ export const PLAYDATE_RULES = Object.freeze({
   DEFAULT_DURATION_MINUTES: 120,
   MIN_DURATION_MINUTES: 30,
   MAX_DURATION_MINUTES: 480,
+  // A playdate starts at least this long after it is created / rescheduled...
+  MIN_LEAD_HOURS: 2,
+  // ...and at most this many days ahead
+  MAX_ADVANCE_DAYS: 30,
+  // Two playdates of the same family: from the end of one to the start of the next
+  MIN_GAP_MINUTES: 30,
 });
 
 export const PLAYDATE_WARNING_CODES = Object.freeze({
